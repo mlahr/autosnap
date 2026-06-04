@@ -2,7 +2,6 @@ package autosnap
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -33,30 +32,21 @@ func newStartCommand() *cobra.Command {
 		Use:   "start",
 		Short: "Start autosnap watcher and checkpoint on idle passing checks",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if checkCommand == "" {
-				return errors.New("--check is required")
-			}
-			if idleSeconds <= 0 {
-				return errors.New("--idle must be greater than 0")
-			}
-			normalizedMode, err := normalizeSnapshotMode(snapshotMode)
-			if err != nil {
-				return fmt.Errorf("invalid --snapshot-mode %q (expected both, staged, working)", snapshotMode)
-			}
-			snapshotMode = normalizedMode
-			normalizedWatchMode, err := normalizeWatchMode(watchMode)
-			if err != nil {
-				return fmt.Errorf("invalid --watch-mode %q (expected recursive, poll, auto)", watchMode)
-			}
-			watchMode = normalizedWatchMode
-			if pollInterval <= 0 {
-				return errors.New("--poll-interval must be greater than 0")
-			}
-
 			repoRoot, branchDisplay, branchRef, err := detectRepository(context.Background())
 			if err != nil {
 				return err
 			}
+
+			cfg, _, err := resolveStartConfig(repoRoot, cmd, checkCommand, msgSourceCmd, idleSeconds, snapshotMode, watchMode, pollInterval)
+			if err != nil {
+				return err
+			}
+			checkCommand = cfg.Check
+			msgSourceCmd = cfg.MsgSourceCmd
+			idleSeconds = cfg.IdleSeconds
+			snapshotMode = cfg.SnapshotMode
+			watchMode = cfg.Watch.Mode
+			pollInterval = cfg.Watch.PollInterval
 
 			if err := ensureNoActiveRunForRepo(repoRoot); err != nil {
 				return err

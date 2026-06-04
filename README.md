@@ -12,6 +12,7 @@ It is implemented as a minimal Go prototype for the MVP command set:
 - `autosnap restore <checkpoint>`
 - `autosnap promote <checkpoint>`
 - `autosnap prune`
+- `autosnap config`
 
 Checkpoints are stored as Git refs under:
 
@@ -85,6 +86,37 @@ Multiline output is supported; leading and trailing whitespace is trimmed.
 If the command fails or emits no output, autosnap falls back to the generated message.
 
 `autosnap start` runs in the background by default and returns immediately.
+
+You can also store project-local defaults in `.autosnap.toml`:
+
+```bash
+autosnap config init
+```
+
+Example config:
+
+```toml
+check = "npm test"
+idle_seconds = 60
+snapshot_mode = "both"
+msg_source_cmd = ""
+
+[watch]
+mode = "recursive"
+poll_interval = "5s"
+```
+
+With config present, `autosnap start` can use the configured check and idle settings:
+
+```bash
+autosnap start
+```
+
+Command-line flags override config values:
+
+```bash
+autosnap start --check "npm run typecheck" --idle 30
+```
 
 What happens:
 
@@ -250,6 +282,22 @@ Examples:
 autosnap prune --current-branch --keep 20
 autosnap prune --all-branches --older-than 30d --apply
 ```
+
+### Manage config
+
+Create a repo-local `.autosnap.toml`:
+
+```bash
+autosnap config init
+```
+
+Print the effective config for the current repo:
+
+```bash
+autosnap config show
+```
+
+Use `--force` with `config init` to overwrite an existing config.
 
 ---
 

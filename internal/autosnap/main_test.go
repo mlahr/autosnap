@@ -686,6 +686,149 @@ func TestStartCommandWatchFlagValidation(t *testing.T) {
 	})
 }
 
+func TestLoadAutosnapConfig(t *testing.T) {
+	repo := t.TempDir()
+	cfg, found, err := loadAutosnapConfig(repo)
+	if err != nil {
+		t.Fatalf("load missing config failed: %v", err)
+	}
+	if found {
+		t.Fatalf("expected missing config to report found=false")
+	}
+	if cfg.Check != "" {
+		t.Fatalf("expected zero config for missing file, got %+v", cfg)
+	}
+
+	raw := []byte(`check = "go test ./..."
+idle_seconds = 15
+snapshot_mode = "staged"
+msg_source_cmd = "printf msg"
+
+[watch]
+mode = "auto"
+poll_interval = "2s"
+`)
+	if err := os.WriteFile(autosnapConfigPath(repo), raw, 0o644); err != nil {
+		t.Fatalf("write config failed: %v", err)
+	}
+
+	cfg, found, err = loadAutosnapConfig(repo)
+	if err != nil {
+		t.Fatalf("load config failed: %v", err)
+	}
+	if !found {
+		t.Fatalf("expected config to be found")
+	}
+	if cfg.Check != "go test ./..." || cfg.IdleSeconds != 15 || cfg.SnapshotMode != snapshotModeStaged || cfg.MsgSourceCmd != "printf msg" || cfg.Watch.Mode != watchModeAuto || cfg.Watch.PollInterval != 2*time.Second {
+		t.Fatalf("unexpected config: %+v", cfg)
+	}
+}
+
+func TestResolveStartConfigPrefersFlagsOverConfig(t *testing.T) {
+	repo := t.TempDir()
+	raw := []byte(`check = "go test ./..."
+idle_seconds = 15
+snapshot_mode = "staged"
+
+[watch]
+mode = "poll"
+poll_interval = "2s"
+`)
+	if err := os.WriteFile(autosnapConfigPath(repo), raw, 0o644); err != nil {
+		t.Fatalf("write config failed: %v", err)
+	}
+
+	cmd := newStartCommand()
+	if err := cmd.Flags().Set("check", "make test"); err != nil {
+		t.Fatalf("set check flag failed: %v", err)
+	}
+	if err := cmd.Flags().Set("idle", "30"); err != nil {
+		t.Fatalf("set idle flag failed: %v", err)
+	}
+	if err := cmd.Flags().Set("watch-mode", "auto"); err != nil {
+		t.Fatalf("set watch-mode flag failed: %v", err)
+	}
+
+	cfg, found, err := resolveStartConfig(repo, cmd, "make test", "", 30, snapshotModeBoth, watchModeAuto, defaultPollInterval)
+	if err != nil {
+		t.Fatalf("resolve config failed: %v", err)
+	}
+	if !found {
+		t.Fatalf("expected config to be found")
+	}
+	if cfg.Check != "make test" || cfg.IdleSeconds != 30 || cfg.Watch.Mode != watchModeAuto {
+		t.Fatalf("expected flags to override config, got %+v", cfg)
+	}
+	if cfg.SnapshotMode != snapshotModeStaged || cfg.Watch.PollInterval != 2*time.Second {
+		t.Fatalf("expected config values to remain for unset flags, got %+v", cfg)
+	}
+}
+
+func TestConfigInitAndShowCommands(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+
+	withWorkingDir(t, repo, func() {
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newConfigCommand())
+		root.SetOut(buf)
+		root.SetArgs([]string{"config", "init"})
+
+		if err := root.Execute(); err != nil {
+			t.Fatalf("config init failed: %v", err)
+		}
+		if _, err := os.Stat(autosnapConfigPath(repo)); err != nil {
+			t.Fatalf("expected config file to exist: %v", err)
+		}
+
+		root = &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newConfigCommand())
+		root.SetArgs([]string{"config", "init"})
+		if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "already exists") {
+			t.Fatalf("expected init to refuse overwrite, got %v", err)
+		}
+
+		buf.Reset()
+		root = &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newConfigCommand())
+		root.SetOut(buf)
+		root.SetArgs([]string{"config", "show"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("config show failed: %v", err)
+		}
+		out := buf.String()
+		for _, want := range []string{
+			"path: " + autosnapConfigPath(repo),
+			"exists: true",
+			"check: npm test",
+			"watch.mode: recursive",
+			"watch.poll_interval: 5s",
+		} {
+			if !strings.Contains(out, want) {
+				t.Fatalf("expected config show output to contain %q, got %q", want, out)
+			}
+		}
+	})
+}
+
+func TestStartCommandAcceptsConfigCheck(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	if err := os.WriteFile(autosnapConfigPath(repo), []byte("check = \"true\"\nidle_seconds = 1\n"), 0o644); err != nil {
+		t.Fatalf("write config failed: %v", err)
+	}
+
+	withWorkingDir(t, repo, func() {
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newStartCommand())
+		root.SetArgs([]string{"start", "--foreground", "--watch-mode", "bad"})
+		if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "invalid --watch-mode") {
+			t.Fatalf("expected invalid watch mode error after config-provided check, got %v", err)
+		}
+	})
+}
+
 func TestStartDetachedArgsForwardWatchOptions(t *testing.T) {
 	args := startDetachedArgs("/bin/autosnap", "make build", "printf msg", 30, snapshotModeBoth, watchModeAuto, 2*time.Second, "token")
 	joined := strings.Join(args, "\n")

@@ -3,6 +3,7 @@ module autosnap
 go 1.22.0
 
 require (
+	github.com/BurntSushi/toml v1.4.0
 	github.com/fsnotify/fsnotify v1.8.0
 	github.com/spf13/cobra v1.10.1
 )
