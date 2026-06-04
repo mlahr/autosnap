@@ -36,6 +36,11 @@ type checkpointRefInfo struct {
 	Timestamp string
 }
 
+type gitPosition struct {
+	BranchRef string
+	Head      string
+}
+
 func snapshotRefPrefix(branch string) string {
 	return path.Join("refs", "autosnapshots", branch)
 }
@@ -46,6 +51,36 @@ func snapshotRef(branch string, timestamp string) string {
 
 func currentTimestamp() string {
 	return time.Now().UTC().Format("20060102T150405Z")
+}
+
+func currentGitPosition(ctx context.Context, repoRoot string) (gitPosition, error) {
+	branchResult, err := runGitCommand(ctx, repoRoot, nil, "branch", "--show-current")
+	if err != nil {
+		return gitPosition{}, err
+	}
+
+	headResult, err := runGitCommand(ctx, repoRoot, nil, "rev-parse", "HEAD")
+	if err != nil {
+		return gitPosition{}, err
+	}
+	head := strings.TrimSpace(headResult.Stdout)
+	if head == "" {
+		return gitPosition{}, fmt.Errorf("unable to resolve HEAD")
+	}
+
+	branchRef := strings.TrimSpace(branchResult.Stdout)
+	if branchRef == "" {
+		shortHead := head
+		if len(shortHead) > 7 {
+			shortHead = shortHead[:7]
+		}
+		branchRef = "detached-" + shortHead
+	}
+
+	return gitPosition{
+		BranchRef: branchRef,
+		Head:      head,
+	}, nil
 }
 
 func computeWorktreeTree(ctx context.Context, repoRoot, gitDirectory, mode string) (string, error) {
@@ -126,36 +161,45 @@ func normalizeSnapshotMode(mode string) (string, error) {
 }
 
 func createCheckpoint(ctx context.Context, repoRoot, branchRef, checkCommand string, idle time.Duration, tree string, commitMessage string) (string, string, error) {
-	headResult, err := runGitCommand(ctx, repoRoot, nil, "rev-parse", "HEAD")
+	return createCheckpointChecked(ctx, repoRoot, branchRef, "", checkCommand, idle, tree, commitMessage)
+}
+
+func createCheckpointChecked(ctx context.Context, repoRoot, expectedBranchRef, expectedHead, checkCommand string, idle time.Duration, tree string, commitMessage string) (string, string, error) {
+	position, err := currentGitPosition(ctx, repoRoot)
 	if err != nil {
 		return "", "", err
 	}
-	head := strings.TrimSpace(headResult.Stdout)
+	if expectedBranchRef != "" && position.BranchRef != expectedBranchRef {
+		return "", "", fmt.Errorf("git branch changed during checkpoint: was %s, now %s", expectedBranchRef, position.BranchRef)
+	}
+	if expectedHead != "" && position.Head != expectedHead {
+		return "", "", fmt.Errorf("git HEAD changed during checkpoint: was %s, now %s", expectedHead, position.Head)
+	}
 
 	ts := currentTimestamp()
 	base := "unknown"
-	if len(head) >= 7 {
-		base = head[:7]
+	if len(position.Head) >= 7 {
+		base = position.Head[:7]
 	}
 	message := strings.TrimSpace(commitMessage)
 	if message == "" {
 		message = fmt.Sprintf(
 			"autosnap: passing checkpoint %s branch: %s check: %s idle_seconds: %d base: %s",
 			ts,
-			branchRef,
+			position.BranchRef,
 			checkCommand,
 			int(idle.Seconds()),
 			base,
 		)
 	}
 
-	commitResult, err := runGitCommandWithInput(ctx, repoRoot, nil, message, "commit-tree", tree, "-p", head, "-F", "-")
+	commitResult, err := runGitCommandWithInput(ctx, repoRoot, nil, message, "commit-tree", tree, "-p", position.Head, "-F", "-")
 	if err != nil {
 		return "", "", err
 	}
 	commit := strings.TrimSpace(commitResult.Stdout)
 
-	ref := snapshotRef(branchRef, ts)
+	ref := snapshotRef(position.BranchRef, ts)
 	if _, err := runGitCommand(ctx, repoRoot, nil, "update-ref", ref, commit); err != nil {
 		return "", "", err
 	}

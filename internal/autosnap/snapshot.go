@@ -178,11 +178,12 @@ func (r *snapshotRunner) runIdleCheck() {
 }
 
 func (r *snapshotRunner) runCheck() {
-	branchRef, err := r.currentBranchRef()
+	position, err := currentGitPosition(r.ctx, r.repoRoot)
 	if err != nil {
-		logf("unable to resolve current branch: %v\n", err)
+		logf("unable to resolve current HEAD: %v\n", err)
 		return
 	}
+	branchRef := position.BranchRef
 
 	duration, exitCode, err := runShellCheck(r.ctx, r.repoRoot, r.checkCmd)
 	r.state.LastBranch = branchRef
@@ -243,7 +244,7 @@ func (r *snapshotRunner) runCheck() {
 		}
 	}
 
-	ref, commit, err := createCheckpoint(r.ctx, r.repoRoot, branchRef, r.checkCmd, r.idle, tree, commitMessage)
+	ref, commit, err := createCheckpointChecked(r.ctx, r.repoRoot, branchRef, position.Head, r.checkCmd, r.idle, tree, commitMessage)
 	if err != nil {
 		logf("unable to create checkpoint: %v\n", err)
 		return
@@ -260,7 +261,7 @@ func (r *snapshotRunner) runCheck() {
 	if len(commitShort) > 7 {
 		commitShort = commitShort[:7]
 	}
-		logf("checkpoint saved: %s\n", commitShort)
+	logf("checkpoint saved: %s\n", commitShort)
 }
 
 func (r *snapshotRunner) handleEvent(event fsnotify.Event) error {
@@ -292,27 +293,11 @@ func (r *snapshotRunner) handleEvent(event fsnotify.Event) error {
 }
 
 func (r *snapshotRunner) currentBranchRef() (string, error) {
-	result, err := runGitCommand(r.ctx, r.repoRoot, nil, "branch", "--show-current")
+	position, err := currentGitPosition(r.ctx, r.repoRoot)
 	if err != nil {
 		return "", err
 	}
-
-	branchRef := strings.TrimSpace(result.Stdout)
-	if branchRef != "" {
-		return branchRef, nil
-	}
-
-	head, err := runGitCommand(r.ctx, r.repoRoot, nil, "rev-parse", "--short", "HEAD")
-	if err != nil {
-		return "", err
-	}
-
-	headSHA := strings.TrimSpace(head.Stdout)
-	if headSHA == "" {
-		return "detached", nil
-	}
-
-	return "detached-" + headSHA, nil
+	return position.BranchRef, nil
 }
 
 func (r *snapshotRunner) watchDirectoryTree(root string) error {

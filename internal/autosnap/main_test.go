@@ -1352,6 +1352,81 @@ func TestCreateCheckpointUsesCustomMessage(t *testing.T) {
 	})
 }
 
+func TestCreateCheckpointCheckedUsesExpectedHeadAsParent(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		position, err := currentGitPosition(context.Background(), repo)
+		if err != nil {
+			t.Fatalf("currentGitPosition failed: %v", err)
+		}
+
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("checkpointed"), 0o644); err != nil {
+			t.Fatalf("write file failed: %v", err)
+		}
+		gitDirectory, err := gitDir(context.Background(), repo)
+		if err != nil {
+			t.Fatalf("gitDir failed: %v", err)
+		}
+		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
+		if err != nil {
+			t.Fatalf("computeWorktreeTree failed: %v", err)
+		}
+
+		ref, _, err := createCheckpointChecked(context.Background(), repo, position.BranchRef, position.Head, "npm test", 5*time.Second, tree, "")
+		if err != nil {
+			t.Fatalf("createCheckpointChecked failed: %v", err)
+		}
+
+		parent := runGitOutput(t, repo, "rev-parse", ref+"^")
+		if parent != position.Head {
+			t.Fatalf("expected checkpoint parent %s, got %s", position.Head, parent)
+		}
+	})
+}
+
+func TestCreateCheckpointCheckedRejectsChangedHead(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		position, err := currentGitPosition(context.Background(), repo)
+		if err != nil {
+			t.Fatalf("currentGitPosition failed: %v", err)
+		}
+
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("committed"), 0o644); err != nil {
+			t.Fatalf("write file failed: %v", err)
+		}
+		runGit(t, repo, "add", "file.txt")
+		runGit(t, repo, "commit", "-m", "commit between check and checkpoint")
+
+		gitDirectory, err := gitDir(context.Background(), repo)
+		if err != nil {
+			t.Fatalf("gitDir failed: %v", err)
+		}
+		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
+		if err != nil {
+			t.Fatalf("computeWorktreeTree failed: %v", err)
+		}
+
+		_, _, err = createCheckpointChecked(context.Background(), repo, position.BranchRef, position.Head, "npm test", 5*time.Second, tree, "")
+		if err == nil {
+			t.Fatalf("expected changed HEAD to reject checkpoint")
+		}
+		if !strings.Contains(err.Error(), "HEAD changed") {
+			t.Fatalf("expected HEAD changed error, got %v", err)
+		}
+
+		ref, _, _, err := getLatestCheckpointForBranch(context.Background(), repo, position.BranchRef)
+		if err != nil {
+			t.Fatalf("getLatestCheckpointForBranch failed: %v", err)
+		}
+		if ref != "" {
+			t.Fatalf("expected no checkpoint to be created, got %s", ref)
+		}
+	})
+}
+
 func TestCreateCheckpointFallsBackToGeneratedMessageForEmptyMessage(t *testing.T) {
 	requireIntegration(t)
 	repo := createTestRepo(t)
