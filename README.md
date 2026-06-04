@@ -237,4 +237,3 @@ autosnap prune --all-branches --older-than 30d --apply
 - `.git` and common build/artifact directories are ignored by the watcher.
 - Additional ignores from Git's own `.gitignore` are respected by file watching.
 
-    testline
