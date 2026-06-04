@@ -25,6 +25,7 @@ type checkpointInfo struct {
 	Ref       string
 	Timestamp string
 	Commit    string
+	Branch    string
 	Status    string
 	CheckCmd  string
 	Summary   string
@@ -672,6 +673,10 @@ func listCheckpointsForBranch(ctx context.Context, repoRoot, branchRef string) (
 	if err != nil {
 		return nil, err
 	}
+	return listCheckpointsFromRefs(ctx, repoRoot, entries)
+}
+
+func listCheckpointsFromRefs(ctx context.Context, repoRoot string, entries []checkpointRefInfo) ([]checkpointInfo, error) {
 	if len(entries) == 0 {
 		return nil, nil
 	}
@@ -692,6 +697,7 @@ func listCheckpointsForBranch(ctx context.Context, repoRoot, branchRef string) (
 			Ref:       entry.Ref,
 			Commit:    entry.Commit,
 			Timestamp: entry.Timestamp,
+			Branch:    entry.Branch,
 			Status:    status,
 			CheckCmd:  checkCmd,
 			Summary:   summary,
@@ -699,7 +705,13 @@ func listCheckpointsForBranch(ctx context.Context, repoRoot, branchRef string) (
 	}
 
 	sort.Slice(checkpoints, func(i, j int) bool {
-		return checkpoints[i].Timestamp < checkpoints[j].Timestamp
+		if checkpoints[i].Timestamp != checkpoints[j].Timestamp {
+			return checkpoints[i].Timestamp < checkpoints[j].Timestamp
+		}
+		if checkpoints[i].Branch != checkpoints[j].Branch {
+			return checkpoints[i].Branch < checkpoints[j].Branch
+		}
+		return checkpoints[i].Ref < checkpoints[j].Ref
 	})
 
 	return checkpoints, nil

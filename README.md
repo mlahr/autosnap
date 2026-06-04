@@ -251,9 +251,17 @@ Output includes:
 
 ```bash
 autosnap list
+autosnap list --branch feature/foo
+autosnap list --all
 ```
 
-Lists checkpoints for the current branch, oldest-first.
+Lists checkpoints oldest-first.
+
+Scope flags:
+
+- current branch by default
+- `--branch <name>`
+- `--all`
 
 ### Show checkpoint
 

@@ -1351,6 +1351,79 @@ func TestRunCheckUsesCurrentBranchOnEachRun(t *testing.T) {
 	})
 }
 
+func TestListCommandBranchAndAllScopes(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		currentRef := createAutosnapTestCommitRef(t, repo, branchRef, "20200101T000000Z", "current branch checkpoint")
+		featureRef := createAutosnapTestCommitRef(t, repo, "feature/foo", "20210101T000000Z", "feature branch checkpoint")
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newListCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"list", "--branch", "feature/foo"})
+
+		if err := root.Execute(); err != nil {
+			t.Fatalf("branch list failed: %v", err)
+		}
+
+		output := buf.String()
+		if !strings.Contains(output, "20210101T000000Z") || !strings.Contains(output, "feature branch checkpoint") {
+			t.Fatalf("expected feature checkpoint in branch list output, got %q", output)
+		}
+		if strings.Contains(output, currentRef) || strings.Contains(output, "current branch checkpoint") {
+			t.Fatalf("expected branch list to exclude current checkpoint %s, got %q", currentRef, output)
+		}
+
+		buf.Reset()
+		root = &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newListCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"list", "--all"})
+
+		if err := root.Execute(); err != nil {
+			t.Fatalf("all list failed: %v", err)
+		}
+
+		output = buf.String()
+		if !strings.Contains(output, branchRef) || !strings.Contains(output, "feature/foo") {
+			t.Fatalf("expected all list output to include branch names, got %q", output)
+		}
+		if !strings.Contains(output, "current branch checkpoint") || !strings.Contains(output, "feature branch checkpoint") {
+			t.Fatalf("expected all list output to include both checkpoint summaries, got %q", output)
+		}
+		if !strings.Contains(output, path.Base(currentRef)) || !strings.Contains(output, path.Base(featureRef)) {
+			t.Fatalf("expected all list output to include both timestamps, got %q", output)
+		}
+	})
+}
+
+func TestListCommandRejectsMultipleScopes(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newListCommand())
+		root.SetArgs([]string{"list", "--branch", "feature/foo", "--all"})
+
+		err := root.Execute()
+		if err == nil {
+			t.Fatalf("expected list to fail")
+		}
+		if !strings.Contains(err.Error(), "at most one scope") {
+			t.Fatalf("expected scope error, got %v", err)
+		}
+	})
+}
+
 func TestRunCheckPassesMessageSourceEnvForFirstCheckpoint(t *testing.T) {
 	requireIntegration(t)
 	repo := createTestRepo(t)
