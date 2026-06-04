@@ -1005,7 +1005,7 @@ func TestShowCommandColorModes(t *testing.T) {
 	})
 }
 
-func TestRestoreCommandAppliesCheckpointToWorktreeOnly(t *testing.T) {
+func TestRestoreCommandAppliesCheckpointToWorktreeAndIndex(t *testing.T) {
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -1049,9 +1049,9 @@ func TestRestoreCommandAppliesCheckpointToWorktreeOnly(t *testing.T) {
 		if string(got) != "checkpointed\n" {
 			t.Fatalf("expected restored file content, got %q", got)
 		}
-		runGit(t, repo, "diff", "--cached", "--quiet")
-		if status := runGitOutput(t, repo, "status", "--porcelain"); !strings.Contains(status, "file.txt") {
-			t.Fatalf("expected unstaged restored change in status, got %q", status)
+		runGit(t, repo, "diff", "--quiet")
+		if status := runGitOutput(t, repo, "status", "--porcelain"); !strings.Contains(status, "M  file.txt") {
+			t.Fatalf("expected staged restored change in status, got %q", status)
 		}
 	})
 }
@@ -1099,7 +1099,7 @@ func TestRestoreCommandRefusesDirtyStateByDefault(t *testing.T) {
 	})
 }
 
-func TestRestoreCommandReportsGitApplyError(t *testing.T) {
+func TestRestoreCommandLeavesConflictMarkers(t *testing.T) {
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -1127,6 +1127,8 @@ func TestRestoreCommandReportsGitApplyError(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("conflicting\n"), 0o644); err != nil {
 			t.Fatalf("write conflicting file failed: %v", err)
 		}
+		runGit(t, repo, "add", "file.txt")
+		runGit(t, repo, "commit", "-m", "conflicting branch commit")
 
 		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
 		root.AddCommand(newRestoreCommand())
@@ -1134,14 +1136,22 @@ func TestRestoreCommandReportsGitApplyError(t *testing.T) {
 
 		err = root.Execute()
 		if err == nil {
-			t.Fatalf("expected restore to report git apply failure")
+			t.Fatalf("expected restore to report merge conflict")
 		}
 		msg := err.Error()
 		if !strings.Contains(msg, "failed to restore checkpoint") {
 			t.Fatalf("expected restore context in error, got %v", err)
 		}
-		if !strings.Contains(msg, "error:") && !strings.Contains(msg, "patch failed") {
-			t.Fatalf("expected git apply details in error, got %v", err)
+		if !strings.Contains(msg, "conflict") && !strings.Contains(msg, "overlaps") {
+			t.Fatalf("expected git conflict details in error, got %v", err)
+		}
+
+		content, readErr := os.ReadFile(filepath.Join(repo, "file.txt"))
+		if readErr != nil {
+			t.Fatalf("read conflicted file failed: %v", readErr)
+		}
+		if !strings.Contains(string(content), "<<<<<<<") {
+			t.Fatalf("expected conflict markers in file, got %q", content)
 		}
 	})
 }

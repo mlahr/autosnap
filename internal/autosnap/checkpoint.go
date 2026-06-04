@@ -264,7 +264,7 @@ func restoreCheckpoint(ctx context.Context, repoRoot string, meta checkpointRefI
 		return nil
 	}
 
-	applyResult, err := runGitCommandWithInput(ctx, repoRoot, nil, diff.Stdout, "apply", "--binary")
+	applyResult, err := runGitCommandWithInput(ctx, repoRoot, nil, diff.Stdout, "apply", "--binary", "--3way")
 	if err != nil {
 		return gitCommandError(err, applyResult)
 	}

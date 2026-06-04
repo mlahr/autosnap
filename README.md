@@ -179,8 +179,9 @@ autosnap show --full --color=always <checkpoint>
 
 `autosnap restore <checkpoint>`
 
-Applies the checkpoint diff back into the working tree without staging it or moving `HEAD`.
+	Applies the checkpoint diff back into the working tree and index without moving `HEAD`.
 By default, restore refuses to run unless the worktree and index are clean.
+When changes overlap, restore attempts a three-way apply and may leave conflict markers for manual resolution.
 
 Pass `--force` to skip the clean-state precheck and let Git apply the patch normally:
 
