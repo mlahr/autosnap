@@ -3,7 +3,6 @@ package autosnap
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,6 +30,7 @@ type snapshotRunner struct {
 	repoRoot     string
 	branchRef    string
 	checkCmd     string
+	msgSourceCmd string
 	snapshotMode string
 	idle         time.Duration
 
@@ -49,7 +49,7 @@ type snapshotRunner struct {
 	ignoreCacheMu   sync.RWMutex
 }
 
-func newSnapshotRunner(ctx context.Context, repoRoot, branchRef, checkCommand, snapshotMode string, idle time.Duration, statePath string) (*snapshotRunner, error) {
+func newSnapshotRunner(ctx context.Context, repoRoot, branchRef, checkCommand, msgSourceCommand, snapshotMode string, idle time.Duration, statePath string) (*snapshotRunner, error) {
 	state, err := loadAutosnapState(statePath)
 	if err != nil {
 		return nil, err
@@ -63,6 +63,7 @@ func newSnapshotRunner(ctx context.Context, repoRoot, branchRef, checkCommand, s
 		repoRoot:     repoRoot,
 		branchRef:    branchRef,
 		checkCmd:     checkCommand,
+		msgSourceCmd: msgSourceCommand,
 		snapshotMode: snapshotMode,
 		idle:         idle,
 		statePath:    statePath,
@@ -98,14 +99,14 @@ func (r *snapshotRunner) start() error {
 		case event := <-watcher.Events:
 			if err := r.handleEvent(event); err != nil {
 				if errors.Is(err, fsnotify.ErrEventOverflow) {
-					fmt.Println("watch overflow:", err)
+					logf("watch overflow: %v\n", err)
 					continue
 				}
 				return err
 			}
 		case err := <-watcher.Errors:
 			if err != nil {
-				fmt.Println("watch error:", err)
+				logf("watch error: %v\n", err)
 			}
 		}
 	}
@@ -158,7 +159,7 @@ func (r *snapshotRunner) runIdleCheck() {
 	r.checking = true
 	r.mu.Unlock()
 
-	fmt.Println("idle reached, running check...")
+	logln("idle reached, running check...")
 	r.runCheck()
 
 	r.mu.Lock()
@@ -179,7 +180,7 @@ func (r *snapshotRunner) runIdleCheck() {
 func (r *snapshotRunner) runCheck() {
 	branchRef, err := r.currentBranchRef()
 	if err != nil {
-		fmt.Println("unable to resolve current branch:", err)
+		logf("unable to resolve current branch: %v\n", err)
 		return
 	}
 
@@ -196,7 +197,7 @@ func (r *snapshotRunner) runCheck() {
 		r.state.LastFailureAt = r.state.LastCheckAt
 		r.state.LastFailureExitCode = exitCode
 		_ = saveAutosnapState(r.statePath, r.state)
-		fmt.Println("check failed; checkpoint not created")
+		logln("check failed; checkpoint not created")
 		return
 	}
 
@@ -204,12 +205,12 @@ func (r *snapshotRunner) runCheck() {
 
 	gitDirectory, err := gitDir(r.ctx, r.repoRoot)
 	if err != nil {
-		fmt.Println("unable to resolve git directory:", err)
+		logf("unable to resolve git directory: %v\n", err)
 		return
 	}
 	tree, err := computeWorktreeTree(r.ctx, r.repoRoot, gitDirectory, r.snapshotMode)
 	if err != nil {
-		fmt.Println("unable to compute working tree tree:", err)
+		logf("unable to compute working tree tree: %v\n", err)
 		return
 	}
 
@@ -225,13 +226,26 @@ func (r *snapshotRunner) runCheck() {
 	}
 
 	if lastTree != "" && lastTree == tree {
-		fmt.Println("no meaningful diff; checkpoint skipped")
+		logln("no meaningful diff; checkpoint skipped")
 		return
 	}
 
-	ref, commit, err := createCheckpoint(r.ctx, r.repoRoot, branchRef, r.checkCmd, r.idle, tree)
+	commitMessage := ""
+	if strings.TrimSpace(r.msgSourceCmd) != "" {
+		message, sourceExitCode, err := runShellOutput(r.ctx, r.repoRoot, r.msgSourceCmd)
+		if err != nil || sourceExitCode != 0 {
+			logln("msg-source-cmd failed; using generated checkpoint message")
+		} else {
+			commitMessage = strings.TrimSpace(message)
+			if commitMessage == "" {
+				logln("msg-source-cmd produced no output; using generated checkpoint message")
+			}
+		}
+	}
+
+	ref, commit, err := createCheckpoint(r.ctx, r.repoRoot, branchRef, r.checkCmd, r.idle, tree, commitMessage)
 	if err != nil {
-		fmt.Println("unable to create checkpoint:", err)
+		logf("unable to create checkpoint: %v\n", err)
 		return
 	}
 
@@ -239,14 +253,14 @@ func (r *snapshotRunner) runCheck() {
 	r.state.LastCheckpointAt = pathBase(ref)
 	r.state.LastCheckpointTree = tree
 	if err := saveAutosnapState(r.statePath, r.state); err != nil {
-		fmt.Println("unable to persist state:", err)
+		logf("unable to persist state: %v\n", err)
 	}
 
 	commitShort := commit
 	if len(commitShort) > 7 {
 		commitShort = commitShort[:7]
 	}
-	fmt.Printf("checkpoint saved: %s\n", commitShort)
+		logf("checkpoint saved: %s\n", commitShort)
 }
 
 func (r *snapshotRunner) handleEvent(event fsnotify.Event) error {
@@ -263,7 +277,7 @@ func (r *snapshotRunner) handleEvent(event fsnotify.Event) error {
 	}
 
 	if event.Has(fsnotify.Create) || event.Has(fsnotify.Write) || event.Has(fsnotify.Remove) || event.Has(fsnotify.Rename) || event.Has(fsnotify.Chmod) {
-		fmt.Printf("changed: %s\n", rel)
+		logf("changed: %s\n", rel)
 		r.touch()
 	}
 

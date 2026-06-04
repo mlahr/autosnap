@@ -491,7 +491,7 @@ func TestGitIgnoredPathsAreIgnored(t *testing.T) {
 			t.Fatalf("stateFilePath failed: %v", err)
 		}
 
-		runner, err := newSnapshotRunner(context.Background(), repo, branchRef, "true", snapshotModeBoth, time.Second, statePath)
+		runner, err := newSnapshotRunner(context.Background(), repo, branchRef, "true", "", snapshotModeBoth, time.Second, statePath)
 		if err != nil {
 			t.Fatalf("newSnapshotRunner failed: %v", err)
 		}
@@ -612,7 +612,7 @@ func TestGetLatestAndListCheckpointForBranch(t *testing.T) {
 		if err != nil {
 			t.Fatalf("computeWorktreeTree failed: %v", err)
 		}
-		ref1, _, err := createCheckpoint(context.Background(), repo, branchRef, "echo ok", 5*time.Second, tree)
+		ref1, _, err := createCheckpoint(context.Background(), repo, branchRef, "echo ok", 5*time.Second, tree, "")
 		if err != nil {
 			t.Fatalf("create first checkpoint failed: %v", err)
 		}
@@ -626,7 +626,7 @@ func TestGetLatestAndListCheckpointForBranch(t *testing.T) {
 		if err != nil {
 			t.Fatalf("computeWorktreeTree failed: %v", err)
 		}
-		ref2, _, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree2)
+		ref2, _, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree2, "")
 		if err != nil {
 			t.Fatalf("create second checkpoint failed: %v", err)
 		}
@@ -673,7 +673,7 @@ func TestRunCheckUsesCurrentBranchOnEachRun(t *testing.T) {
 			t.Fatalf("stateFilePath failed: %v", err)
 		}
 
-		runner, err := newSnapshotRunner(ctx, repoRoot, branchRef, "true", snapshotModeBoth, time.Second, statePath)
+		runner, err := newSnapshotRunner(ctx, repoRoot, branchRef, "true", "", snapshotModeBoth, time.Second, statePath)
 		if err != nil {
 			t.Fatalf("newSnapshotRunner failed: %v", err)
 		}
@@ -743,7 +743,7 @@ func TestShowCommandResolvesCheckpointByTimestamp(t *testing.T) {
 			t.Fatalf("computeWorktreeTree failed: %v", err)
 		}
 
-		ref, _, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree)
+		ref, _, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree, "")
 		if err != nil {
 			t.Fatalf("create checkpoint failed: %v", err)
 		}
@@ -788,7 +788,7 @@ func TestShowCommandResolvesCheckpointByRefAndCommit(t *testing.T) {
 		if err != nil {
 			t.Fatalf("computeWorktreeTree failed: %v", err)
 		}
-		ref, commit, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree)
+		ref, commit, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree, "")
 		if err != nil {
 			t.Fatalf("create checkpoint failed: %v", err)
 		}
@@ -861,7 +861,7 @@ func TestShowCommandFullFlagShowsPatch(t *testing.T) {
 		if err != nil {
 			t.Fatalf("computeWorktreeTree failed: %v", err)
 		}
-		_, _, err = createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree)
+		_, _, err = createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree, "")
 		if err != nil {
 			t.Fatalf("create checkpoint failed: %v", err)
 		}
@@ -874,7 +874,7 @@ func TestShowCommandFullFlagShowsPatch(t *testing.T) {
 		if err != nil {
 			t.Fatalf("computeWorktreeTree changed failed: %v", err)
 		}
-		ref2, _, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree2)
+		ref2, _, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree2, "")
 		if err != nil {
 			t.Fatalf("create checkpoint changed failed: %v", err)
 		}
@@ -921,7 +921,7 @@ func TestShowCommandColorModes(t *testing.T) {
 		if err != nil {
 			t.Fatalf("computeWorktreeTree failed: %v", err)
 		}
-		if _, _, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree); err != nil {
+		if _, _, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree, ""); err != nil {
 			t.Fatalf("create checkpoint failed: %v", err)
 		}
 
@@ -933,7 +933,7 @@ func TestShowCommandColorModes(t *testing.T) {
 		if err != nil {
 			t.Fatalf("computeWorktreeTree changed failed: %v", err)
 		}
-		ref2, _, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree2)
+		ref2, _, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree2, "")
 		if err != nil {
 			t.Fatalf("create checkpoint changed failed: %v", err)
 		}
@@ -1074,4 +1074,67 @@ func testTreeFileContent(t *testing.T, repoRoot, tree, filePath string) string {
 	t.Helper()
 	content := runGitOutput(t, repoRoot, "show", tree+":"+filePath)
 	return strings.TrimSuffix(content, "\n")
+}
+
+func TestCreateCheckpointUsesCustomMessage(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		gitDirectory, err := gitDir(context.Background(), repo)
+		if err != nil {
+			t.Fatalf("gitDir failed: %v", err)
+		}
+
+		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
+		if err != nil {
+			t.Fatalf("computeWorktreeTree failed: %v", err)
+		}
+
+		customMessage := "line one\n\nline two"
+		ref, _, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree, customMessage)
+		if err != nil {
+			t.Fatalf("createCheckpoint failed: %v", err)
+		}
+
+		got := runGitOutput(t, repo, "log", "-1", "--pretty=%B", ref)
+		if strings.TrimSpace(got) != customMessage {
+			t.Fatalf("expected custom commit message %q, got %q", customMessage, got)
+		}
+	})
+}
+
+func TestCreateCheckpointFallsBackToGeneratedMessageForEmptyMessage(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		gitDirectory, err := gitDir(context.Background(), repo)
+		if err != nil {
+			t.Fatalf("gitDir failed: %v", err)
+		}
+
+		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
+		if err != nil {
+			t.Fatalf("computeWorktreeTree failed: %v", err)
+		}
+
+		ref, _, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree, "")
+		if err != nil {
+			t.Fatalf("createCheckpoint failed: %v", err)
+		}
+
+		msg := runGitOutput(t, repo, "log", "-1", "--pretty=%B", ref)
+		if !strings.Contains(msg, "autosnap: passing checkpoint") {
+			t.Fatalf("expected generated checkpoint message prefix, got %q", msg)
+		}
+	})
 }

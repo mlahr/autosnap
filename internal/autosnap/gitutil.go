@@ -44,6 +44,32 @@ func runGitCommand(ctx context.Context, dir string, env map[string]string, args 
 	}, err
 }
 
+func runGitCommandWithInput(ctx context.Context, dir string, env map[string]string, input string, args ...string) (commandResult, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	cmd.Env = os.Environ()
+	for k, v := range env {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
+	}
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	cmd.Stdin = strings.NewReader(input)
+
+	err := cmd.Run()
+	exitCode := 0
+	if e, ok := err.(*exec.ExitError); ok {
+		exitCode = e.ExitCode()
+	}
+
+	return commandResult{
+		Stdout:   stdout.String(),
+		Stderr:   stderr.String(),
+		ExitCode: exitCode,
+	}, err
+}
+
 func shellCommand(ctx context.Context, dir string, command string) *exec.Cmd {
 	if runtime.GOOS == "windows" {
 		return exec.CommandContext(ctx, "cmd", "/C", command)
@@ -57,8 +83,15 @@ func runShellCheck(ctx context.Context, dir string, command string) (time.Durati
 	cmd.Dir = dir
 
 	var stdout, stderr bytes.Buffer
-	cmd.Stdout = io.MultiWriter(os.Stdout, &stdout)
-	cmd.Stderr = io.MultiWriter(os.Stderr, &stderr)
+	stdoutSink := io.MultiWriter(os.Stdout, &stdout)
+	stderrSink := io.MultiWriter(os.Stderr, &stderr)
+	if logTimestampsEnabled {
+		stdoutSink = io.MultiWriter(withTimestampWriter(os.Stdout), &stdout)
+		stderrSink = io.MultiWriter(withTimestampWriter(os.Stderr), &stderr)
+	}
+
+	cmd.Stdout = stdoutSink
+	cmd.Stderr = stderrSink
 
 	err := cmd.Run()
 	exitCode := 0
@@ -76,6 +109,35 @@ func runShellCheck(ctx context.Context, dir string, command string) (time.Durati
 	_ = stderr.String()
 
 	return time.Since(start), exitCode, err
+}
+
+func runShellOutput(ctx context.Context, dir string, command string) (string, int, error) {
+	cmd := shellCommand(ctx, dir, command)
+	cmd.Dir = dir
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	exitCode := 0
+	if e, ok := err.(*exec.ExitError); ok {
+		exitCode = e.ExitCode()
+	} else if err != nil {
+		exitCode = 1
+	}
+
+	if ctx.Err() != nil {
+		exitCode = 1
+	}
+
+	if err != nil && stderr.Len() > 0 {
+		if stderrText := strings.TrimSpace(stderr.String()); stderrText != "" {
+			err = fmt.Errorf("%w (%s)", err, stderrText)
+		}
+	}
+
+	return stdout.String(), exitCode, err
 }
 
 func detectRepository(ctx context.Context) (string, string, string, error) {

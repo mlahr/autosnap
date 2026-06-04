@@ -19,6 +19,7 @@ import (
 func newStartCommand() *cobra.Command {
 	var (
 		checkCommand string
+		msgSourceCmd string
 		idleSeconds  int
 		snapshotMode string
 		foreground   bool
@@ -58,7 +59,7 @@ func newStartCommand() *cobra.Command {
 						return err
 					}
 				}
-				return startAutosnapDetached(repoRoot, checkCommand, idleSeconds, snapshotMode, runToken)
+				return startAutosnapDetached(repoRoot, checkCommand, msgSourceCmd, idleSeconds, snapshotMode, runToken)
 			}
 
 			if runToken == "" {
@@ -76,7 +77,7 @@ func newStartCommand() *cobra.Command {
 				return err
 			}
 
-			runner, err := newSnapshotRunner(ctx, repoRoot, branchRef, checkCommand, snapshotMode, time.Duration(idleSeconds)*time.Second, statePath)
+			runner, err := newSnapshotRunner(ctx, repoRoot, branchRef, checkCommand, msgSourceCmd, snapshotMode, time.Duration(idleSeconds)*time.Second, statePath)
 			if err != nil {
 				return err
 			}
@@ -104,8 +105,8 @@ func newStartCommand() *cobra.Command {
 				defer removeAutosnapRunState(runPath)
 			}
 
-			fmt.Printf("autosnap watching %s\n", repoRoot)
-			fmt.Printf("branch: %s check: %s idle: %ds\n", branchDisplay, checkCommand, idleSeconds)
+			logf("autosnap watching %s\n", repoRoot)
+			logf("branch: %s check: %s idle: %ds\n", branchDisplay, checkCommand, idleSeconds)
 
 			if err := runner.start(); err != nil {
 				cancel()
@@ -116,6 +117,7 @@ func newStartCommand() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&checkCommand, "check", "", "Shell command to run after idle")
+	cmd.Flags().StringVar(&msgSourceCmd, "msg-source-cmd", "", "Shell command that returns the checkpoint commit message (multiline supported)")
 	cmd.Flags().IntVar(&idleSeconds, "idle", 60, "Seconds without changes before running the check")
 	cmd.Flags().StringVar(&snapshotMode, "snapshot-mode", snapshotModeBoth, "Snapshot source: both, staged, working")
 	cmd.Flags().BoolVar(&foreground, "foreground", false, "Run autosnap in the current terminal")
@@ -127,7 +129,7 @@ func newStartCommand() *cobra.Command {
 	return cmd
 }
 
-func startAutosnapDetached(repoRoot, checkCommand string, idleSeconds int, snapshotMode, runToken string) error {
+func startAutosnapDetached(repoRoot, checkCommand, msgSourceCmd string, idleSeconds int, snapshotMode, runToken string) error {
 	logPath, err := backgroundLogPath(repoRoot)
 	if err != nil {
 		return err
@@ -146,7 +148,7 @@ func startAutosnapDetached(repoRoot, checkCommand string, idleSeconds int, snaps
 		return err
 	}
 
-	cmd := exec.Command(
+	args := []string{
 		exe,
 		"start",
 		"--foreground",
@@ -159,11 +161,17 @@ func startAutosnapDetached(repoRoot, checkCommand string, idleSeconds int, snaps
 		strconv.Itoa(idleSeconds),
 		"--run-token",
 		runToken,
-	)
+	}
+
+	if msgSourceCmd != "" {
+		args = append(args, "--msg-source-cmd", msgSourceCmd)
+	}
+
+	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Stdin = nil
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
-	cmd.Env = os.Environ()
+	cmd.Env = append(os.Environ(), autosnapTimestampLogEnv+"=1")
 	if runtime.GOOS != "windows" {
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	}

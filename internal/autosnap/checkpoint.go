@@ -124,7 +124,7 @@ func normalizeSnapshotMode(mode string) (string, error) {
 	return "", fmt.Errorf("invalid snapshot mode %q (expected both, staged, working)", mode)
 }
 
-func createCheckpoint(ctx context.Context, repoRoot, branchRef, checkCommand string, idle time.Duration, tree string) (string, string, error) {
+func createCheckpoint(ctx context.Context, repoRoot, branchRef, checkCommand string, idle time.Duration, tree string, commitMessage string) (string, string, error) {
 	headResult, err := runGitCommand(ctx, repoRoot, nil, "rev-parse", "HEAD")
 	if err != nil {
 		return "", "", err
@@ -136,16 +136,19 @@ func createCheckpoint(ctx context.Context, repoRoot, branchRef, checkCommand str
 	if len(head) >= 7 {
 		base = head[:7]
 	}
-	message := fmt.Sprintf(
+	message := strings.TrimSpace(commitMessage)
+	if message == "" {
+		message = fmt.Sprintf(
 		"autosnap: passing checkpoint %s branch: %s check: %s idle_seconds: %d base: %s",
 		ts,
 		branchRef,
 		checkCommand,
 		int(idle.Seconds()),
 		base,
-	)
+		)
+	}
 
-	commitResult, err := runGitCommand(ctx, repoRoot, nil, "commit-tree", tree, "-p", head, "-m", message)
+	commitResult, err := runGitCommandWithInput(ctx, repoRoot, nil, message, "commit-tree", tree, "-p", head, "-F", "-")
 	if err != nil {
 		return "", "", err
 	}

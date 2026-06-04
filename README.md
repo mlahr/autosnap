@@ -75,6 +75,12 @@ All commands must be run inside a Git worktree.
 
 `autosnap start --check "npm test" --idle 60`
 
+`autosnap start --check "npm test" --msg-source-cmd "printf \"checkpoint: $(date -u +%Y-%m-%dT%H:%M:%SZ)\\ncontext: autosnap\""`
+
+When set, `--msg-source-cmd` replaces the checkpoint commit message with command output.
+Multiline output is supported; leading and trailing whitespace is trimmed.
+If the command fails or emits no output, autosnap falls back to the generated message.
+
 `autosnap start` runs in the background by default and returns immediately.
 
 What happens:
