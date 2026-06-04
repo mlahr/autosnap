@@ -408,6 +408,112 @@ func TestAutosnapRunStateLifecycle(t *testing.T) {
 	}
 }
 
+func TestWriteLogTail(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "autosnap.log")
+	if err := os.WriteFile(logPath, []byte("one\ntwo\nthree\n"), 0o644); err != nil {
+		t.Fatalf("write log failed: %v", err)
+	}
+
+	var buf bytes.Buffer
+	offset, err := writeLogTail(&buf, logPath, 2)
+	if err != nil {
+		t.Fatalf("writeLogTail failed: %v", err)
+	}
+	if got, want := buf.String(), "two\nthree\n"; got != want {
+		t.Fatalf("expected tail %q, got %q", want, got)
+	}
+	if offset != int64(len("one\ntwo\nthree\n")) {
+		t.Fatalf("expected offset at end of log, got %d", offset)
+	}
+
+	buf.Reset()
+	if _, err := writeLogTail(&buf, logPath, 0); err != nil {
+		t.Fatalf("writeLogTail -n 0 failed: %v", err)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("expected empty output for -n 0, got %q", buf.String())
+	}
+
+	buf.Reset()
+	if _, err := writeLogTail(&buf, logPath, -1); err != nil {
+		t.Fatalf("writeLogTail all failed: %v", err)
+	}
+	if got, want := buf.String(), "one\ntwo\nthree\n"; got != want {
+		t.Fatalf("expected full log %q, got %q", want, got)
+	}
+}
+
+func TestWriteLogTailMissingFile(t *testing.T) {
+	dir := t.TempDir()
+	_, err := writeLogTail(&bytes.Buffer{}, filepath.Join(dir, "missing.log"), -1)
+	if err == nil || !strings.Contains(err.Error(), "autosnap log not found") {
+		t.Fatalf("expected missing log error, got %v", err)
+	}
+}
+
+func TestFollowLogWritesAppends(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "autosnap.log")
+	if err := os.WriteFile(logPath, []byte("base\n"), 0o644); err != nil {
+		t.Fatalf("write log failed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		file, err := os.OpenFile(logPath, os.O_WRONLY|os.O_APPEND, 0o644)
+		if err != nil {
+			return
+		}
+		_, _ = file.WriteString("next\n")
+		_ = file.Close()
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	var buf bytes.Buffer
+	if err := followLog(ctx, &buf, logPath, int64(len("base\n")), 10*time.Millisecond); err != nil {
+		t.Fatalf("followLog failed: %v", err)
+	}
+	if got, want := buf.String(), "next\n"; got != want {
+		t.Fatalf("expected followed output %q, got %q", want, got)
+	}
+}
+
+func TestLogsCommandTail(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		logPath, err := backgroundLogPath(repo)
+		if err != nil {
+			t.Fatalf("backgroundLogPath failed: %v", err)
+		}
+		if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+			t.Fatalf("mkdir log dir failed: %v", err)
+		}
+		if err := os.WriteFile(logPath, []byte("alpha\nbeta\ngamma\n"), 0o644); err != nil {
+			t.Fatalf("write log failed: %v", err)
+		}
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newLogsCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"logs", "-n", "2"})
+
+		if err := root.Execute(); err != nil {
+			t.Fatalf("logs command failed: %v", err)
+		}
+		if got, want := buf.String(), "beta\ngamma\n"; got != want {
+			t.Fatalf("expected logs output %q, got %q", want, got)
+		}
+	})
+}
+
 func TestEnsureNoActiveRunForRepo(t *testing.T) {
 	requireIntegration(t)
 	repo := createTestRepo(t)

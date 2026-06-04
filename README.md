@@ -172,6 +172,14 @@ branch: feature/foo check: npm test idle: 60s
 
 When running detached, all watcher logs go to `autosnap.log` under the autosnap state directory (`.git/autosnap/` in a standard worktree).
 
+View the daemon log with Docker-style tailing:
+
+```bash
+autosnap logs
+autosnap logs -n 100
+autosnap logs -n 100 -f
+```
+
 You can control what gets snapshotted:
 
 - `--snapshot-mode both` (default): include staged + unstaged changes
