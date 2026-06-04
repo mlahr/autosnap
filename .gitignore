@@ -13,9 +13,11 @@ tmp/
 .DS_Store
 .idea/
 .vscode/
+*~
 
 # Go workspace folders (local)
 /vendor/
 
 # macOS / Windows editor detritus
 Thumbs.db
+.*\~

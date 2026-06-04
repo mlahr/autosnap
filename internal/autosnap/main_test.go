@@ -62,6 +62,38 @@ func TestParseCheckpointMessage(t *testing.T) {
 	}
 }
 
+func TestCheckpointListSummary(t *testing.T) {
+	tests := []struct {
+		name    string
+		message string
+		want    string
+	}{
+		{
+			name:    "generated message",
+			message: "autosnap: passing checkpoint 2026-06-04T13:22:10 branch: feature/foo check: npm test idle_seconds: 60 base: abc1234",
+			want:    "passing npm test",
+		},
+		{
+			name:    "custom multiline message",
+			message: "feat(autosnap): add command output logging\n\nbody line",
+			want:    "feat(autosnap): add command output logging",
+		},
+		{
+			name:    "empty message",
+			message: "",
+			want:    "unknown",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := checkpointListSummary(tt.message); got != tt.want {
+				t.Fatalf("expected summary %q, got %q", tt.want, got)
+			}
+		})
+	}
+}
+
 func TestStateFilePathUsesAbsoluteGitDir(t *testing.T) {
 	requireIntegration(t)
 	repo := createTestRepo(t)
@@ -652,8 +684,11 @@ func TestGetLatestAndListCheckpointForBranch(t *testing.T) {
 		if len(checkpoints) != 2 {
 			t.Fatalf("expected 2 checkpoints, got %d", len(checkpoints))
 		}
-		if checkpoints[0].Ref != latestRef {
-			t.Fatalf("expected first listed ref %s, got %s", latestRef, checkpoints[0].Ref)
+		if checkpoints[0].Ref != ref1 {
+			t.Fatalf("expected first listed ref %s, got %s", ref1, checkpoints[0].Ref)
+		}
+		if checkpoints[1].Ref != latestRef {
+			t.Fatalf("expected last listed ref %s, got %s", latestRef, checkpoints[1].Ref)
 		}
 	})
 }
@@ -1104,6 +1139,17 @@ func TestCreateCheckpointUsesCustomMessage(t *testing.T) {
 		got := runGitOutput(t, repo, "log", "-1", "--pretty=%B", ref)
 		if strings.TrimSpace(got) != customMessage {
 			t.Fatalf("expected custom commit message %q, got %q", customMessage, got)
+		}
+
+		checkpoints, err := listCheckpointsForBranch(context.Background(), repo, branchRef)
+		if err != nil {
+			t.Fatalf("listCheckpointsForBranch failed: %v", err)
+		}
+		if len(checkpoints) != 1 {
+			t.Fatalf("expected 1 checkpoint, got %d", len(checkpoints))
+		}
+		if checkpoints[0].Summary != "line one" {
+			t.Fatalf("expected custom list summary %q, got %q", "line one", checkpoints[0].Summary)
 		}
 	})
 }

@@ -116,8 +116,14 @@ func runShellOutput(ctx context.Context, dir string, command string) (string, in
 	cmd.Dir = dir
 
 	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdoutSink := io.MultiWriter(os.Stdout, &stdout)
+	stderrSink := io.MultiWriter(os.Stderr, &stderr)
+	if logTimestampsEnabled {
+		stdoutSink = io.MultiWriter(withTimestampWriter(os.Stdout), &stdout)
+		stderrSink = io.MultiWriter(withTimestampWriter(os.Stderr), &stderr)
+	}
+	cmd.Stdout = stdoutSink
+	cmd.Stderr = stderrSink
 
 	err := cmd.Run()
 	exitCode := 0
@@ -131,6 +137,8 @@ func runShellOutput(ctx context.Context, dir string, command string) (string, in
 		exitCode = 1
 	}
 
+	logSourceCommandOutput("msg-source-cmd", command, stdout.String(), stderr.String(), exitCode)
+
 	if err != nil && stderr.Len() > 0 {
 		if stderrText := strings.TrimSpace(stderr.String()); stderrText != "" {
 			err = fmt.Errorf("%w (%s)", err, stderrText)
@@ -138,6 +146,40 @@ func runShellOutput(ctx context.Context, dir string, command string) (string, in
 	}
 
 	return stdout.String(), exitCode, err
+}
+
+func logSourceCommandOutput(label, command, stdoutText, stderrText string, exitCode int) {
+	logf("running %s: %q (exit=%d)\n", label, command, exitCode)
+
+	logShellOutputLines(label, "stdout", stdoutText)
+	logShellOutputLines(label, "stderr", stderrText)
+
+	if strings.TrimSpace(stdoutText) == "" && strings.TrimSpace(stderrText) == "" {
+		logf("%s produced no output\n", label)
+	}
+}
+
+func logShellOutputLines(commandLabel, stream, text string) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+
+	lines := strings.Split(text, "\n")
+	for _, line := range lines {
+		logf("%s %s: %s\n", commandLabel, streamPrefix(stream), strings.TrimSpace(line))
+	}
+}
+
+func streamPrefix(stream string) string {
+	switch stream {
+	case "stdout":
+		return "[stdout]"
+	case "stderr":
+		return "[stderr]"
+	default:
+		return "[output]"
+	}
 }
 
 func detectRepository(ctx context.Context) (string, string, string, error) {

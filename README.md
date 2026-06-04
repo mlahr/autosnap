@@ -149,7 +149,7 @@ Output includes:
 autosnap list
 ```
 
-Lists checkpoints for the current branch, newest-first.
+Lists checkpoints for the current branch, oldest-first.
 
 ### Show checkpoint
 
@@ -183,3 +183,5 @@ autosnap show --full --color=always <checkpoint>
 - Untracked files are included when tracked through the temporary-index path snapshot.
 - `.git` and common build/artifact directories are ignored by the watcher.
 - Additional ignores from Git's own `.gitignore` are respected by file watching.
+
+    testline

@@ -28,7 +28,7 @@ func newListCommand() *cobra.Command {
 			}
 
 			for _, cp := range checkpoints {
-				fmt.Printf("%s %s %s %s\n", cp.Timestamp, cp.Status, cp.CheckCmd, cp.Commit)
+				fmt.Printf("%s %s %s\n", cp.Timestamp, cp.Commit, cp.Summary)
 			}
 
 			return nil

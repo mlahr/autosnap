@@ -137,7 +137,53 @@ func isAutosnapCommandLine(commandLine, runToken string) bool {
 	if !strings.Contains(commandLine, "--daemon") {
 		return false
 	}
-	return strings.Contains(commandLine, "--run-token="+runToken)
+
+	fields := strings.Fields(commandLine)
+	if len(fields) == 0 {
+		return false
+	}
+	execName := filepath.Base(fields[0])
+	if execName != "autosnap" {
+		// Fallback for historical command line formats where the binary path includes
+		// the extension or additional path components.
+		if !strings.HasSuffix(execName, "autosnap") {
+			return false
+		}
+	}
+
+	sawStart := false
+	for _, field := range fields {
+		if field == "start" {
+			sawStart = true
+			break
+		}
+	}
+	if !sawStart {
+		return false
+	}
+
+	if runToken == "" {
+		return true
+	}
+
+	for i := 0; i < len(fields); i++ {
+		if fields[i] == "--run-token" {
+			if i+1 < len(fields) && fields[i+1] == runToken {
+				return true
+			}
+			continue
+		}
+		if strings.HasPrefix(fields[i], "--run-token=") && strings.TrimPrefix(fields[i], "--run-token=") == runToken {
+			return true
+		}
+	}
+
+	// Legacy behavior used to omit --run-token in some flows.
+	if !strings.Contains(commandLine, "--run-token") {
+		return true
+	}
+
+	return false
 }
 
 func defaultReadProcessCommandLine(pid int) (string, error) {

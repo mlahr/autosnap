@@ -27,6 +27,7 @@ type checkpointInfo struct {
 	Commit    string
 	Status    string
 	CheckCmd  string
+	Summary   string
 }
 
 type checkpointRefInfo struct {
@@ -139,12 +140,12 @@ func createCheckpoint(ctx context.Context, repoRoot, branchRef, checkCommand str
 	message := strings.TrimSpace(commitMessage)
 	if message == "" {
 		message = fmt.Sprintf(
-		"autosnap: passing checkpoint %s branch: %s check: %s idle_seconds: %d base: %s",
-		ts,
-		branchRef,
-		checkCommand,
-		int(idle.Seconds()),
-		base,
+			"autosnap: passing checkpoint %s branch: %s check: %s idle_seconds: %d base: %s",
+			ts,
+			branchRef,
+			checkCommand,
+			int(idle.Seconds()),
+			base,
 		)
 	}
 
@@ -428,6 +429,22 @@ func parseCheckpointMessage(message string) (string, string) {
 	return status, parseCheckpointField(line, "check:")
 }
 
+func checkpointListSummary(message string) string {
+	line := strings.TrimSpace(strings.SplitN(message, "\n", 2)[0])
+	if line == "" {
+		return "unknown"
+	}
+
+	status, checkCmd := parseCheckpointMessage(message)
+	if status == "unknown" && checkCmd == "" {
+		return line
+	}
+	if checkCmd == "" {
+		return status
+	}
+	return strings.TrimSpace(status + " " + checkCmd)
+}
+
 var checkpointStatusRegex = regexp.MustCompile(`\b(passing|failing)\b`)
 
 func parseCheckpointStatus(line string) (string, bool) {
@@ -487,10 +504,12 @@ func listCheckpointsForBranch(ctx context.Context, repoRoot, branchRef string) (
 	for _, entry := range entries {
 		checkCmd := ""
 		status := "unknown"
+		summary := "unknown"
 
 		msg, err := getCommitMessage(ctx, repoRoot, entry.Ref)
 		if err == nil {
 			status, checkCmd = parseCheckpointMessage(msg)
+			summary = checkpointListSummary(msg)
 		}
 
 		checkpoints = append(checkpoints, checkpointInfo{
@@ -499,11 +518,12 @@ func listCheckpointsForBranch(ctx context.Context, repoRoot, branchRef string) (
 			Timestamp: entry.Timestamp,
 			Status:    status,
 			CheckCmd:  checkCmd,
+			Summary:   summary,
 		})
 	}
 
 	sort.Slice(checkpoints, func(i, j int) bool {
-		return checkpoints[i].Timestamp > checkpoints[j].Timestamp
+		return checkpoints[i].Timestamp < checkpoints[j].Timestamp
 	})
 
 	return checkpoints, nil
