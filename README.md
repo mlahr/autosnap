@@ -6,6 +6,7 @@ It is implemented as a minimal Go prototype for the MVP command set:
 
 - `autosnap start`
 - `autosnap stop`
+- `autosnap restart`
 - `autosnap status`
 - `autosnap list`
 - `autosnap show <checkpoint>`
@@ -215,6 +216,14 @@ autosnap stop
 ```
 
 Stops the background autosnap process for the current repository.
+
+### Restart background watcher
+
+```bash
+autosnap restart
+```
+
+Restarts the background autosnap process for the current repository. If a daemon is already running, restart reuses its saved settings; any flags passed to `restart` override those saved settings. If no daemon is running, restart behaves like `start` and uses `.autosnap.toml` plus defaults.
 
 When an idle check runs:
 

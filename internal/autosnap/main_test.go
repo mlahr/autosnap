@@ -374,13 +374,18 @@ func TestAutosnapRunStateLifecycle(t *testing.T) {
 	}
 
 	state := autosnapRunState{
-		PID:           os.Getpid(),
-		RepoRoot:      repo,
-		BranchRef:     "feature/test",
-		BranchDisplay: "feature/test",
-		CheckCommand:  "npm test",
-		IdleSeconds:   60,
-		StartedAt:     time.Now().UTC().Format(time.RFC3339),
+		PID:             os.Getpid(),
+		RepoRoot:        repo,
+		BranchRef:       "feature/test",
+		BranchDisplay:   "feature/test",
+		CheckCommand:    "npm test",
+		MsgSourceCmd:    "printf msg",
+		MsgSourceCmdSet: true,
+		IdleSeconds:     60,
+		SnapshotMode:    snapshotModeStaged,
+		WatchMode:       watchModePoll,
+		PollInterval:    2 * time.Second,
+		StartedAt:       time.Now().UTC().Format(time.RFC3339),
 	}
 
 	if err := saveAutosnapRunState(runPath, state); err != nil {
@@ -890,6 +895,141 @@ poll_interval = "2s"
 	}
 	if cfg.SnapshotMode != snapshotModeStaged || cfg.Watch.PollInterval != 2*time.Second {
 		t.Fatalf("expected config values to remain for unset flags, got %+v", cfg)
+	}
+}
+
+func TestRootCommandRegistersRestart(t *testing.T) {
+	root := NewRootCommand()
+	for _, cmd := range root.Commands() {
+		if cmd.Name() == "restart" {
+			return
+		}
+	}
+	t.Fatalf("expected root command to register restart")
+}
+
+func TestResolveRestartConfigUsesActiveRunStateByDefault(t *testing.T) {
+	repo := t.TempDir()
+	raw := []byte(`check = "go test ./..."
+idle_seconds = 15
+snapshot_mode = "working"
+msg_source_cmd = "printf config"
+
+[watch]
+mode = "recursive"
+poll_interval = "5s"
+`)
+	if err := os.WriteFile(autosnapConfigPath(repo), raw, 0o644); err != nil {
+		t.Fatalf("write config failed: %v", err)
+	}
+
+	runState := autosnapRunState{
+		CheckCommand:    "make verify",
+		MsgSourceCmd:    "",
+		MsgSourceCmdSet: true,
+		IdleSeconds:     45,
+		SnapshotMode:    snapshotModeStaged,
+		WatchMode:       watchModePoll,
+		PollInterval:    2 * time.Second,
+	}
+	cfg, err := resolveRestartConfig(repo, newRestartCommand(), runState, true, "", "", 60, snapshotModeBoth, watchModeRecursive, defaultPollInterval)
+	if err != nil {
+		t.Fatalf("resolve restart config failed: %v", err)
+	}
+	if cfg.Check != "make verify" || cfg.MsgSourceCmd != "" || cfg.IdleSeconds != 45 || cfg.SnapshotMode != snapshotModeStaged || cfg.Watch.Mode != watchModePoll || cfg.Watch.PollInterval != 2*time.Second {
+		t.Fatalf("expected active run state to win, got %+v", cfg)
+	}
+}
+
+func TestResolveRestartConfigFlagsOverrideActiveRunState(t *testing.T) {
+	repo := t.TempDir()
+	runState := autosnapRunState{
+		CheckCommand:    "make verify",
+		MsgSourceCmd:    "printf old",
+		MsgSourceCmdSet: true,
+		IdleSeconds:     45,
+		SnapshotMode:    snapshotModeStaged,
+		WatchMode:       watchModePoll,
+		PollInterval:    2 * time.Second,
+	}
+	cmd := newRestartCommand()
+	if err := cmd.Flags().Set("check", "npm test"); err != nil {
+		t.Fatalf("set check flag failed: %v", err)
+	}
+	if err := cmd.Flags().Set("msg-source-cmd", "printf new"); err != nil {
+		t.Fatalf("set msg-source-cmd flag failed: %v", err)
+	}
+	if err := cmd.Flags().Set("idle", "30"); err != nil {
+		t.Fatalf("set idle flag failed: %v", err)
+	}
+	if err := cmd.Flags().Set("watch-mode", "auto"); err != nil {
+		t.Fatalf("set watch-mode flag failed: %v", err)
+	}
+	if err := cmd.Flags().Set("poll-interval", "3s"); err != nil {
+		t.Fatalf("set poll-interval flag failed: %v", err)
+	}
+
+	cfg, err := resolveRestartConfig(repo, cmd, runState, true, "npm test", "printf new", 30, snapshotModeBoth, watchModeAuto, 3*time.Second)
+	if err != nil {
+		t.Fatalf("resolve restart config failed: %v", err)
+	}
+	if cfg.Check != "npm test" || cfg.MsgSourceCmd != "printf new" || cfg.IdleSeconds != 30 || cfg.Watch.Mode != watchModeAuto || cfg.Watch.PollInterval != 3*time.Second {
+		t.Fatalf("expected flags to override active run state, got %+v", cfg)
+	}
+	if cfg.SnapshotMode != snapshotModeStaged {
+		t.Fatalf("expected unflagged snapshot mode from run state, got %+v", cfg)
+	}
+}
+
+func TestResolveRestartConfigLegacyRunStateUsesConfigBeforeDefaults(t *testing.T) {
+	repo := t.TempDir()
+	raw := []byte(`check = "go test ./..."
+idle_seconds = 15
+snapshot_mode = "working"
+msg_source_cmd = "printf config"
+
+[watch]
+mode = "auto"
+poll_interval = "4s"
+`)
+	if err := os.WriteFile(autosnapConfigPath(repo), raw, 0o644); err != nil {
+		t.Fatalf("write config failed: %v", err)
+	}
+
+	runState := autosnapRunState{
+		CheckCommand: "make verify",
+		IdleSeconds:  45,
+	}
+	cfg, err := resolveRestartConfig(repo, newRestartCommand(), runState, true, "", "", 60, snapshotModeBoth, watchModeRecursive, defaultPollInterval)
+	if err != nil {
+		t.Fatalf("resolve restart config failed: %v", err)
+	}
+	if cfg.Check != "make verify" || cfg.IdleSeconds != 45 {
+		t.Fatalf("expected present legacy run values to win, got %+v", cfg)
+	}
+	if cfg.MsgSourceCmd != "printf config" || cfg.SnapshotMode != snapshotModeWorking || cfg.Watch.Mode != watchModeAuto || cfg.Watch.PollInterval != 4*time.Second {
+		t.Fatalf("expected missing legacy values from config before defaults, got %+v", cfg)
+	}
+}
+
+func TestResolveRestartConfigNoActiveRunUsesStartConfig(t *testing.T) {
+	repo := t.TempDir()
+	raw := []byte(`check = "go test ./..."
+idle_seconds = 15
+
+[watch]
+mode = "poll"
+`)
+	if err := os.WriteFile(autosnapConfigPath(repo), raw, 0o644); err != nil {
+		t.Fatalf("write config failed: %v", err)
+	}
+
+	cfg, err := resolveRestartConfig(repo, newRestartCommand(), autosnapRunState{}, false, "", "", 60, snapshotModeBoth, watchModeRecursive, defaultPollInterval)
+	if err != nil {
+		t.Fatalf("resolve restart config failed: %v", err)
+	}
+	if cfg.Check != "go test ./..." || cfg.IdleSeconds != 15 || cfg.Watch.Mode != watchModePoll || cfg.Watch.PollInterval != defaultPollInterval {
+		t.Fatalf("expected inactive restart to use start config resolution, got %+v", cfg)
 	}
 }
 

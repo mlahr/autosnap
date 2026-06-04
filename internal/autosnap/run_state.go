@@ -13,20 +13,25 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 var readProcessCommandLine = defaultReadProcessCommandLine
 
 type autosnapRunState struct {
-	PID           int    `json:"pid"`
-	RepoRoot      string `json:"repoRoot"`
-	BranchRef     string `json:"branchRef"`
-	BranchDisplay string `json:"branchDisplay"`
-	CheckCommand  string `json:"checkCommand"`
-	SnapshotMode  string `json:"snapshotMode"`
-	RunToken      string `json:"runToken"`
-	IdleSeconds   int    `json:"idleSeconds"`
-	StartedAt     string `json:"startedAt"`
+	PID             int           `json:"pid"`
+	RepoRoot        string        `json:"repoRoot"`
+	BranchRef       string        `json:"branchRef"`
+	BranchDisplay   string        `json:"branchDisplay"`
+	CheckCommand    string        `json:"checkCommand"`
+	MsgSourceCmd    string        `json:"msgSourceCmd"`
+	MsgSourceCmdSet bool          `json:"msgSourceCmdSet,omitempty"`
+	SnapshotMode    string        `json:"snapshotMode"`
+	WatchMode       string        `json:"watchMode"`
+	PollInterval    time.Duration `json:"pollInterval"`
+	RunToken        string        `json:"runToken"`
+	IdleSeconds     int           `json:"idleSeconds"`
+	StartedAt       string        `json:"startedAt"`
 }
 
 func runStatePath(repoRoot string) (string, error) {

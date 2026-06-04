@@ -89,15 +89,19 @@ func newStartCommand() *cobra.Command {
 				}
 
 				runState := autosnapRunState{
-					PID:           os.Getpid(),
-					RepoRoot:      repoRoot,
-					BranchRef:     branchRef,
-					BranchDisplay: branchDisplay,
-					CheckCommand:  checkCommand,
-					IdleSeconds:   idleSeconds,
-					SnapshotMode:  snapshotMode,
-					RunToken:      runToken,
-					StartedAt:     time.Now().UTC().Format(time.RFC3339),
+					PID:             os.Getpid(),
+					RepoRoot:        repoRoot,
+					BranchRef:       branchRef,
+					BranchDisplay:   branchDisplay,
+					CheckCommand:    checkCommand,
+					MsgSourceCmd:    msgSourceCmd,
+					MsgSourceCmdSet: true,
+					IdleSeconds:     idleSeconds,
+					SnapshotMode:    snapshotMode,
+					WatchMode:       watchMode,
+					PollInterval:    pollInterval,
+					RunToken:        runToken,
+					StartedAt:       time.Now().UTC().Format(time.RFC3339),
 				}
 				if err := saveAutosnapRunState(runPath, runState); err != nil {
 					return err

@@ -3,6 +3,7 @@ package autosnap
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -20,58 +21,63 @@ func newStopCommand() *cobra.Command {
 				return err
 			}
 
-			runPath, err := runStatePath(repoRoot)
-			if err != nil {
-				return err
-			}
-
-			state, err := loadAutosnapRunState(runPath)
-			if err != nil {
-				return err
-			}
-			if state.PID == 0 || !isAutosnapRunActive(state) {
-				fmt.Printf("no running autosnap process found (stale pid=%d)\n", state.PID)
-				return removeAutosnapRunState(runPath)
-			}
-
-			process, err := os.FindProcess(state.PID)
-			if err != nil {
-				return removeAutosnapRunState(runPath)
-			}
-
-			if err := process.Signal(os.Interrupt); err != nil {
-				fmt.Printf("failed graceful stop for pid=%d, forcing: %v\n", state.PID, err)
-			}
-
-			if waitForPidExit(state.PID, 2*time.Second) {
-				if err := removeAutosnapRunState(runPath); err != nil {
-					return err
-				}
-				fmt.Println("autosnap stopped")
-				return nil
-			}
-
-			if err := process.Signal(os.Kill); err != nil {
-				if isProcessAlive(state.PID) {
-					return err
-				}
-				if err := removeAutosnapRunState(runPath); err != nil {
-					return err
-				}
-				fmt.Println("autosnap stopped")
-				return nil
-			}
-			if waitForPidExit(state.PID, 2*time.Second) {
-				if err := removeAutosnapRunState(runPath); err != nil {
-					return err
-				}
-				fmt.Println("autosnap stopped")
-				return nil
-			}
-
-			return fmt.Errorf("autosnap process %d did not exit", state.PID)
+			_, err = stopAutosnapRun(repoRoot, cmd.OutOrStdout())
+			return err
 		},
 	}
+}
+
+func stopAutosnapRun(repoRoot string, out io.Writer) (autosnapRunState, error) {
+	runPath, err := runStatePath(repoRoot)
+	if err != nil {
+		return autosnapRunState{}, err
+	}
+
+	state, err := loadAutosnapRunState(runPath)
+	if err != nil {
+		return autosnapRunState{}, err
+	}
+	if state.PID == 0 || !isAutosnapRunActive(state) {
+		fmt.Fprintf(out, "no running autosnap process found (stale pid=%d)\n", state.PID)
+		return state, removeAutosnapRunState(runPath)
+	}
+
+	process, err := os.FindProcess(state.PID)
+	if err != nil {
+		return state, removeAutosnapRunState(runPath)
+	}
+
+	if err := process.Signal(os.Interrupt); err != nil {
+		fmt.Fprintf(out, "failed graceful stop for pid=%d, forcing: %v\n", state.PID, err)
+	}
+
+	if waitForPidExit(state.PID, 2*time.Second) {
+		if err := removeAutosnapRunState(runPath); err != nil {
+			return state, err
+		}
+		fmt.Fprintln(out, "autosnap stopped")
+		return state, nil
+	}
+
+	if err := process.Signal(os.Kill); err != nil {
+		if isProcessAlive(state.PID) {
+			return state, err
+		}
+		if err := removeAutosnapRunState(runPath); err != nil {
+			return state, err
+		}
+		fmt.Fprintln(out, "autosnap stopped")
+		return state, nil
+	}
+	if waitForPidExit(state.PID, 2*time.Second) {
+		if err := removeAutosnapRunState(runPath); err != nil {
+			return state, err
+		}
+		fmt.Fprintln(out, "autosnap stopped")
+		return state, nil
+	}
+
+	return state, fmt.Errorf("autosnap process %d did not exit", state.PID)
 }
 
 func waitForPidExit(pid int, timeout time.Duration) bool {
