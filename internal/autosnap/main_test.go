@@ -16,6 +16,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
+func requireIntegration(t *testing.T) {
+	if !runIntegrationTests {
+		t.Skip("run integration test with: go test -tags=integration ./...")
+	}
+}
+
 func TestSnapshotRefNaming(t *testing.T) {
 	prefix := snapshotRefPrefix("feature/foo")
 	if prefix != path.Join("refs", "autosnapshots", "feature/foo") {
@@ -57,6 +63,7 @@ func TestParseCheckpointMessage(t *testing.T) {
 }
 
 func TestStateFilePathUsesAbsoluteGitDir(t *testing.T) {
+	requireIntegration(t)
 	repo := createTestRepo(t)
 
 	withWorkingDir(t, filepath.Join(repo, "subdir"), func() {
@@ -78,6 +85,7 @@ func TestStateFilePathUsesAbsoluteGitDir(t *testing.T) {
 }
 
 func TestStateFilePathForLinkedWorktree(t *testing.T) {
+	requireIntegration(t)
 	repo := createTestRepo(t)
 	worktree := filepath.Join(t.TempDir(), "linked-worktree")
 	runGit(t, repo, "worktree", "add", "--detach", worktree, "HEAD")
@@ -108,6 +116,7 @@ func TestStateFilePathForLinkedWorktree(t *testing.T) {
 }
 
 func TestBackgroundLogPath(t *testing.T) {
+	requireIntegration(t)
 	repo := createTestRepo(t)
 
 	withWorkingDir(t, filepath.Join(repo, "subdir"), func() {
@@ -134,6 +143,7 @@ func TestBackgroundLogPath(t *testing.T) {
 }
 
 func TestStatusIncludesDaemonStatus(t *testing.T) {
+	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
 		daemonStatus, err := getDaemonStatus(repo)
@@ -147,6 +157,7 @@ func TestStatusIncludesDaemonStatus(t *testing.T) {
 }
 
 func TestStatusIncludesStaleDaemonStatus(t *testing.T) {
+	requireIntegration(t)
 	repo := createTestRepo(t)
 	runPath, err := runStatePath(repo)
 	if err != nil {
@@ -171,6 +182,7 @@ func TestStatusIncludesStaleDaemonStatus(t *testing.T) {
 }
 
 func TestStatusIncludesStaleDaemonWhenRunTokenMismatches(t *testing.T) {
+	requireIntegration(t)
 	repo := createTestRepo(t)
 	runPath, err := runStatePath(repo)
 	if err != nil {
@@ -213,6 +225,7 @@ func TestStatusIncludesStaleDaemonWhenRunTokenMismatches(t *testing.T) {
 }
 
 func TestStatusReturnsErrorOnCorruptState(t *testing.T) {
+	requireIntegration(t)
 	repo := createTestRepo(t)
 	statePath, err := stateFilePath(repo)
 	if err != nil {
@@ -243,6 +256,7 @@ func TestStatusReturnsErrorOnCorruptState(t *testing.T) {
 }
 
 func TestStatusOutputIncludesDaemonLine(t *testing.T) {
+	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
 		buf := &bytes.Buffer{}
@@ -263,6 +277,7 @@ func TestStatusOutputIncludesDaemonLine(t *testing.T) {
 }
 
 func TestStopCommandRemovesStalePidState(t *testing.T) {
+	requireIntegration(t)
 	repo := createTestRepo(t)
 	runPath, err := runStatePath(repo)
 	if err != nil {
@@ -318,6 +333,7 @@ func TestStatePersistenceRoundTrip(t *testing.T) {
 }
 
 func TestAutosnapRunStateLifecycle(t *testing.T) {
+	requireIntegration(t)
 	repo := createTestRepo(t)
 	runPath, err := runStatePath(repo)
 	if err != nil {
@@ -355,6 +371,7 @@ func TestAutosnapRunStateLifecycle(t *testing.T) {
 }
 
 func TestEnsureNoActiveRunForRepo(t *testing.T) {
+	requireIntegration(t)
 	repo := createTestRepo(t)
 	runPath, err := runStatePath(repo)
 	if err != nil {
@@ -405,6 +422,7 @@ func TestAutosnapCommandLineIdentityMatch(t *testing.T) {
 }
 
 func TestEnsureNoActiveRunForRepoHonorsRunTokenMismatch(t *testing.T) {
+	requireIntegration(t)
 	repo := createTestRepo(t)
 	runPath, err := runStatePath(repo)
 	if err != nil {
@@ -455,6 +473,7 @@ func TestEnsureNoActiveRunForRepoHonorsRunTokenMismatch(t *testing.T) {
 }
 
 func TestGitIgnoredPathsAreIgnored(t *testing.T) {
+	requireIntegration(t)
 	repo := createTestRepo(t)
 	gitignorePath := filepath.Join(repo, ".gitignore")
 	if err := os.WriteFile(gitignorePath, []byte("build-output/\n*.tmp\n"), 0o644); err != nil {
@@ -513,6 +532,7 @@ func TestRunShellCheck(t *testing.T) {
 }
 
 func TestGitCommandResultCapturesExitCode(t *testing.T) {
+	requireIntegration(t)
 	repo := createTestRepo(t)
 
 	result, err := runGitCommand(context.Background(), repo, nil, "nonexistent")
@@ -525,6 +545,7 @@ func TestGitCommandResultCapturesExitCode(t *testing.T) {
 }
 
 func TestDetectRepository(t *testing.T) {
+	requireIntegration(t)
 	withWorkingDir(t, t.TempDir(), func() {
 		_, _, _, err := detectRepository(context.Background())
 		if err == nil {
@@ -574,6 +595,7 @@ func TestDetectRepository(t *testing.T) {
 }
 
 func TestGetLatestAndListCheckpointForBranch(t *testing.T) {
+	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
 		_, _, branchRef, err := detectRepository(context.Background())
@@ -637,6 +659,7 @@ func TestGetLatestAndListCheckpointForBranch(t *testing.T) {
 }
 
 func TestRunCheckUsesCurrentBranchOnEachRun(t *testing.T) {
+	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
 		ctx := context.Background()
@@ -702,6 +725,7 @@ func TestRunCheckUsesCurrentBranchOnEachRun(t *testing.T) {
 }
 
 func TestShowCommandResolvesCheckpointByTimestamp(t *testing.T) {
+	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
 		_, _, branchRef, err := detectRepository(context.Background())
@@ -747,6 +771,7 @@ func TestShowCommandResolvesCheckpointByTimestamp(t *testing.T) {
 }
 
 func TestShowCommandResolvesCheckpointByRefAndCommit(t *testing.T) {
+	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
 		_, _, branchRef, err := detectRepository(context.Background())
@@ -803,6 +828,7 @@ func TestShowCommandResolvesCheckpointByRefAndCommit(t *testing.T) {
 }
 
 func TestShowCommandReturnsNotFoundForUnknownCheckpoint(t *testing.T) {
+	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
 		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
@@ -818,6 +844,7 @@ func TestShowCommandReturnsNotFoundForUnknownCheckpoint(t *testing.T) {
 }
 
 func TestShowCommandFullFlagShowsPatch(t *testing.T) {
+	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
 		_, _, branchRef, err := detectRepository(context.Background())
@@ -877,6 +904,7 @@ func TestShowCommandFullFlagShowsPatch(t *testing.T) {
 }
 
 func TestShowCommandColorModes(t *testing.T) {
+	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
 		_, _, branchRef, err := detectRepository(context.Background())
@@ -943,6 +971,7 @@ func TestShowCommandColorModes(t *testing.T) {
 }
 
 func TestComputeWorktreeTreeSnapshotModes(t *testing.T) {
+	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
 		gitDirectory, err := gitDir(context.Background(), repo)

@@ -51,10 +51,16 @@ Make sure your Go bin directory is on `PATH` (commonly `$(go env GOPATH)/bin`).
 
 ## Test
 
-Run the full test suite with:
+Run the unit test suite (fast) with:
 
 ```bash
 go test ./...
+```
+
+Run the full suite including integration tests with:
+
+```bash
+go test -tags=integration ./...
 ```
 
 If you run `go test` at the repo root, it may report `no Go files` because command code now lives under `cmd/`. Use `go test ./...` to run all packages (including `internal/autosnap`).
