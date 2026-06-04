@@ -797,9 +797,13 @@ func TestConfigInitAndShowCommands(t *testing.T) {
 		if err := root.Execute(); err != nil {
 			t.Fatalf("config show failed: %v", err)
 		}
+		expectedConfigPath, err := filepath.EvalSymlinks(autosnapConfigPath(repo))
+		if err != nil {
+			t.Fatalf("eval expected config path failed: %v", err)
+		}
 		out := buf.String()
 		for _, want := range []string{
-			"path: " + autosnapConfigPath(repo),
+			"path: " + expectedConfigPath,
 			"exists: true",
 			"check: npm test",
 			"watch.mode: recursive",
@@ -1075,6 +1079,172 @@ func TestRunCheckUsesCurrentBranchOnEachRun(t *testing.T) {
 			t.Fatalf("expected checkpoints to be isolated by branch, got shared ref %q", featureRef)
 		}
 
+	})
+}
+
+func TestRunCheckPassesMessageSourceEnvForFirstCheckpoint(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		ctx := context.Background()
+		repoRoot, _, branchRef, err := detectRepository(ctx)
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		head := runGitOutput(t, repoRoot, "rev-parse", "HEAD")
+
+		statePath, err := stateFilePath(repoRoot)
+		if err != nil {
+			t.Fatalf("stateFilePath failed: %v", err)
+		}
+		msgSourceCmd := `printf 'base:%s
+prev:%s
+branch:%s
+head:%s
+' "$AUTOSNAP_DIFF_BASE" "$AUTOSNAP_PREVIOUS_CHECKPOINT_REF" "$AUTOSNAP_BRANCH_REF" "$AUTOSNAP_HEAD"`
+		runner, err := newSnapshotRunner(ctx, repoRoot, branchRef, "true", msgSourceCmd, snapshotModeBoth, time.Second, statePath)
+		if err != nil {
+			t.Fatalf("newSnapshotRunner failed: %v", err)
+		}
+
+		if err := os.WriteFile(filepath.Join(repoRoot, "first.txt"), []byte("first"), 0o644); err != nil {
+			t.Fatalf("write first file failed: %v", err)
+		}
+		runner.runCheck()
+
+		if runner.state.LastCheckpointRef == "" {
+			t.Fatalf("expected checkpoint ref in state")
+		}
+		message, err := getCommitMessage(ctx, repoRoot, runner.state.LastCheckpointRef)
+		if err != nil {
+			t.Fatalf("getCommitMessage failed: %v", err)
+		}
+		for _, want := range []string{
+			"base:" + head,
+			"prev:",
+			"branch:" + branchRef,
+			"head:" + head,
+		} {
+			if !strings.Contains(message, want) {
+				t.Fatalf("expected checkpoint message to contain %q, got %q", want, message)
+			}
+		}
+	})
+}
+
+func TestRunCheckPassesPreviousCheckpointRefToMessageSource(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		ctx := context.Background()
+		repoRoot, _, branchRef, err := detectRepository(ctx)
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		statePath, err := stateFilePath(repoRoot)
+		if err != nil {
+			t.Fatalf("stateFilePath failed: %v", err)
+		}
+		msgSourceCmd := `printf 'base:%s
+prev:%s
+' "$AUTOSNAP_DIFF_BASE" "$AUTOSNAP_PREVIOUS_CHECKPOINT_REF"`
+		runner, err := newSnapshotRunner(ctx, repoRoot, branchRef, "true", msgSourceCmd, snapshotModeBoth, time.Second, statePath)
+		if err != nil {
+			t.Fatalf("newSnapshotRunner failed: %v", err)
+		}
+
+		if err := os.WriteFile(filepath.Join(repoRoot, "first.txt"), []byte("first"), 0o644); err != nil {
+			t.Fatalf("write first file failed: %v", err)
+		}
+		runner.runCheck()
+		firstRef := runner.state.LastCheckpointRef
+		if firstRef == "" {
+			t.Fatalf("expected first checkpoint ref")
+		}
+
+		time.Sleep(1 * time.Second)
+		if err := os.WriteFile(filepath.Join(repoRoot, "second.txt"), []byte("second"), 0o644); err != nil {
+			t.Fatalf("write second file failed: %v", err)
+		}
+		runner.runCheck()
+		secondRef := runner.state.LastCheckpointRef
+		if secondRef == "" || secondRef == firstRef {
+			t.Fatalf("expected distinct second checkpoint ref, got first=%q second=%q", firstRef, secondRef)
+		}
+
+		message, err := getCommitMessage(ctx, repoRoot, secondRef)
+		if err != nil {
+			t.Fatalf("getCommitMessage failed: %v", err)
+		}
+		for _, want := range []string{
+			"base:" + firstRef,
+			"prev:" + firstRef,
+		} {
+			if !strings.Contains(message, want) {
+				t.Fatalf("expected checkpoint message to contain %q, got %q", want, message)
+			}
+		}
+	})
+}
+
+func TestRunCheckFallsBackToLatestCheckpointForMessageSourceEnv(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		ctx := context.Background()
+		repoRoot, _, branchRef, err := detectRepository(ctx)
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		gitDirectory, err := gitDir(ctx, repoRoot)
+		if err != nil {
+			t.Fatalf("gitDir failed: %v", err)
+		}
+		tree, err := computeWorktreeTree(ctx, repoRoot, gitDirectory, snapshotModeBoth)
+		if err != nil {
+			t.Fatalf("computeWorktreeTree failed: %v", err)
+		}
+		existingRef, _, err := createCheckpoint(ctx, repoRoot, branchRef, "true", time.Second, tree, "existing checkpoint")
+		if err != nil {
+			t.Fatalf("create existing checkpoint failed: %v", err)
+		}
+
+		statePath, err := stateFilePath(repoRoot)
+		if err != nil {
+			t.Fatalf("stateFilePath failed: %v", err)
+		}
+		msgSourceCmd := `printf 'base:%s
+prev:%s
+' "$AUTOSNAP_DIFF_BASE" "$AUTOSNAP_PREVIOUS_CHECKPOINT_REF"`
+		runner, err := newSnapshotRunner(ctx, repoRoot, branchRef, "true", msgSourceCmd, snapshotModeBoth, time.Second, statePath)
+		if err != nil {
+			t.Fatalf("newSnapshotRunner failed: %v", err)
+		}
+
+		time.Sleep(1 * time.Second)
+		if err := os.WriteFile(filepath.Join(repoRoot, "after-existing.txt"), []byte("change"), 0o644); err != nil {
+			t.Fatalf("write file failed: %v", err)
+		}
+		runner.runCheck()
+		newRef := runner.state.LastCheckpointRef
+		if newRef == "" || newRef == existingRef {
+			t.Fatalf("expected new checkpoint ref, got existing=%q new=%q", existingRef, newRef)
+		}
+
+		message, err := getCommitMessage(ctx, repoRoot, newRef)
+		if err != nil {
+			t.Fatalf("getCommitMessage failed: %v", err)
+		}
+		for _, want := range []string{
+			"base:" + existingRef,
+			"prev:" + existingRef,
+		} {
+			if !strings.Contains(message, want) {
+				t.Fatalf("expected checkpoint message to contain %q, got %q", want, message)
+			}
+		}
 	})
 }
 

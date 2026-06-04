@@ -128,8 +128,16 @@ func runShellCheck(ctx context.Context, dir string, command string) (time.Durati
 }
 
 func runShellOutput(ctx context.Context, dir string, command string) (string, int, error) {
+	return runShellOutputEnv(ctx, dir, command, nil)
+}
+
+func runShellOutputEnv(ctx context.Context, dir string, command string, env map[string]string) (string, int, error) {
 	cmd := shellCommand(ctx, dir, command)
 	cmd.Dir = dir
+	cmd.Env = os.Environ()
+	for k, v := range env {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
+	}
 
 	var stdout, stderr bytes.Buffer
 	stdoutSink := io.MultiWriter(os.Stdout, &stdout)

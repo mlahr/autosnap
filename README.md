@@ -107,6 +107,19 @@ When set, `--msg-source-cmd` replaces the checkpoint commit message with command
 Multiline output is supported; leading and trailing whitespace is trimmed.
 If the command fails or emits no output, autosnap falls back to the generated message.
 
+The message source command receives checkpoint context as environment variables:
+
+- `AUTOSNAP_DIFF_BASE`: previous checkpoint ref, or current `HEAD` when there is no previous checkpoint
+- `AUTOSNAP_PREVIOUS_CHECKPOINT_REF`: previous checkpoint ref, empty on the first checkpoint
+- `AUTOSNAP_BRANCH_REF`: current branch ref
+- `AUTOSNAP_HEAD`: current `HEAD` SHA
+
+For example, after gommit supports `--diff-base`, you can generate incremental checkpoint messages while keeping checkpoint contents as full snapshots:
+
+```toml
+msg_source_cmd = 'gommit -A -n --diff-base "$AUTOSNAP_DIFF_BASE"'
+```
+
 `autosnap start` runs in the background by default and returns immediately.
 
 You can also store project-local defaults in `.autosnap.toml`:

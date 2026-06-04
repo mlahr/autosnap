@@ -283,6 +283,7 @@ func (r *snapshotRunner) runCheck() {
 		return
 	}
 	branchRef := position.BranchRef
+	previousState := r.state
 
 	duration, exitCode, err := runShellCheck(r.ctx, r.repoRoot, r.checkCmd)
 	r.state.LastBranch = branchRef
@@ -314,25 +315,26 @@ func (r *snapshotRunner) runCheck() {
 		return
 	}
 
-	lastTree := ""
-	if r.state.LastBranch == r.branchRef && r.state.LastCheckpointTree != "" {
-		lastTree = r.state.LastCheckpointTree
-	}
-	if lastTree == "" {
-		ref, _, _, err := getLatestCheckpointForBranch(r.ctx, r.repoRoot, branchRef)
-		if err == nil && ref != "" {
-			lastTree, _ = getCheckpointTree(r.ctx, r.repoRoot, ref)
-		}
-	}
+	previousCheckpointRef, previousCheckpointTree := resolvePreviousCheckpoint(r.ctx, r.repoRoot, branchRef, previousState)
 
-	if lastTree != "" && lastTree == tree {
+	if previousCheckpointTree != "" && previousCheckpointTree == tree {
 		logln("no meaningful diff; checkpoint skipped")
 		return
 	}
 
 	commitMessage := ""
 	if strings.TrimSpace(r.msgSourceCmd) != "" {
-		message, sourceExitCode, err := runShellOutput(r.ctx, r.repoRoot, r.msgSourceCmd)
+		diffBase := previousCheckpointRef
+		if diffBase == "" {
+			diffBase = position.Head
+		}
+		env := map[string]string{
+			"AUTOSNAP_DIFF_BASE":               diffBase,
+			"AUTOSNAP_PREVIOUS_CHECKPOINT_REF": previousCheckpointRef,
+			"AUTOSNAP_BRANCH_REF":              branchRef,
+			"AUTOSNAP_HEAD":                    position.Head,
+		}
+		message, sourceExitCode, err := runShellOutputEnv(r.ctx, r.repoRoot, r.msgSourceCmd, env)
 		if err != nil || sourceExitCode != 0 {
 			logln("msg-source-cmd failed; using generated checkpoint message")
 		} else {
@@ -361,6 +363,26 @@ func (r *snapshotRunner) runCheck() {
 		commitShort = commitShort[:7]
 	}
 	logf("checkpoint saved: %s\n", commitShort)
+}
+
+func resolvePreviousCheckpoint(ctx context.Context, repoRoot, branchRef string, state autosnapState) (string, string) {
+	if state.LastBranch == branchRef && state.LastCheckpointRef != "" {
+		tree := state.LastCheckpointTree
+		if tree == "" {
+			if resolvedTree, err := getCheckpointTree(ctx, repoRoot, state.LastCheckpointRef); err == nil {
+				tree = resolvedTree
+			}
+		}
+		return state.LastCheckpointRef, tree
+	}
+
+	ref, _, _, err := getLatestCheckpointForBranch(ctx, repoRoot, branchRef)
+	if err != nil || ref == "" {
+		return "", ""
+	}
+
+	tree, _ := getCheckpointTree(ctx, repoRoot, ref)
+	return ref, tree
 }
 
 func (r *snapshotRunner) handleEvent(event fsnotify.Event) error {
