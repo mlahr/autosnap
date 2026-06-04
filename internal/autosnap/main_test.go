@@ -8,6 +8,7 @@ import (
 	"path"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -163,6 +164,48 @@ func TestStatusIncludesStaleDaemonStatus(t *testing.T) {
 			t.Fatalf("getDaemonStatus failed: %v", err)
 		}
 		expected := "daemon: stopped (stale pid=999999)"
+		if daemonStatus != expected {
+			t.Fatalf("expected %q, got %q", expected, daemonStatus)
+		}
+	})
+}
+
+func TestStatusIncludesStaleDaemonWhenRunTokenMismatches(t *testing.T) {
+	repo := createTestRepo(t)
+	runPath, err := runStatePath(repo)
+	if err != nil {
+		t.Fatalf("runStatePath failed: %v", err)
+	}
+	runState := autosnapRunState{
+		PID:           os.Getpid(),
+		RepoRoot:      repo,
+		BranchDisplay: "main",
+		CheckCommand:  "true",
+		IdleSeconds:   60,
+		RunToken:      "token-a",
+		StartedAt:     time.Now().UTC().Format(time.RFC3339),
+	}
+	if err := saveAutosnapRunState(runPath, runState); err != nil {
+		t.Fatalf("saveAutosnapRunState failed: %v", err)
+	}
+	defer func() {
+		_ = removeAutosnapRunState(runPath)
+	}()
+
+	originalReader := readProcessCommandLine
+	readProcessCommandLine = func(pid int) (string, error) {
+		return "autosnap start --daemon --run-token=token-b", nil
+	}
+	defer func() {
+		readProcessCommandLine = originalReader
+	}()
+
+	withWorkingDir(t, repo, func() {
+		daemonStatus, err := getDaemonStatus(repo)
+		if err != nil {
+			t.Fatalf("getDaemonStatus failed: %v", err)
+		}
+		expected := "daemon: stopped (stale pid=" + strconv.Itoa(os.Getpid()) + ")"
 		if daemonStatus != expected {
 			t.Fatalf("expected %q, got %q", expected, daemonStatus)
 		}
@@ -349,6 +392,68 @@ func TestEnsureNoActiveRunForRepo(t *testing.T) {
 	}
 }
 
+func TestAutosnapCommandLineIdentityMatch(t *testing.T) {
+	if !isAutosnapCommandLine("autosnap start --daemon --run-token=abc123", "abc123") {
+		t.Fatal("expected matching token to be recognized as autosnap command")
+	}
+	if isAutosnapCommandLine("autosnap start --run-token=abc123", "abc123") {
+		t.Fatal("expected missing --daemon to be rejected")
+	}
+	if isAutosnapCommandLine("autosnap start --daemon --run-token=wrong", "abc123") {
+		t.Fatal("expected mismatched run token to be rejected")
+	}
+}
+
+func TestEnsureNoActiveRunForRepoHonorsRunTokenMismatch(t *testing.T) {
+	repo := createTestRepo(t)
+	runPath, err := runStatePath(repo)
+	if err != nil {
+		t.Fatalf("runStatePath failed: %v", err)
+	}
+	defer func() {
+		_ = removeAutosnapRunState(runPath)
+	}()
+
+	token := "token-xyz"
+	originalReader := readProcessCommandLine
+	readProcessCommandLine = func(pid int) (string, error) {
+		return "autosnap start --foreground --daemon --run-token=" + token, nil
+	}
+	defer func() {
+		readProcessCommandLine = originalReader
+	}()
+
+	if err := saveAutosnapRunState(runPath, autosnapRunState{
+		PID:      os.Getpid(),
+		RepoRoot: repo,
+		RunToken: token,
+	}); err != nil {
+		t.Fatalf("saveAutosnapRunState failed: %v", err)
+	}
+
+	if err := ensureNoActiveRunForRepo(repo); err == nil {
+		t.Fatalf("expected ensureNoActiveRunForRepo to block for matching run token")
+	}
+
+	readProcessCommandLine = func(pid int) (string, error) {
+		return "autosnap start --daemon --run-token=other-token", nil
+	}
+
+	if err := saveAutosnapRunState(runPath, autosnapRunState{
+		PID:      os.Getpid(),
+		RepoRoot: repo,
+		RunToken: token,
+	}); err != nil {
+		t.Fatalf("saveAutosnapRunState failed: %v", err)
+	}
+	if err := ensureNoActiveRunForRepo(repo); err != nil {
+		t.Fatalf("expected stale run state with mismatched token to be cleaned: %v", err)
+	}
+	if _, err := os.Stat(runPath); !os.IsNotExist(err) {
+		t.Fatalf("expected run state removed for token mismatch")
+	}
+}
+
 func TestGitIgnoredPathsAreIgnored(t *testing.T) {
 	repo := createTestRepo(t)
 	gitignorePath := filepath.Join(repo, ".gitignore")
@@ -367,7 +472,7 @@ func TestGitIgnoredPathsAreIgnored(t *testing.T) {
 			t.Fatalf("stateFilePath failed: %v", err)
 		}
 
-		runner, err := newSnapshotRunner(context.Background(), repo, branchRef, "true", time.Second, statePath)
+		runner, err := newSnapshotRunner(context.Background(), repo, branchRef, "true", snapshotModeBoth, time.Second, statePath)
 		if err != nil {
 			t.Fatalf("newSnapshotRunner failed: %v", err)
 		}
@@ -481,7 +586,7 @@ func TestGetLatestAndListCheckpointForBranch(t *testing.T) {
 			t.Fatalf("gitDir failed: %v", err)
 		}
 
-		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory)
+		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
 		if err != nil {
 			t.Fatalf("computeWorktreeTree failed: %v", err)
 		}
@@ -495,7 +600,7 @@ func TestGetLatestAndListCheckpointForBranch(t *testing.T) {
 		}
 
 		time.Sleep(1 * time.Second)
-		tree2, err := computeWorktreeTree(context.Background(), repo, gitDirectory)
+		tree2, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
 		if err != nil {
 			t.Fatalf("computeWorktreeTree failed: %v", err)
 		}
@@ -545,7 +650,7 @@ func TestRunCheckUsesCurrentBranchOnEachRun(t *testing.T) {
 			t.Fatalf("stateFilePath failed: %v", err)
 		}
 
-		runner, err := newSnapshotRunner(ctx, repoRoot, branchRef, "true", time.Second, statePath)
+		runner, err := newSnapshotRunner(ctx, repoRoot, branchRef, "true", snapshotModeBoth, time.Second, statePath)
 		if err != nil {
 			t.Fatalf("newSnapshotRunner failed: %v", err)
 		}
@@ -609,7 +714,7 @@ func TestShowCommandResolvesCheckpointByTimestamp(t *testing.T) {
 			t.Fatalf("gitDir failed: %v", err)
 		}
 
-		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory)
+		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
 		if err != nil {
 			t.Fatalf("computeWorktreeTree failed: %v", err)
 		}
@@ -654,7 +759,7 @@ func TestShowCommandResolvesCheckpointByRefAndCommit(t *testing.T) {
 			t.Fatalf("gitDir failed: %v", err)
 		}
 
-		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory)
+		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
 		if err != nil {
 			t.Fatalf("computeWorktreeTree failed: %v", err)
 		}
@@ -725,7 +830,7 @@ func TestShowCommandFullFlagShowsPatch(t *testing.T) {
 			t.Fatalf("gitDir failed: %v", err)
 		}
 
-		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory)
+		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
 		if err != nil {
 			t.Fatalf("computeWorktreeTree failed: %v", err)
 		}
@@ -738,7 +843,7 @@ func TestShowCommandFullFlagShowsPatch(t *testing.T) {
 			t.Fatalf("update file failed: %v", err)
 		}
 
-		tree2, err := computeWorktreeTree(context.Background(), repo, gitDirectory)
+		tree2, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
 		if err != nil {
 			t.Fatalf("computeWorktreeTree changed failed: %v", err)
 		}
@@ -784,7 +889,7 @@ func TestShowCommandColorModes(t *testing.T) {
 			t.Fatalf("gitDir failed: %v", err)
 		}
 
-		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory)
+		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
 		if err != nil {
 			t.Fatalf("computeWorktreeTree failed: %v", err)
 		}
@@ -796,7 +901,7 @@ func TestShowCommandColorModes(t *testing.T) {
 			t.Fatalf("update file failed: %v", err)
 		}
 
-		tree2, err := computeWorktreeTree(context.Background(), repo, gitDirectory)
+		tree2, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
 		if err != nil {
 			t.Fatalf("computeWorktreeTree changed failed: %v", err)
 		}
@@ -833,6 +938,49 @@ func TestShowCommandColorModes(t *testing.T) {
 		}
 		if strings.Contains(autoBuf.String(), "\x1b[") {
 			t.Fatalf("expected auto mode to avoid ANSI when output is not a terminal: %q", autoBuf.String())
+		}
+	})
+}
+
+func TestComputeWorktreeTreeSnapshotModes(t *testing.T) {
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		gitDirectory, err := gitDir(context.Background(), repo)
+		if err != nil {
+			t.Fatalf("gitDir failed: %v", err)
+		}
+
+		filePath := filepath.Join(repo, "file.txt")
+		if err := os.WriteFile(filePath, []byte("staged"), 0o644); err != nil {
+			t.Fatalf("write staged content failed: %v", err)
+		}
+		runGit(t, repo, "add", "file.txt")
+
+		if err := os.WriteFile(filePath, []byte("unstaged"), 0o644); err != nil {
+			t.Fatalf("write unstaged content failed: %v", err)
+		}
+
+		bothTree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
+		if err != nil {
+			t.Fatalf("computeWorktreeTree both failed: %v", err)
+		}
+		stagedTree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeStaged)
+		if err != nil {
+			t.Fatalf("computeWorktreeTree staged failed: %v", err)
+		}
+		workingTree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeWorking)
+		if err != nil {
+			t.Fatalf("computeWorktreeTree working failed: %v", err)
+		}
+
+		if got := testTreeFileContent(t, repo, bothTree, "file.txt"); got != "unstaged" {
+			t.Fatalf("both mode should include unstaged working tree content, got %q", got)
+		}
+		if got := testTreeFileContent(t, repo, stagedTree, "file.txt"); got != "staged" {
+			t.Fatalf("staged mode should include staged index content, got %q", got)
+		}
+		if got := testTreeFileContent(t, repo, workingTree, "file.txt"); got != "unstaged" {
+			t.Fatalf("working mode should include working tree content, got %q", got)
 		}
 	})
 }
@@ -891,4 +1039,10 @@ func withWorkingDir(t *testing.T, dir string, fn func()) {
 		}
 	})
 	fn()
+}
+
+func testTreeFileContent(t *testing.T, repoRoot, tree, filePath string) string {
+	t.Helper()
+	content := runGitOutput(t, repoRoot, "show", tree+":"+filePath)
+	return strings.TrimSuffix(content, "\n")
 }

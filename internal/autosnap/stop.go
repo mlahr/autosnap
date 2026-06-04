@@ -29,7 +29,7 @@ func newStopCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if state.PID == 0 || !isProcessAlive(state.PID) {
+			if state.PID == 0 || !isAutosnapRunActive(state) {
 				fmt.Printf("no running autosnap process found (stale pid=%d)\n", state.PID)
 				return removeAutosnapRunState(runPath)
 			}

@@ -95,7 +95,7 @@ func getDaemonStatus(repoRoot string) (string, error) {
 		return "daemon: not running", nil
 	}
 
-	if !isProcessAlive(state.PID) {
+	if !isAutosnapRunActive(state) {
 		return fmt.Sprintf("daemon: stopped (stale pid=%d)", state.PID), nil
 	}
 
@@ -104,12 +104,17 @@ func getDaemonStatus(repoRoot string) (string, error) {
 		branch = state.BranchRef
 	}
 
+	snapshotMode := state.SnapshotMode
+	if snapshotMode == "" {
+		snapshotMode = snapshotModeBoth
+	}
+
 	startAt := state.StartedAt
 	if startAt == "" {
 		startAt = "unknown"
 	}
 
-	return fmt.Sprintf("daemon: running (pid=%d branch=%s check=%q idle=%ds started=%s)", state.PID, branch, state.CheckCommand, state.IdleSeconds, startAt), nil
+	return fmt.Sprintf("daemon: running (pid=%d branch=%s check=%q idle=%ds mode=%s started=%s)", state.PID, branch, state.CheckCommand, state.IdleSeconds, snapshotMode, startAt), nil
 }
 
 func hasWorkingTreeChanges(ctx context.Context, repoRoot string) (bool, error) {

@@ -20,8 +20,10 @@ func newStartCommand() *cobra.Command {
 	var (
 		checkCommand string
 		idleSeconds  int
+		snapshotMode string
 		foreground   bool
 		daemon       bool
+		runToken     string
 	)
 
 	cmd := &cobra.Command{
@@ -34,14 +36,36 @@ func newStartCommand() *cobra.Command {
 			if idleSeconds <= 0 {
 				return errors.New("--idle must be greater than 0")
 			}
-
-			if !foreground {
-				return startAutosnapDetached(checkCommand, idleSeconds)
+			normalizedMode, err := normalizeSnapshotMode(snapshotMode)
+			if err != nil {
+				return fmt.Errorf("invalid --snapshot-mode %q (expected both, staged, working)", snapshotMode)
 			}
+			snapshotMode = normalizedMode
 
 			repoRoot, branchDisplay, branchRef, err := detectRepository(context.Background())
 			if err != nil {
 				return err
+			}
+
+			if err := ensureNoActiveRunForRepo(repoRoot); err != nil {
+				return err
+			}
+
+			if !foreground {
+				if runToken == "" {
+					runToken, err = newRunToken()
+					if err != nil {
+						return err
+					}
+				}
+				return startAutosnapDetached(repoRoot, checkCommand, idleSeconds, snapshotMode, runToken)
+			}
+
+			if runToken == "" {
+				runToken, err = newRunToken()
+				if err != nil {
+					return err
+				}
 			}
 
 			ctx, cancel := context.WithCancel(context.Background())
@@ -52,7 +76,7 @@ func newStartCommand() *cobra.Command {
 				return err
 			}
 
-			runner, err := newSnapshotRunner(ctx, repoRoot, branchRef, checkCommand, time.Duration(idleSeconds)*time.Second, statePath)
+			runner, err := newSnapshotRunner(ctx, repoRoot, branchRef, checkCommand, snapshotMode, time.Duration(idleSeconds)*time.Second, statePath)
 			if err != nil {
 				return err
 			}
@@ -70,6 +94,8 @@ func newStartCommand() *cobra.Command {
 					BranchDisplay: branchDisplay,
 					CheckCommand:  checkCommand,
 					IdleSeconds:   idleSeconds,
+					SnapshotMode:  snapshotMode,
+					RunToken:      runToken,
 					StartedAt:     time.Now().UTC().Format(time.RFC3339),
 				}
 				if err := saveAutosnapRunState(runPath, runState); err != nil {
@@ -91,23 +117,17 @@ func newStartCommand() *cobra.Command {
 
 	cmd.Flags().StringVar(&checkCommand, "check", "", "Shell command to run after idle")
 	cmd.Flags().IntVar(&idleSeconds, "idle", 60, "Seconds without changes before running the check")
+	cmd.Flags().StringVar(&snapshotMode, "snapshot-mode", snapshotModeBoth, "Snapshot source: both, staged, working")
 	cmd.Flags().BoolVar(&foreground, "foreground", false, "Run autosnap in the current terminal")
+	cmd.Flags().StringVar(&runToken, "run-token", "", "Internal: run identity token")
 	cmd.Flags().BoolVar(&daemon, "daemon", false, "Internal: run as background daemon")
+	cmd.Flags().Lookup("run-token").Hidden = true
 	cmd.Flags().Lookup("daemon").Hidden = true
 
 	return cmd
 }
 
-func startAutosnapDetached(checkCommand string, idleSeconds int) error {
-	repoRoot, _, _, err := detectRepository(context.Background())
-	if err != nil {
-		return err
-	}
-
-	if err := ensureNoActiveRunForRepo(repoRoot); err != nil {
-		return err
-	}
-
+func startAutosnapDetached(repoRoot, checkCommand string, idleSeconds int, snapshotMode, runToken string) error {
 	logPath, err := backgroundLogPath(repoRoot)
 	if err != nil {
 		return err
@@ -133,8 +153,12 @@ func startAutosnapDetached(checkCommand string, idleSeconds int) error {
 		"--daemon",
 		"--check",
 		checkCommand,
+		"--snapshot-mode",
+		snapshotMode,
 		"--idle",
 		strconv.Itoa(idleSeconds),
+		"--run-token",
+		runToken,
 	)
 	cmd.Stdin = nil
 	cmd.Stdout = logFile

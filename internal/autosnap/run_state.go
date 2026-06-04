@@ -1,13 +1,21 @@
 package autosnap
 
 import (
+	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 	"syscall"
 )
+
+var readProcessCommandLine = defaultReadProcessCommandLine
 
 type autosnapRunState struct {
 	PID           int    `json:"pid"`
@@ -15,6 +23,8 @@ type autosnapRunState struct {
 	BranchRef     string `json:"branchRef"`
 	BranchDisplay string `json:"branchDisplay"`
 	CheckCommand  string `json:"checkCommand"`
+	SnapshotMode  string `json:"snapshotMode"`
+	RunToken      string `json:"runToken"`
 	IdleSeconds   int    `json:"idleSeconds"`
 	StartedAt     string `json:"startedAt"`
 }
@@ -76,11 +86,32 @@ func ensureNoActiveRunForRepo(repoRoot string) error {
 		return removeAutosnapRunState(path)
 	}
 
-	if isProcessAlive(state.PID) {
+	if isAutosnapRunActive(state) {
 		return fmt.Errorf("autosnap already running (pid=%d)", state.PID)
 	}
 
 	return removeAutosnapRunState(path)
+}
+
+func isAutosnapRunActive(state autosnapRunState) bool {
+	if state.PID == 0 {
+		return false
+	}
+
+	if !isProcessAlive(state.PID) {
+		return false
+	}
+
+	if state.RunToken == "" {
+		return true
+	}
+
+	cmdLine, err := readProcessCommandLine(state.PID)
+	if err != nil {
+		return true
+	}
+
+	return isAutosnapCommandLine(cmdLine, state.RunToken)
 }
 
 func isProcessAlive(pid int) bool {
@@ -100,4 +131,36 @@ func isProcessAlive(pid int) bool {
 	}
 
 	return err == nil
+}
+
+func isAutosnapCommandLine(commandLine, runToken string) bool {
+	if !strings.Contains(commandLine, "--daemon") {
+		return false
+	}
+	return strings.Contains(commandLine, "--run-token="+runToken)
+}
+
+func defaultReadProcessCommandLine(pid int) (string, error) {
+	cmd := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "command=")
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		if stderr.Len() > 0 {
+			return "", fmt.Errorf("failed to read command line for pid=%d: %s", pid, strings.TrimSpace(stderr.String()))
+		}
+		return "", fmt.Errorf("failed to read command line for pid=%d", pid)
+	}
+
+	return strings.TrimSpace(stdout.String()), nil
+}
+
+func newRunToken() (string, error) {
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(raw), nil
 }

@@ -27,11 +27,12 @@ var ignoredPathSegments = map[string]struct{}{
 }
 
 type snapshotRunner struct {
-	ctx       context.Context
-	repoRoot  string
-	branchRef string
-	checkCmd  string
-	idle      time.Duration
+	ctx          context.Context
+	repoRoot     string
+	branchRef    string
+	checkCmd     string
+	snapshotMode string
+	idle         time.Duration
 
 	statePath string
 	state     autosnapState
@@ -48,7 +49,7 @@ type snapshotRunner struct {
 	ignoreCacheMu   sync.RWMutex
 }
 
-func newSnapshotRunner(ctx context.Context, repoRoot, branchRef, checkCommand string, idle time.Duration, statePath string) (*snapshotRunner, error) {
+func newSnapshotRunner(ctx context.Context, repoRoot, branchRef, checkCommand, snapshotMode string, idle time.Duration, statePath string) (*snapshotRunner, error) {
 	state, err := loadAutosnapState(statePath)
 	if err != nil {
 		return nil, err
@@ -58,13 +59,14 @@ func newSnapshotRunner(ctx context.Context, repoRoot, branchRef, checkCommand st
 	}
 
 	return &snapshotRunner{
-		ctx:       ctx,
-		repoRoot:  repoRoot,
-		branchRef: branchRef,
-		checkCmd:  checkCommand,
-		idle:      idle,
-		statePath: statePath,
-		state:     state,
+		ctx:          ctx,
+		repoRoot:     repoRoot,
+		branchRef:    branchRef,
+		checkCmd:     checkCommand,
+		snapshotMode: snapshotMode,
+		idle:         idle,
+		statePath:    statePath,
+		state:        state,
 		ignoreCache: map[string]bool{
 			"": false,
 		},
@@ -205,7 +207,7 @@ func (r *snapshotRunner) runCheck() {
 		fmt.Println("unable to resolve git directory:", err)
 		return
 	}
-	tree, err := computeWorktreeTree(r.ctx, r.repoRoot, gitDirectory)
+	tree, err := computeWorktreeTree(r.ctx, r.repoRoot, gitDirectory, r.snapshotMode)
 	if err != nil {
 		fmt.Println("unable to compute working tree tree:", err)
 		return

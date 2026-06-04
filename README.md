@@ -89,6 +89,12 @@ branch: feature/foo check: npm test idle: 60s
 
 When running detached, all watcher logs go to `autosnap.log` under the autosnap state directory (`.git/autosnap/` in a standard worktree).
 
+You can control what gets snapshotted:
+
+- `--snapshot-mode both` (default): include staged + unstaged changes
+- `--snapshot-mode staged`: include staged/index state only
+- `--snapshot-mode working`: include working-tree changes and untracked files (ignores staged-only index changes)
+
 To keep the process in the current terminal, pass `--foreground`:
 
 ```bash
@@ -135,7 +141,7 @@ Lists checkpoints for the current branch, newest-first.
 
 ### Show checkpoint
 
-`autosnap show <checkpoint>` 
+`autosnap show <checkpoint>`
 
 Shows checkpoint metadata and a stat diff for the checkpoint object.
 

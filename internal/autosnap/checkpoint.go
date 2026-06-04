@@ -2,14 +2,23 @@ package autosnap
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+)
+
+const (
+	snapshotModeBoth    = "both"
+	snapshotModeStaged  = "staged"
+	snapshotModeWorking = "working"
 )
 
 type checkpointInfo struct {
@@ -38,7 +47,12 @@ func currentTimestamp() string {
 	return time.Now().UTC().Format("20060102T150405Z")
 }
 
-func computeWorktreeTree(ctx context.Context, repoRoot, gitDirectory string) (string, error) {
+func computeWorktreeTree(ctx context.Context, repoRoot, gitDirectory, mode string) (string, error) {
+	mode, err := normalizeSnapshotMode(mode)
+	if err != nil {
+		return "", err
+	}
+
 	tmpIndex := fmt.Sprintf("%s/autosnap-index.%d", gitDirectory, time.Now().UnixNano())
 	defer func() {
 		_ = os.Remove(tmpIndex)
@@ -48,17 +62,66 @@ func computeWorktreeTree(ctx context.Context, repoRoot, gitDirectory string) (st
 		"GIT_INDEX_FILE": tmpIndex,
 	}
 
-	if _, err := runGitCommand(ctx, repoRoot, env, "read-tree", "HEAD"); err != nil {
-		return "", err
+	switch mode {
+	case snapshotModeBoth, snapshotModeWorking:
+		if _, err := runGitCommand(ctx, repoRoot, env, "read-tree", "HEAD"); err != nil {
+			return "", err
+		}
+		if _, err := runGitCommand(ctx, repoRoot, env, "add", "-A"); err != nil {
+			return "", err
+		}
+	case snapshotModeStaged:
+		if _, err := os.Stat(filepath.Join(gitDirectory, "index")); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return "", fmt.Errorf("git index file not found for staged snapshot mode")
+			}
+			return "", err
+		}
+		if err := copyFile(filepath.Join(gitDirectory, "index"), tmpIndex); err != nil {
+			return "", err
+		}
 	}
-	if _, err := runGitCommand(ctx, repoRoot, env, "add", "-A"); err != nil {
-		return "", err
-	}
+
 	treeResult, err := runGitCommand(ctx, repoRoot, env, "write-tree")
 	if err != nil {
 		return "", err
 	}
 	return strings.TrimSpace(treeResult.Stdout), nil
+}
+
+func copyFile(src, dest string) error {
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+
+	srcInfo, err := srcFile.Stat()
+	if err != nil {
+		return err
+	}
+
+	dstFile, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, srcInfo.Mode())
+	if err != nil {
+		return err
+	}
+	defer dstFile.Close()
+
+	if _, err := io.Copy(dstFile, srcFile); err != nil {
+		return err
+	}
+	return dstFile.Sync()
+}
+
+func normalizeSnapshotMode(mode string) (string, error) {
+	if mode == "" {
+		return snapshotModeBoth, nil
+	}
+	switch mode {
+	case snapshotModeBoth, snapshotModeStaged, snapshotModeWorking:
+		return mode, nil
+	}
+	return "", fmt.Errorf("invalid snapshot mode %q (expected both, staged, working)", mode)
 }
 
 func createCheckpoint(ctx context.Context, repoRoot, branchRef, checkCommand string, idle time.Duration, tree string) (string, string, error) {
