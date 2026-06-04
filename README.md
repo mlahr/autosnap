@@ -116,6 +116,31 @@ To keep the process in the current terminal, pass `--foreground`:
 autosnap start --foreground --check "npm test" --idle 60
 ```
 
+By default, autosnap recursively watches the repository with filesystem events. Large repositories can use polling or automatic fallback:
+
+```bash
+autosnap start --check "make build" --idle 30 --watch-mode poll --poll-interval 5s
+autosnap start --check "make build" --idle 30 --watch-mode auto
+```
+
+Watch modes:
+
+- `--watch-mode recursive` (default): recursively watch directories with filesystem events
+- `--watch-mode poll`: poll Git working-tree status without recursive filesystem watches
+- `--watch-mode auto`: try recursive watching, then fall back to polling if the watcher hits the open-file limit
+
+Polling uses `--poll-interval` (`5s` by default).
+
+To exclude large paths from triggering autosnap, add a repo-root `.autosnapignore` file:
+
+```gitignore
+tmp/
+examples/corpus-pdfs-failed/
+src/test/fixtures/font-swap-visual-layout-snapshots/
+```
+
+`.autosnapignore` is watch-only: ignored paths do not trigger idle checks, but they are still included in checkpoint snapshots if another watched change causes a checkpoint. Git ignored paths are also skipped by the watcher.
+
 ### Stop background watcher
 
 ```bash
@@ -236,4 +261,4 @@ autosnap prune --all-branches --older-than 30d --apply
 - Untracked files are included when tracked through the temporary-index path snapshot.
 - `.git` and common build/artifact directories are ignored by the watcher.
 - Additional ignores from Git's own `.gitignore` are respected by file watching.
-
+- `.autosnapignore` can exclude large paths from watcher triggers without excluding them from checkpoints.

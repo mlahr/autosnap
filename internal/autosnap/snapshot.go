@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -25,6 +26,13 @@ var ignoredPathSegments = map[string]struct{}{
 	".gradle":      {},
 }
 
+const (
+	watchModeRecursive  = "recursive"
+	watchModePoll       = "poll"
+	watchModeAuto       = "auto"
+	defaultPollInterval = 5 * time.Second
+)
+
 type snapshotRunner struct {
 	ctx          context.Context
 	repoRoot     string
@@ -32,6 +40,8 @@ type snapshotRunner struct {
 	checkCmd     string
 	msgSourceCmd string
 	snapshotMode string
+	watchMode    string
+	pollInterval time.Duration
 	idle         time.Duration
 
 	statePath string
@@ -39,23 +49,39 @@ type snapshotRunner struct {
 
 	watcher *fsnotify.Watcher
 
-	mu              sync.Mutex
-	timer           *time.Timer
-	checking        bool
-	pendingAfterRun bool
-	lastChange      time.Time
-	stopped         bool
-	ignoreCache     map[string]bool
-	ignoreCacheMu   sync.RWMutex
+	mu               sync.Mutex
+	timer            *time.Timer
+	checking         bool
+	pendingAfterRun  bool
+	lastChange       time.Time
+	stopped          bool
+	ignoreCache      map[string]bool
+	ignoreCacheMu    sync.RWMutex
+	watchIgnoreRules []ignoreRule
 }
 
 func newSnapshotRunner(ctx context.Context, repoRoot, branchRef, checkCommand, msgSourceCommand, snapshotMode string, idle time.Duration, statePath string) (*snapshotRunner, error) {
+	return newSnapshotRunnerWithWatch(ctx, repoRoot, branchRef, checkCommand, msgSourceCommand, snapshotMode, watchModeRecursive, defaultPollInterval, idle, statePath)
+}
+
+func newSnapshotRunnerWithWatch(ctx context.Context, repoRoot, branchRef, checkCommand, msgSourceCommand, snapshotMode, watchMode string, pollInterval, idle time.Duration, statePath string) (*snapshotRunner, error) {
 	state, err := loadAutosnapState(statePath)
 	if err != nil {
 		return nil, err
 	}
 	if state.RepoRoot == "" {
 		state.RepoRoot = repoRoot
+	}
+	normalizedWatchMode, err := normalizeWatchMode(watchMode)
+	if err != nil {
+		return nil, err
+	}
+	if pollInterval <= 0 {
+		return nil, errors.New("poll interval must be greater than 0")
+	}
+	watchIgnoreRules, err := loadAutosnapIgnoreRules(repoRoot)
+	if err != nil {
+		return nil, err
 	}
 
 	return &snapshotRunner{
@@ -65,16 +91,36 @@ func newSnapshotRunner(ctx context.Context, repoRoot, branchRef, checkCommand, m
 		checkCmd:     checkCommand,
 		msgSourceCmd: msgSourceCommand,
 		snapshotMode: snapshotMode,
+		watchMode:    normalizedWatchMode,
+		pollInterval: pollInterval,
 		idle:         idle,
 		statePath:    statePath,
 		state:        state,
 		ignoreCache: map[string]bool{
 			"": false,
 		},
+		watchIgnoreRules: watchIgnoreRules,
 	}, nil
 }
 
 func (r *snapshotRunner) start() error {
+	switch r.watchMode {
+	case watchModePoll:
+		return r.startPolling()
+	case watchModeAuto:
+		err := r.startRecursive()
+		if isWatchLimitError(err) {
+			logf("recursive watcher hit file limit; falling back to polling every %s\n", r.pollInterval)
+			r.closeWatcher()
+			return r.startPolling()
+		}
+		return err
+	default:
+		return r.startRecursive()
+	}
+}
+
+func (r *snapshotRunner) startRecursive() error {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return err
@@ -112,6 +158,42 @@ func (r *snapshotRunner) start() error {
 	}
 }
 
+func (r *snapshotRunner) startPolling() error {
+	r.mu.Lock()
+	r.lastChange = time.Now()
+	r.scheduleTimerLocked(r.idle)
+	r.mu.Unlock()
+
+	lastSignature, err := r.pollChangeSignature()
+	if err != nil {
+		logf("unable to read initial poll state: %v\n", err)
+	}
+
+	ticker := time.NewTicker(r.pollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-r.ctx.Done():
+			r.stop()
+			return nil
+		case <-ticker.C:
+			signature, err := r.pollChangeSignature()
+			if err != nil {
+				logf("poll error: %v\n", err)
+				continue
+			}
+			if signature != lastSignature {
+				lastSignature = signature
+				if signature != "" {
+					logln("changed: polled working tree")
+					r.touch()
+				}
+			}
+		}
+	}
+}
+
 func (r *snapshotRunner) stop() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -121,6 +203,23 @@ func (r *snapshotRunner) stop() {
 		r.timer.Stop()
 		r.timer = nil
 	}
+	if r.watcher != nil {
+		r.closeWatcherLocked()
+	}
+}
+
+func (r *snapshotRunner) closeWatcher() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.closeWatcherLocked()
+}
+
+func (r *snapshotRunner) closeWatcherLocked() {
+	if r.watcher == nil {
+		return
+	}
+	_ = r.watcher.Close()
+	r.watcher = nil
 }
 
 func (r *snapshotRunner) scheduleTimerLocked(d time.Duration) {
@@ -323,6 +422,23 @@ func (r *snapshotRunner) watchDirectoryTree(root string) error {
 	})
 }
 
+func (r *snapshotRunner) pollChangeSignature() (string, error) {
+	result, err := runGitCommand(r.ctx, r.repoRoot, nil, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+	if err != nil {
+		return "", err
+	}
+	paths := parsePorcelainStatusPaths(result.Stdout)
+	filtered := make([]string, 0, len(paths))
+	for _, rel := range paths {
+		rel = filepath.ToSlash(rel)
+		if rel == "" || r.shouldIgnorePath(rel) {
+			continue
+		}
+		filtered = append(filtered, rel)
+	}
+	return strings.Join(filtered, "\x00"), nil
+}
+
 func (r *snapshotRunner) shouldIgnorePath(relPath string) bool {
 	if relPath == "." {
 		return false
@@ -338,6 +454,11 @@ func (r *snapshotRunner) shouldIgnorePath(relPath string) bool {
 			r.setIgnoredInCache(relPath, true)
 			return true
 		}
+	}
+
+	if matchAutosnapIgnoreRules(r.watchIgnoreRules, relPath) {
+		r.setIgnoredInCache(relPath, true)
+		return true
 	}
 
 	ignoredByGit, err := isGitIgnored(context.Background(), r.repoRoot, relPath)
@@ -367,4 +488,50 @@ func pathBase(raw string) string {
 		raw = raw[idx+1:]
 	}
 	return raw
+}
+
+func normalizeWatchMode(mode string) (string, error) {
+	if mode == "" {
+		return watchModeRecursive, nil
+	}
+	switch mode {
+	case watchModeRecursive, watchModePoll, watchModeAuto:
+		return mode, nil
+	default:
+		return "", errors.New("invalid watch mode")
+	}
+}
+
+func isWatchLimitError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, syscall.EMFILE) || errors.Is(err, syscall.ENFILE) {
+		return true
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "too many open files")
+}
+
+func parsePorcelainStatusPaths(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	fields := strings.Split(raw, "\x00")
+	paths := make([]string, 0, len(fields))
+	for i := 0; i < len(fields); i++ {
+		entry := fields[i]
+		if entry == "" || len(entry) < 4 {
+			continue
+		}
+		status := entry[:2]
+		pathName := entry[3:]
+		if status[0] == 'R' || status[0] == 'C' {
+			if i+1 < len(fields) && fields[i+1] != "" {
+				paths = append(paths, fields[i+1])
+				i++
+			}
+		}
+		paths = append(paths, pathName)
+	}
+	return paths
 }

@@ -22,6 +22,8 @@ func newStartCommand() *cobra.Command {
 		msgSourceCmd string
 		idleSeconds  int
 		snapshotMode string
+		watchMode    string
+		pollInterval time.Duration
 		foreground   bool
 		daemon       bool
 		runToken     string
@@ -42,6 +44,14 @@ func newStartCommand() *cobra.Command {
 				return fmt.Errorf("invalid --snapshot-mode %q (expected both, staged, working)", snapshotMode)
 			}
 			snapshotMode = normalizedMode
+			normalizedWatchMode, err := normalizeWatchMode(watchMode)
+			if err != nil {
+				return fmt.Errorf("invalid --watch-mode %q (expected recursive, poll, auto)", watchMode)
+			}
+			watchMode = normalizedWatchMode
+			if pollInterval <= 0 {
+				return errors.New("--poll-interval must be greater than 0")
+			}
 
 			repoRoot, branchDisplay, branchRef, err := detectRepository(context.Background())
 			if err != nil {
@@ -59,7 +69,7 @@ func newStartCommand() *cobra.Command {
 						return err
 					}
 				}
-				return startAutosnapDetached(repoRoot, checkCommand, msgSourceCmd, idleSeconds, snapshotMode, runToken)
+				return startAutosnapDetached(repoRoot, checkCommand, msgSourceCmd, idleSeconds, snapshotMode, watchMode, pollInterval, runToken)
 			}
 
 			if runToken == "" {
@@ -77,7 +87,7 @@ func newStartCommand() *cobra.Command {
 				return err
 			}
 
-			runner, err := newSnapshotRunner(ctx, repoRoot, branchRef, checkCommand, msgSourceCmd, snapshotMode, time.Duration(idleSeconds)*time.Second, statePath)
+			runner, err := newSnapshotRunnerWithWatch(ctx, repoRoot, branchRef, checkCommand, msgSourceCmd, snapshotMode, watchMode, pollInterval, time.Duration(idleSeconds)*time.Second, statePath)
 			if err != nil {
 				return err
 			}
@@ -107,6 +117,7 @@ func newStartCommand() *cobra.Command {
 
 			logf("autosnap watching %s\n", repoRoot)
 			logf("branch: %s check: %s idle: %ds\n", branchDisplay, checkCommand, idleSeconds)
+			logf("watch-mode: %s poll-interval: %s\n", watchMode, pollInterval)
 
 			if err := runner.start(); err != nil {
 				cancel()
@@ -120,6 +131,8 @@ func newStartCommand() *cobra.Command {
 	cmd.Flags().StringVar(&msgSourceCmd, "msg-source-cmd", "", "Shell command that returns the checkpoint commit message (multiline supported)")
 	cmd.Flags().IntVar(&idleSeconds, "idle", 60, "Seconds without changes before running the check")
 	cmd.Flags().StringVar(&snapshotMode, "snapshot-mode", snapshotModeBoth, "Snapshot source: both, staged, working")
+	cmd.Flags().StringVar(&watchMode, "watch-mode", watchModeRecursive, "Watch strategy: recursive, poll, auto")
+	cmd.Flags().DurationVar(&pollInterval, "poll-interval", defaultPollInterval, "Polling interval for poll or auto watch mode")
 	cmd.Flags().BoolVar(&foreground, "foreground", false, "Run autosnap in the current terminal")
 	cmd.Flags().StringVar(&runToken, "run-token", "", "Internal: run identity token")
 	cmd.Flags().BoolVar(&daemon, "daemon", false, "Internal: run as background daemon")
@@ -129,7 +142,7 @@ func newStartCommand() *cobra.Command {
 	return cmd
 }
 
-func startAutosnapDetached(repoRoot, checkCommand, msgSourceCmd string, idleSeconds int, snapshotMode, runToken string) error {
+func startAutosnapDetached(repoRoot, checkCommand, msgSourceCmd string, idleSeconds int, snapshotMode, watchMode string, pollInterval time.Duration, runToken string) error {
 	logPath, err := backgroundLogPath(repoRoot)
 	if err != nil {
 		return err
@@ -148,24 +161,7 @@ func startAutosnapDetached(repoRoot, checkCommand, msgSourceCmd string, idleSeco
 		return err
 	}
 
-	args := []string{
-		exe,
-		"start",
-		"--foreground",
-		"--daemon",
-		"--check",
-		checkCommand,
-		"--snapshot-mode",
-		snapshotMode,
-		"--idle",
-		strconv.Itoa(idleSeconds),
-		"--run-token",
-		runToken,
-	}
-
-	if msgSourceCmd != "" {
-		args = append(args, "--msg-source-cmd", msgSourceCmd)
-	}
+	args := startDetachedArgs(exe, checkCommand, msgSourceCmd, idleSeconds, snapshotMode, watchMode, pollInterval, runToken)
 
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Stdin = nil
@@ -182,6 +178,32 @@ func startAutosnapDetached(repoRoot, checkCommand, msgSourceCmd string, idleSeco
 
 	fmt.Printf("autosnap started in background (pid=%d, log=%s)\n", cmd.Process.Pid, logPath)
 	return nil
+}
+
+func startDetachedArgs(exe, checkCommand, msgSourceCmd string, idleSeconds int, snapshotMode, watchMode string, pollInterval time.Duration, runToken string) []string {
+	args := []string{
+		exe,
+		"start",
+		"--foreground",
+		"--daemon",
+		"--check",
+		checkCommand,
+		"--snapshot-mode",
+		snapshotMode,
+		"--watch-mode",
+		watchMode,
+		"--poll-interval",
+		pollInterval.String(),
+		"--idle",
+		strconv.Itoa(idleSeconds),
+		"--run-token",
+		runToken,
+	}
+
+	if msgSourceCmd != "" {
+		args = append(args, "--msg-source-cmd", msgSourceCmd)
+	}
+	return args
 }
 
 func backgroundLogPath(repoRoot string) (string, error) {

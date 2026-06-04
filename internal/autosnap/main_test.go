@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -540,6 +541,181 @@ func TestGitIgnoredPathsAreIgnored(t *testing.T) {
 			t.Fatalf("expected notes.txt to be tracked by watcher")
 		}
 	})
+}
+
+func TestAutosnapIgnoreRules(t *testing.T) {
+	rules := []ignoreRule{
+		{pattern: "tmp", directory: true},
+		{pattern: "fixtures/*.pdf"},
+		{pattern: "src/generated", anchored: true, directory: true},
+		{pattern: "tmp/keep.txt", negated: true},
+	}
+
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{path: "tmp", want: true},
+		{path: "tmp/out.log", want: true},
+		{path: "nested/tmp/out.log", want: true},
+		{path: "tmp/keep.txt", want: false},
+		{path: "fixtures/sample.pdf", want: true},
+		{path: "other/fixtures/sample.pdf", want: false},
+		{path: "src/generated/Foo.java", want: true},
+		{path: "other/src/generated/Foo.java", want: false},
+		{path: "src/main/Foo.java", want: false},
+	}
+
+	for _, tc := range tests {
+		if got := matchAutosnapIgnoreRules(rules, tc.path); got != tc.want {
+			t.Fatalf("matchAutosnapIgnoreRules(%q)=%v, want %v", tc.path, got, tc.want)
+		}
+	}
+}
+
+func TestParseAutosnapIgnoreRule(t *testing.T) {
+	tests := []struct {
+		line string
+		want ignoreRule
+		ok   bool
+	}{
+		{line: "", ok: false},
+		{line: "# comment", ok: false},
+		{line: "/src/generated/", want: ignoreRule{pattern: "src/generated", anchored: true, directory: true}, ok: true},
+		{line: "!tmp/keep.txt", want: ignoreRule{pattern: "tmp/keep.txt", negated: true}, ok: true},
+		{line: "*.tmp", want: ignoreRule{pattern: "*.tmp"}, ok: true},
+	}
+
+	for _, tc := range tests {
+		got, ok := parseIgnoreRule(tc.line)
+		if ok != tc.ok {
+			t.Fatalf("parseIgnoreRule(%q) ok=%v, want %v", tc.line, ok, tc.ok)
+		}
+		if ok && got != tc.want {
+			t.Fatalf("parseIgnoreRule(%q)=%+v, want %+v", tc.line, got, tc.want)
+		}
+	}
+}
+
+func TestAutosnapIgnoreIsWatchOnlyForPolling(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, ".autosnapignore"), []byte("ignored/\n"), 0o644); err != nil {
+		t.Fatalf("write .autosnapignore failed: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, "ignored"), 0o755); err != nil {
+		t.Fatalf("mkdir ignored failed: %v", err)
+	}
+	runGit(t, repo, "add", ".autosnapignore")
+	runGit(t, repo, "commit", "-m", "add autosnapignore")
+
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		statePath, err := stateFilePath(repo)
+		if err != nil {
+			t.Fatalf("stateFilePath failed: %v", err)
+		}
+		runner, err := newSnapshotRunnerWithWatch(context.Background(), repo, branchRef, "true", "", snapshotModeBoth, watchModePoll, time.Second, time.Second, statePath)
+		if err != nil {
+			t.Fatalf("newSnapshotRunnerWithWatch failed: %v", err)
+		}
+		if !runner.shouldIgnorePath("ignored/file.txt") {
+			t.Fatalf("expected .autosnapignore path to be ignored by watcher")
+		}
+
+		if err := os.WriteFile(filepath.Join(repo, "ignored", "file.txt"), []byte("ignored change"), 0o644); err != nil {
+			t.Fatalf("write ignored file failed: %v", err)
+		}
+		signature, err := runner.pollChangeSignature()
+		if err != nil {
+			t.Fatalf("pollChangeSignature failed: %v", err)
+		}
+		if signature != "" {
+			t.Fatalf("expected ignored-only poll signature to be empty, got %q", signature)
+		}
+
+		if err := os.WriteFile(filepath.Join(repo, "watched.txt"), []byte("watched change"), 0o644); err != nil {
+			t.Fatalf("write watched file failed: %v", err)
+		}
+		signature, err = runner.pollChangeSignature()
+		if err != nil {
+			t.Fatalf("pollChangeSignature failed: %v", err)
+		}
+		if !strings.Contains(signature, "watched.txt") || strings.Contains(signature, "ignored/file.txt") {
+			t.Fatalf("unexpected poll signature: %q", signature)
+		}
+
+		gitDirectory, err := gitDir(context.Background(), repo)
+		if err != nil {
+			t.Fatalf("gitDir failed: %v", err)
+		}
+		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
+		if err != nil {
+			t.Fatalf("computeWorktreeTree failed: %v", err)
+		}
+		commit, _, err := createCheckpoint(context.Background(), repo, branchRef, "true", time.Second, tree, "")
+		if err != nil {
+			t.Fatalf("createCheckpoint failed: %v", err)
+		}
+		if got := runGitOutput(t, repo, "show", commit+":ignored/file.txt"); got != "ignored change" {
+			t.Fatalf("expected ignored file to remain in checkpoint, got %q", got)
+		}
+	})
+}
+
+func TestStartCommandWatchFlagValidation(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newStartCommand())
+		root.SetArgs([]string{"start", "--foreground", "--check", "true", "--watch-mode", "bad"})
+		if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "invalid --watch-mode") {
+			t.Fatalf("expected invalid watch mode error, got %v", err)
+		}
+
+		root = &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newStartCommand())
+		root.SetArgs([]string{"start", "--foreground", "--check", "true", "--watch-mode", "poll", "--poll-interval", "0s"})
+		if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "--poll-interval must be greater than 0") {
+			t.Fatalf("expected invalid poll interval error, got %v", err)
+		}
+	})
+}
+
+func TestStartDetachedArgsForwardWatchOptions(t *testing.T) {
+	args := startDetachedArgs("/bin/autosnap", "make build", "printf msg", 30, snapshotModeBoth, watchModeAuto, 2*time.Second, "token")
+	joined := strings.Join(args, "\n")
+	for _, want := range []string{
+		"--watch-mode\nauto",
+		"--poll-interval\n2s",
+		"--msg-source-cmd\nprintf msg",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("expected detached args to contain %q, got %v", want, args)
+		}
+	}
+}
+
+func TestWatchModeHelpers(t *testing.T) {
+	if mode, err := normalizeWatchMode(""); err != nil || mode != watchModeRecursive {
+		t.Fatalf("expected empty watch mode to normalize to recursive, got %q err=%v", mode, err)
+	}
+	if _, err := normalizeWatchMode("bad"); err == nil {
+		t.Fatalf("expected invalid watch mode error")
+	}
+	if isWatchLimitError(os.ErrInvalid) {
+		t.Fatalf("did not expect os.ErrInvalid to be recognized as watch limit")
+	}
+	if isWatchLimitError(nil) {
+		t.Fatalf("did not expect nil to be recognized as watch limit")
+	}
+	if !isWatchLimitError(&os.PathError{Op: "open", Path: "x", Err: syscall.EMFILE}) {
+		t.Fatalf("expected EMFILE to be recognized as watch limit")
+	}
 }
 
 func TestRunShellCheck(t *testing.T) {
