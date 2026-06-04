@@ -666,6 +666,135 @@ func TestAutosnapIgnoreIsWatchOnlyForPolling(t *testing.T) {
 	})
 }
 
+func TestPollingDetectsRepeatedWorkingFileContentChanges(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		statePath, err := stateFilePath(repo)
+		if err != nil {
+			t.Fatalf("stateFilePath failed: %v", err)
+		}
+		runner, err := newSnapshotRunnerWithWatch(context.Background(), repo, branchRef, "true", "", snapshotModeBoth, watchModePoll, time.Second, time.Second, statePath)
+		if err != nil {
+			t.Fatalf("newSnapshotRunnerWithWatch failed: %v", err)
+		}
+
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("first dirty content"), 0o644); err != nil {
+			t.Fatalf("write first dirty content failed: %v", err)
+		}
+		firstSignature, err := runner.pollChangeSignature()
+		if err != nil {
+			t.Fatalf("pollChangeSignature first failed: %v", err)
+		}
+		if firstSignature == "" {
+			t.Fatalf("expected first dirty signature")
+		}
+
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("second dirty content"), 0o644); err != nil {
+			t.Fatalf("write second dirty content failed: %v", err)
+		}
+		secondSignature, err := runner.pollChangeSignature()
+		if err != nil {
+			t.Fatalf("pollChangeSignature second failed: %v", err)
+		}
+		if secondSignature == firstSignature {
+			t.Fatalf("expected repeated dirty file edit to change poll signature")
+		}
+	})
+}
+
+func TestPollingDetectsRepeatedUntrackedFileContentChanges(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		statePath, err := stateFilePath(repo)
+		if err != nil {
+			t.Fatalf("stateFilePath failed: %v", err)
+		}
+		runner, err := newSnapshotRunnerWithWatch(context.Background(), repo, branchRef, "true", "", snapshotModeWorking, watchModePoll, time.Second, time.Second, statePath)
+		if err != nil {
+			t.Fatalf("newSnapshotRunnerWithWatch failed: %v", err)
+		}
+
+		untrackedPath := filepath.Join(repo, "notes.txt")
+		if err := os.WriteFile(untrackedPath, []byte("first note"), 0o644); err != nil {
+			t.Fatalf("write first untracked content failed: %v", err)
+		}
+		firstSignature, err := runner.pollChangeSignature()
+		if err != nil {
+			t.Fatalf("pollChangeSignature first failed: %v", err)
+		}
+		if firstSignature == "" {
+			t.Fatalf("expected untracked signature")
+		}
+
+		if err := os.WriteFile(untrackedPath, []byte("second note"), 0o644); err != nil {
+			t.Fatalf("write second untracked content failed: %v", err)
+		}
+		secondSignature, err := runner.pollChangeSignature()
+		if err != nil {
+			t.Fatalf("pollChangeSignature second failed: %v", err)
+		}
+		if secondSignature == firstSignature {
+			t.Fatalf("expected repeated untracked edit to change poll signature")
+		}
+	})
+}
+
+func TestPollingDetectsRepeatedStagedContentChanges(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		statePath, err := stateFilePath(repo)
+		if err != nil {
+			t.Fatalf("stateFilePath failed: %v", err)
+		}
+		runner, err := newSnapshotRunnerWithWatch(context.Background(), repo, branchRef, "true", "", snapshotModeStaged, watchModePoll, time.Second, time.Second, statePath)
+		if err != nil {
+			t.Fatalf("newSnapshotRunnerWithWatch failed: %v", err)
+		}
+
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("first staged content"), 0o644); err != nil {
+			t.Fatalf("write first staged content failed: %v", err)
+		}
+		runGit(t, repo, "add", "file.txt")
+		firstSignature, err := runner.pollChangeSignature()
+		if err != nil {
+			t.Fatalf("pollChangeSignature first failed: %v", err)
+		}
+		if firstSignature == "" {
+			t.Fatalf("expected staged signature")
+		}
+
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("second staged content"), 0o644); err != nil {
+			t.Fatalf("write second staged content failed: %v", err)
+		}
+		runGit(t, repo, "add", "file.txt")
+		secondSignature, err := runner.pollChangeSignature()
+		if err != nil {
+			t.Fatalf("pollChangeSignature second failed: %v", err)
+		}
+		if secondSignature == firstSignature {
+			t.Fatalf("expected repeated staged content change to change poll signature")
+		}
+	})
+}
+
 func TestStartCommandWatchFlagValidation(t *testing.T) {
 	requireIntegration(t)
 	repo := createTestRepo(t)

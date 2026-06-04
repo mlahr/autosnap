@@ -2,9 +2,13 @@ package autosnap
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -449,16 +453,93 @@ func (r *snapshotRunner) pollChangeSignature() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	paths := parsePorcelainStatusPaths(result.Stdout)
-	filtered := make([]string, 0, len(paths))
-	for _, rel := range paths {
-		rel = filepath.ToSlash(rel)
-		if rel == "" || r.shouldIgnorePath(rel) {
-			continue
-		}
-		filtered = append(filtered, rel)
+
+	mode, err := normalizeSnapshotMode(r.snapshotMode)
+	if err != nil {
+		return "", err
 	}
-	return strings.Join(filtered, "\x00"), nil
+
+	entries := parsePorcelainStatusEntries(result.Stdout)
+	parts := make([]string, 0, len(entries)*2)
+	for _, entry := range entries {
+		entry.path = filepath.ToSlash(entry.path)
+		if entry.previousPath != "" {
+			entry.previousPath = filepath.ToSlash(entry.previousPath)
+		}
+		currentIgnored := entry.path == "" || r.shouldIgnorePath(entry.path)
+
+		if !currentIgnored {
+			if mode == snapshotModeBoth || mode == snapshotModeStaged {
+				if entry.hasIndexChange() {
+					state, err := r.indexPathSignature(entry.path, entry.indexStatus())
+					if err != nil {
+						return "", err
+					}
+					parts = append(parts, "index\x00"+entry.path+"\x00"+state)
+				}
+			}
+
+			if mode == snapshotModeBoth || mode == snapshotModeWorking {
+				if entry.hasWorkingChange() {
+					state, err := r.workingPathSignature(entry.path, entry.worktreeStatus())
+					if err != nil {
+						return "", err
+					}
+					parts = append(parts, "working\x00"+entry.path+"\x00"+state)
+				}
+			}
+		}
+
+		if entry.previousPath != "" && !r.shouldIgnorePath(entry.previousPath) {
+			parts = append(parts, "previous\x00"+entry.previousPath+"\x00"+entry.status)
+		}
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, "\x00"), nil
+}
+
+func (r *snapshotRunner) workingPathSignature(relPath, status string) (string, error) {
+	path := filepath.Join(r.repoRoot, filepath.FromSlash(relPath))
+	info, err := os.Lstat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return status + "\x00missing", nil
+		}
+		return "", err
+	}
+
+	mode := info.Mode()
+	if mode&os.ModeSymlink != 0 {
+		target, err := os.Readlink(path)
+		if err != nil {
+			return "", err
+		}
+		sum := sha256.Sum256([]byte(target))
+		return fmt.Sprintf("%s\x00symlink\x00%s\x00%s", status, mode.String(), hex.EncodeToString(sum[:])), nil
+	}
+
+	if !mode.IsRegular() {
+		return fmt.Sprintf("%s\x00other\x00%s", status, mode.String()), nil
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(content)
+	return fmt.Sprintf("%s\x00file\x00%s\x00%d\x00%s", status, mode.String(), info.Size(), hex.EncodeToString(sum[:])), nil
+}
+
+func (r *snapshotRunner) indexPathSignature(relPath, status string) (string, error) {
+	result, err := runGitCommand(r.ctx, r.repoRoot, nil, "ls-files", "-s", "-z", "--", relPath)
+	if err != nil {
+		return "", err
+	}
+	raw := strings.TrimRight(result.Stdout, "\x00")
+	if raw == "" {
+		return status + "\x00missing", nil
+	}
+	return status + "\x00" + raw, nil
 }
 
 func (r *snapshotRunner) shouldIgnorePath(relPath string) bool {
@@ -535,11 +616,57 @@ func isWatchLimitError(err error) bool {
 }
 
 func parsePorcelainStatusPaths(raw string) []string {
+	entries := parsePorcelainStatusEntries(raw)
+	paths := make([]string, 0, len(entries)*2)
+	for _, entry := range entries {
+		if entry.previousPath != "" {
+			paths = append(paths, entry.previousPath)
+		}
+		paths = append(paths, entry.path)
+	}
+	return paths
+}
+
+type porcelainStatusEntry struct {
+	status       string
+	path         string
+	previousPath string
+}
+
+func (e porcelainStatusEntry) indexStatus() string {
+	if len(e.status) < 1 {
+		return ""
+	}
+	return e.status[:1]
+}
+
+func (e porcelainStatusEntry) worktreeStatus() string {
+	if len(e.status) < 2 {
+		return ""
+	}
+	return e.status[1:2]
+}
+
+func (e porcelainStatusEntry) hasIndexChange() bool {
+	if e.status == "??" {
+		return false
+	}
+	return e.indexStatus() != " "
+}
+
+func (e porcelainStatusEntry) hasWorkingChange() bool {
+	if e.status == "??" {
+		return true
+	}
+	return e.worktreeStatus() != " "
+}
+
+func parsePorcelainStatusEntries(raw string) []porcelainStatusEntry {
 	if raw == "" {
 		return nil
 	}
 	fields := strings.Split(raw, "\x00")
-	paths := make([]string, 0, len(fields))
+	entries := make([]porcelainStatusEntry, 0, len(fields))
 	for i := 0; i < len(fields); i++ {
 		entry := fields[i]
 		if entry == "" || len(entry) < 4 {
@@ -547,13 +674,17 @@ func parsePorcelainStatusPaths(raw string) []string {
 		}
 		status := entry[:2]
 		pathName := entry[3:]
+		statusEntry := porcelainStatusEntry{
+			status: status,
+			path:   pathName,
+		}
 		if status[0] == 'R' || status[0] == 'C' {
 			if i+1 < len(fields) && fields[i+1] != "" {
-				paths = append(paths, fields[i+1])
+				statusEntry.previousPath = fields[i+1]
 				i++
 			}
 		}
-		paths = append(paths, pathName)
+		entries = append(entries, statusEntry)
 	}
-	return paths
+	return entries
 }

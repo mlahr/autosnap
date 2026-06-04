@@ -193,10 +193,10 @@ autosnap start --check "make build" --idle 30 --watch-mode auto
 Watch modes:
 
 - `--watch-mode recursive` (default): recursively watch directories with filesystem events
-- `--watch-mode poll`: poll Git working-tree status without recursive filesystem watches
+- `--watch-mode poll`: poll Git working-tree status and dirty file content without recursive filesystem watches
 - `--watch-mode auto`: try recursive watching, then fall back to polling if the watcher hits the open-file limit
 
-Polling uses `--poll-interval` (`5s` by default).
+Polling uses `--poll-interval` (`5s` by default). Polling tracks content relevant to the configured `--snapshot-mode`, so repeated edits to the same already-dirty file reset the idle timer.
 
 To exclude large paths from triggering autosnap, add a repo-root `.autosnapignore` file:
 
