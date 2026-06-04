@@ -11,6 +11,7 @@ It is implemented as a minimal Go prototype for the MVP command set:
 - `autosnap show <checkpoint>`
 - `autosnap restore <checkpoint>`
 - `autosnap promote <checkpoint>`
+- `autosnap prune`
 
 Checkpoints are stored as Git refs under:
 
@@ -200,6 +201,29 @@ Pass `--force` to skip the clean-state precheck:
 
 ```bash
 autosnap promote --force <checkpoint>
+```
+
+### Prune old checkpoints
+
+`autosnap prune` previews checkpoint refs that match the current branch and a retention policy.
+Pass `--apply` to delete the matching refs.
+
+Scope flags:
+
+- `--current-branch` (default)
+- `--branch <name>`
+- `--all-branches`
+
+Retention policy flags:
+
+- `--keep N`: keep the newest N checkpoints per branch and prune older checkpoints
+- `--older-than <duration>`: prune checkpoints older than a duration such as `24h` or `7d`
+
+Examples:
+
+```bash
+autosnap prune --current-branch --keep 20
+autosnap prune --all-branches --older-than 30d --apply
 ```
 
 ---

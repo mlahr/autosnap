@@ -1260,6 +1260,221 @@ func TestPromoteCommandNoOpsWhenCheckpointMatchesHead(t *testing.T) {
 	})
 }
 
+func TestParsePruneDuration(t *testing.T) {
+	duration, err := parsePruneDuration("7d")
+	if err != nil {
+		t.Fatalf("parsePruneDuration day shorthand failed: %v", err)
+	}
+	if duration != 7*24*time.Hour {
+		t.Fatalf("expected 7 days, got %s", duration)
+	}
+
+	duration, err = parsePruneDuration("24h")
+	if err != nil {
+		t.Fatalf("parsePruneDuration go duration failed: %v", err)
+	}
+	if duration != 24*time.Hour {
+		t.Fatalf("expected 24 hours, got %s", duration)
+	}
+
+	if _, err := parsePruneDuration("-1h"); err == nil {
+		t.Fatalf("expected negative duration to fail")
+	}
+}
+
+func TestPruneCommandRejectsInvalidScopeAndPolicy(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		tests := []struct {
+			name string
+			args []string
+			want string
+		}{
+			{
+				name: "multiple scopes",
+				args: []string{"prune", "--current-branch", "--all-branches", "--keep", "1"},
+				want: "at most one scope",
+			},
+			{
+				name: "missing policy",
+				args: []string{"prune", "--current-branch"},
+				want: "exactly one retention policy",
+			},
+			{
+				name: "multiple policies",
+				args: []string{"prune", "--current-branch", "--keep", "1", "--older-than", "7d"},
+				want: "exactly one retention policy",
+			},
+			{
+				name: "negative keep",
+				args: []string{"prune", "--current-branch", "--keep", "-1"},
+				want: "--keep must be non-negative",
+			},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+				root.AddCommand(newPruneCommand())
+				root.SetArgs(tc.args)
+
+				err := root.Execute()
+				if err == nil {
+					t.Fatalf("expected prune to fail")
+				}
+				if !strings.Contains(err.Error(), tc.want) {
+					t.Fatalf("expected error containing %q, got %v", tc.want, err)
+				}
+			})
+		}
+	})
+}
+
+func TestPruneCommandDryRunKeepsRefs(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		oldest := createAutosnapTestCommitRef(t, repo, branchRef, "20200101T000000Z", "old checkpoint message")
+		middle := createAutosnapTestCommitRef(t, repo, branchRef, "20210101T000000Z", "middle checkpoint message")
+		newest := createAutosnapTestRef(t, repo, branchRef, "20220101T000000Z")
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newPruneCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"prune", "--keep", "1"})
+
+		if err := root.Execute(); err != nil {
+			t.Fatalf("prune dry run failed: %v", err)
+		}
+
+		output := buf.String()
+		if !strings.Contains(output, "dry run: 2 checkpoint(s) would be pruned") {
+			t.Fatalf("expected dry-run count, got %q", output)
+		}
+		if !strings.Contains(output, oldest) || !strings.Contains(output, middle) {
+			t.Fatalf("expected old refs in dry-run output, got %q", output)
+		}
+		if !strings.Contains(output, "old checkpoint message") || !strings.Contains(output, "middle checkpoint message") {
+			t.Fatalf("expected commit messages in dry-run output, got %q", output)
+		}
+		for _, ref := range []string{oldest, middle, newest} {
+			if !gitRefExists(t, repo, ref) {
+				t.Fatalf("expected dry-run to keep ref %s", ref)
+			}
+		}
+	})
+}
+
+func TestPruneCommandApplyDeletesKeptOverflow(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		oldest := createAutosnapTestRef(t, repo, branchRef, "20200101T000000Z")
+		middle := createAutosnapTestRef(t, repo, branchRef, "20210101T000000Z")
+		newest := createAutosnapTestRef(t, repo, branchRef, "20220101T000000Z")
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newPruneCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"prune", "--current-branch", "--keep", "1", "--apply"})
+
+		if err := root.Execute(); err != nil {
+			t.Fatalf("prune apply failed: %v", err)
+		}
+		if !strings.Contains(buf.String(), "pruned 2 checkpoint(s)") {
+			t.Fatalf("expected applied count, got %q", buf.String())
+		}
+		if gitRefExists(t, repo, oldest) || gitRefExists(t, repo, middle) {
+			t.Fatalf("expected old refs to be deleted")
+		}
+		if !gitRefExists(t, repo, newest) {
+			t.Fatalf("expected newest ref to be kept")
+		}
+	})
+}
+
+func TestPruneCommandOlderThanSupportsDayScope(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		oldRef := createAutosnapTestRef(t, repo, branchRef, "20200101T000000Z")
+		futureRef := createAutosnapTestRef(t, repo, branchRef, "29990101T000000Z")
+
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newPruneCommand())
+		root.SetArgs([]string{"prune", "--current-branch", "--older-than", "7d", "--apply"})
+
+		if err := root.Execute(); err != nil {
+			t.Fatalf("prune older-than failed: %v", err)
+		}
+		if gitRefExists(t, repo, oldRef) {
+			t.Fatalf("expected old ref to be deleted")
+		}
+		if !gitRefExists(t, repo, futureRef) {
+			t.Fatalf("expected future ref to be kept")
+		}
+	})
+}
+
+func TestPruneCommandBranchAndAllBranchScopes(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		currentRef := createAutosnapTestRef(t, repo, branchRef, "20200101T000000Z")
+		featureRef := createAutosnapTestRef(t, repo, "feature/foo", "20200101T000000Z")
+
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newPruneCommand())
+		root.SetArgs([]string{"prune", "--branch", "feature/foo", "--keep", "0", "--apply"})
+
+		if err := root.Execute(); err != nil {
+			t.Fatalf("branch prune failed: %v", err)
+		}
+		if !gitRefExists(t, repo, currentRef) {
+			t.Fatalf("expected current branch ref to remain")
+		}
+		if gitRefExists(t, repo, featureRef) {
+			t.Fatalf("expected feature branch ref to be deleted")
+		}
+
+		root = &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newPruneCommand())
+		root.SetArgs([]string{"prune", "--all-branches", "--keep", "0", "--apply"})
+
+		if err := root.Execute(); err != nil {
+			t.Fatalf("all-branches prune failed: %v", err)
+		}
+		if gitRefExists(t, repo, currentRef) {
+			t.Fatalf("expected all-branches prune to delete current ref")
+		}
+	})
+}
+
 func TestComputeWorktreeTreeSnapshotModes(t *testing.T) {
 	requireIntegration(t)
 	repo := createTestRepo(t)
@@ -1364,6 +1579,35 @@ func testTreeFileContent(t *testing.T, repoRoot, tree, filePath string) string {
 	t.Helper()
 	content := runGitOutput(t, repoRoot, "show", tree+":"+filePath)
 	return strings.TrimSuffix(content, "\n")
+}
+
+func createAutosnapTestRef(t *testing.T, repoRoot, branchRef, timestamp string) string {
+	t.Helper()
+	ref := snapshotRef(branchRef, timestamp)
+	commit := runGitOutput(t, repoRoot, "rev-parse", "HEAD")
+	runGit(t, repoRoot, "update-ref", ref, commit)
+	return ref
+}
+
+func createAutosnapTestCommitRef(t *testing.T, repoRoot, branchRef, timestamp, message string) string {
+	t.Helper()
+	tree := runGitOutput(t, repoRoot, "rev-parse", "HEAD^{tree}")
+	parent := runGitOutput(t, repoRoot, "rev-parse", "HEAD")
+	result, err := runGitCommandWithInput(context.Background(), repoRoot, nil, message, "commit-tree", tree, "-p", parent, "-F", "-")
+	if err != nil {
+		t.Fatalf("create test commit failed: %v", err)
+	}
+	commit := strings.TrimSpace(result.Stdout)
+	ref := snapshotRef(branchRef, timestamp)
+	runGit(t, repoRoot, "update-ref", ref, commit)
+	return ref
+}
+
+func gitRefExists(t *testing.T, repoRoot, ref string) bool {
+	t.Helper()
+	cmd := exec.Command("git", "rev-parse", "--verify", ref)
+	cmd.Dir = repoRoot
+	return cmd.Run() == nil
 }
 
 func TestCreateCheckpointUsesCustomMessage(t *testing.T) {

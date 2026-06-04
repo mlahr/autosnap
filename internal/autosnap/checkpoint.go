@@ -34,6 +34,7 @@ type checkpointRefInfo struct {
 	Ref       string
 	Commit    string
 	Timestamp string
+	Branch    string
 }
 
 type gitPosition struct {
@@ -359,13 +360,27 @@ func getLatestCheckpointForBranch(ctx context.Context, repoRoot, branchRef strin
 
 func listCheckpointRefsForBranch(ctx context.Context, repoRoot, branchRef string) ([]checkpointRefInfo, error) {
 	refPrefix := snapshotRefPrefix(branchRef)
+	return listCheckpointRefsUnderPrefix(ctx, repoRoot, refPrefix, branchRef)
+}
+
+func listCheckpointRefsForAllBranches(ctx context.Context, repoRoot string) ([]checkpointRefInfo, error) {
+	return listCheckpointRefsUnderPrefix(ctx, repoRoot, path.Join("refs", "autosnapshots"), "")
+}
+
+func listCheckpointRefsUnderPrefix(ctx context.Context, repoRoot, refPrefix, branchRef string) ([]checkpointRefInfo, error) {
+	refPattern := refPrefix + "/*"
+	if branchRef == "" {
+		refPattern = refPrefix
+	}
+
 	result, err := runGitCommand(
 		ctx,
 		repoRoot,
 		nil,
 		"for-each-ref",
+		"--sort=refname",
 		"--format=%(refname) %(objectname:short)",
-		refPrefix+"/*",
+		refPattern,
 	)
 	if err != nil {
 		return nil, err
@@ -385,14 +400,31 @@ func listCheckpointRefsForBranch(ctx context.Context, repoRoot, branchRef string
 
 		refName := parts[0]
 		sha := parts[1]
+		timestamp := path.Base(refName)
+		branch := branchRef
+		if branch == "" {
+			branch = branchFromCheckpointRef(refName)
+		}
 		refs = append(refs, checkpointRefInfo{
 			Ref:       refName,
 			Commit:    sha,
-			Timestamp: path.Base(refName),
+			Timestamp: timestamp,
+			Branch:    branch,
 		})
 	}
 
 	return refs, nil
+}
+
+func branchFromCheckpointRef(ref string) string {
+	const prefix = "refs/autosnapshots/"
+	if !strings.HasPrefix(ref, prefix) {
+		return ""
+	}
+
+	withoutPrefix := strings.TrimPrefix(ref, prefix)
+	timestamp := path.Base(ref)
+	return strings.TrimSuffix(withoutPrefix, "/"+timestamp)
 }
 
 func resolveCheckpointRefForArg(ctx context.Context, repoRoot, branchRef, arg string) (string, error) {
