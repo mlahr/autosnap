@@ -6,8 +6,14 @@ import (
 	autosnap "autosnap/internal/autosnap"
 )
 
+var version = "dev"
+
 func main() {
-	if err := autosnap.NewRootCommand().Execute(); err != nil {
+	root := autosnap.NewRootCommand()
+	root.Version = version
+	root.SetVersionTemplate("autosnap {{.Version}}\n")
+
+	if err := root.Execute(); err != nil {
 		os.Exit(1)
 	}
 }

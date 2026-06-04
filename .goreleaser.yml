@@ -1,0 +1,46 @@
+version: 2
+
+project_name: autosnap
+
+builds:
+  - id: autosnap
+    main: ./cmd/autosnap
+    binary: autosnap
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - id: tarball
+    builds:
+      - autosnap
+    format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+nfpms:
+  - id: deb
+    package_name: autosnap
+    builds:
+      - autosnap
+    formats:
+      - deb
+    maintainer: "Michael Lahr"
+    description: "Local checkpointing for Git worktrees."
+    homepage: "https://github.com/mlahr/autosnap"
+    bindir: /usr/bin
+
+release:
+  github:
+    owner: mlahr
+    name: autosnap

@@ -45,6 +45,28 @@ This creates a local `./autosnap` binary.
 
 ## Install
 
+Linux (amd64) from GitHub Releases:
+
+1. Download the `autosnap_*_linux_amd64.tar.gz` or `autosnap_*_linux_amd64.deb` asset from the release page.
+2. For tar.gz:
+
+```bash
+tar -xzf autosnap_*_linux_amd64.tar.gz
+sudo install -m 0755 autosnap /usr/local/bin/autosnap
+```
+
+3. For .deb:
+
+```bash
+sudo dpkg -i autosnap_*_linux_amd64.deb
+```
+
+Build from source:
+
+```bash
+go build -o autosnap ./cmd/autosnap
+```
+
 Install into your Go bin path:
 
 ```bash
@@ -298,6 +320,34 @@ autosnap config show
 ```
 
 Use `--force` with `config init` to overwrite an existing config.
+
+## Release (Linux amd64/arm64 + .deb)
+
+Releases are built by GitHub Actions using GoReleaser on tag pushes.
+
+Release steps:
+
+1. Create a version tag and push it:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+2. Wait for the `release` workflow to finish.
+3. Download assets from the GitHub release page:
+
+- `autosnap_*_linux_amd64.tar.gz`
+- `autosnap_*_linux_arm64.tar.gz`
+- `autosnap_*_linux_amd64.deb`
+- `autosnap_*_linux_arm64.deb`
+- `checksums.txt`
+
+Local dry run (optional):
+
+```bash
+goreleaser release --snapshot --clean
+```
 
 ---
 
