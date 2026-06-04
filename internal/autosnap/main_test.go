@@ -1382,8 +1382,8 @@ func TestPruneCommandApplyDeletesKeptOverflow(t *testing.T) {
 			t.Fatalf("detectRepository failed: %v", err)
 		}
 
-		oldest := createAutosnapTestRef(t, repo, branchRef, "20200101T000000Z")
-		middle := createAutosnapTestRef(t, repo, branchRef, "20210101T000000Z")
+		oldest := createAutosnapTestCommitRef(t, repo, branchRef, "20200101T000000Z", "old apply checkpoint")
+		middle := createAutosnapTestCommitRef(t, repo, branchRef, "20210101T000000Z", "middle apply checkpoint")
 		newest := createAutosnapTestRef(t, repo, branchRef, "20220101T000000Z")
 
 		buf := &bytes.Buffer{}
@@ -1398,6 +1398,9 @@ func TestPruneCommandApplyDeletesKeptOverflow(t *testing.T) {
 		}
 		if !strings.Contains(buf.String(), "pruned 2 checkpoint(s)") {
 			t.Fatalf("expected applied count, got %q", buf.String())
+		}
+		if !strings.Contains(buf.String(), "old apply checkpoint") || !strings.Contains(buf.String(), "middle apply checkpoint") {
+			t.Fatalf("expected applied output to include commit messages, got %q", buf.String())
 		}
 		if gitRefExists(t, repo, oldest) || gitRefExists(t, repo, middle) {
 			t.Fatalf("expected old refs to be deleted")

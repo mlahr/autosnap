@@ -95,6 +95,7 @@ func newPruneCommand() *cobra.Command {
 				return nil
 			}
 
+			rows := pruneDisplayRows(ctx, repoRoot, selected)
 			if apply {
 				for _, ref := range selected {
 					if _, err := runGitCommand(ctx, repoRoot, nil, "update-ref", "-d", ref.Ref); err != nil {
@@ -106,12 +107,8 @@ func newPruneCommand() *cobra.Command {
 				fmt.Fprintf(out, "dry run: %d checkpoint(s) would be pruned\n", len(selected))
 			}
 
-			for _, ref := range selected {
-				summary := "unknown"
-				if message, err := getCommitMessage(ctx, repoRoot, ref.Ref); err == nil {
-					summary = checkpointListSummary(message)
-				}
-				fmt.Fprintf(out, "%s %s %s %s\n", ref.Timestamp, ref.Commit, ref.Ref, summary)
+			for _, row := range rows {
+				fmt.Fprintf(out, "%s %s %s %s\n", row.Timestamp, row.Commit, row.Ref, row.Summary)
 			}
 			return nil
 		},
@@ -125,6 +122,30 @@ func newPruneCommand() *cobra.Command {
 	cmd.Flags().StringVar(&olderThan, "older-than", "", "Prune checkpoints older than a duration such as 24h or 7d")
 	cmd.Flags().BoolVar(&apply, "apply", false, "Delete matching checkpoint refs")
 	return cmd
+}
+
+type pruneDisplayRow struct {
+	Ref       string
+	Commit    string
+	Timestamp string
+	Summary   string
+}
+
+func pruneDisplayRows(ctx context.Context, repoRoot string, refs []checkpointRefInfo) []pruneDisplayRow {
+	rows := make([]pruneDisplayRow, 0, len(refs))
+	for _, ref := range refs {
+		summary := "unknown"
+		if message, err := getCommitMessage(ctx, repoRoot, ref.Ref); err == nil {
+			summary = checkpointListSummary(message)
+		}
+		rows = append(rows, pruneDisplayRow{
+			Ref:       ref.Ref,
+			Commit:    ref.Commit,
+			Timestamp: ref.Timestamp,
+			Summary:   summary,
+		})
+	}
+	return rows
 }
 
 func checkpointsPrunedByKeep(refs []checkpointRefInfo, keep int) ([]checkpointRefInfo, error) {
