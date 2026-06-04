@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -59,10 +60,11 @@ func newListCommand() *cobra.Command {
 			}
 
 			for _, cp := range checkpoints {
+				displayTimestamp := formatCheckpointTimestampForList(cp.Timestamp)
 				if allBranches {
-					fmt.Fprintf(out, "%s %s %s %s\n", cp.Branch, cp.Timestamp, cp.Commit, cp.Summary)
+					fmt.Fprintf(out, "%s %s %s %s\n", cp.Branch, displayTimestamp, cp.Commit, cp.Summary)
 				} else {
-					fmt.Fprintf(out, "%s %s %s\n", cp.Timestamp, cp.Commit, cp.Summary)
+					fmt.Fprintf(out, "%s %s %s\n", displayTimestamp, cp.Commit, cp.Summary)
 				}
 			}
 
@@ -73,4 +75,12 @@ func newListCommand() *cobra.Command {
 	cmd.Flags().StringVar(&branch, "branch", "", "List checkpoints for a specific branch")
 	cmd.Flags().BoolVar(&allBranches, "all", false, "List checkpoints for all branches")
 	return cmd
+}
+
+func formatCheckpointTimestampForList(timestamp string) string {
+	parsed, err := time.Parse("20060102T150405Z", timestamp)
+	if err != nil {
+		return timestamp
+	}
+	return parsed.Local().Format("2006-01-02 15:04:05 MST")
 }

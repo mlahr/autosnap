@@ -514,6 +514,21 @@ func TestLogsCommandTail(t *testing.T) {
 	})
 }
 
+func TestFormatCheckpointTimestampForList(t *testing.T) {
+	parsed, err := time.Parse("20060102T150405Z", "20210101T000000Z")
+	if err != nil {
+		t.Fatalf("parse timestamp failed: %v", err)
+	}
+	want := parsed.Local().Format("2006-01-02 15:04:05 MST")
+	if got := formatCheckpointTimestampForList("20210101T000000Z"); got != want {
+		t.Fatalf("expected formatted timestamp %q, got %q", want, got)
+	}
+
+	if got := formatCheckpointTimestampForList("not-a-timestamp"); got != "not-a-timestamp" {
+		t.Fatalf("expected invalid timestamp fallback, got %q", got)
+	}
+}
+
 func TestEnsureNoActiveRunForRepo(t *testing.T) {
 	requireIntegration(t)
 	repo := createTestRepo(t)
@@ -1466,8 +1481,12 @@ func TestListCommandBranchAndAllScopes(t *testing.T) {
 			t.Fatalf("detectRepository failed: %v", err)
 		}
 
-		currentRef := createAutosnapTestCommitRef(t, repo, branchRef, "20200101T000000Z", "current branch checkpoint")
-		featureRef := createAutosnapTestCommitRef(t, repo, "feature/foo", "20210101T000000Z", "feature branch checkpoint")
+		currentTimestamp := "20200101T000000Z"
+		featureTimestamp := "20210101T000000Z"
+		currentRef := createAutosnapTestCommitRef(t, repo, branchRef, currentTimestamp, "current branch checkpoint")
+		createAutosnapTestCommitRef(t, repo, "feature/foo", featureTimestamp, "feature branch checkpoint")
+		currentDisplayTimestamp := formatCheckpointTimestampForList(currentTimestamp)
+		featureDisplayTimestamp := formatCheckpointTimestampForList(featureTimestamp)
 
 		buf := &bytes.Buffer{}
 		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
@@ -1481,8 +1500,11 @@ func TestListCommandBranchAndAllScopes(t *testing.T) {
 		}
 
 		output := buf.String()
-		if !strings.Contains(output, "20210101T000000Z") || !strings.Contains(output, "feature branch checkpoint") {
+		if !strings.Contains(output, featureDisplayTimestamp) || !strings.Contains(output, "feature branch checkpoint") {
 			t.Fatalf("expected feature checkpoint in branch list output, got %q", output)
+		}
+		if strings.Contains(output, featureTimestamp) {
+			t.Fatalf("expected branch list output to use formatted timestamp, got %q", output)
 		}
 		if strings.Contains(output, currentRef) || strings.Contains(output, "current branch checkpoint") {
 			t.Fatalf("expected branch list to exclude current checkpoint %s, got %q", currentRef, output)
@@ -1506,8 +1528,11 @@ func TestListCommandBranchAndAllScopes(t *testing.T) {
 		if !strings.Contains(output, "current branch checkpoint") || !strings.Contains(output, "feature branch checkpoint") {
 			t.Fatalf("expected all list output to include both checkpoint summaries, got %q", output)
 		}
-		if !strings.Contains(output, path.Base(currentRef)) || !strings.Contains(output, path.Base(featureRef)) {
+		if !strings.Contains(output, currentDisplayTimestamp) || !strings.Contains(output, featureDisplayTimestamp) {
 			t.Fatalf("expected all list output to include both timestamps, got %q", output)
+		}
+		if strings.Contains(output, currentTimestamp) || strings.Contains(output, featureTimestamp) {
+			t.Fatalf("expected all list output to use formatted timestamps, got %q", output)
 		}
 	})
 }
