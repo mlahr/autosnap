@@ -1,4 +1,4 @@
-package main
+package autosnap
 
 import (
 	"bytes"
@@ -115,13 +115,29 @@ func gitDir(ctx context.Context, repoRoot string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Clean(strings.TrimSpace(result.Stdout)), nil
+	gitDirPath := filepath.Clean(strings.TrimSpace(result.Stdout))
+	if !filepath.IsAbs(gitDirPath) {
+		gitDirPath = filepath.Join(repoRoot, gitDirPath)
+	}
+
+	return filepath.Clean(gitDirPath), nil
 }
 
 func stateFilePath(repoRoot string) (string, error) {
-	gitDirectory, err := runGitCommand(context.Background(), repoRoot, nil, "rev-parse", "--git-dir")
+	gitDirectory, err := gitDir(context.Background(), repoRoot)
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(strings.TrimSpace(gitDirectory.Stdout), "autosnap", "state.json"), nil
+	return filepath.Join(gitDirectory, "autosnap", "state.json"), nil
+}
+
+func isGitIgnored(ctx context.Context, repoRoot string, relPath string) (bool, error) {
+	result, err := runGitCommand(ctx, repoRoot, nil, "check-ignore", "-q", "--", relPath)
+	if err != nil {
+		if result.ExitCode == 1 {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }

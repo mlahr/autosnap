@@ -5,8 +5,10 @@
 It is implemented as a minimal Go prototype for the MVP command set:
 
 - `autosnap start`
+- `autosnap stop`
 - `autosnap status`
 - `autosnap list`
+- `autosnap show <checkpoint>`
 
 Checkpoints are stored as Git refs under:
 
@@ -30,7 +32,7 @@ and are created only when checks pass.
 From the repo root:
 
 ```bash
-go build -o autosnap .
+go build -o autosnap ./cmd/autosnap
 ```
 
 This creates a local `./autosnap` binary.
@@ -42,10 +44,20 @@ This creates a local `./autosnap` binary.
 Install into your Go bin path:
 
 ```bash
-go install .
+go install ./cmd/autosnap
 ```
 
 Make sure your Go bin directory is on `PATH` (commonly `$(go env GOPATH)/bin`).
+
+## Test
+
+Run the full test suite with:
+
+```bash
+go test ./...
+```
+
+If you run `go test` at the repo root, it may report `no Go files` because command code now lives under `cmd/`. Use `go test ./...` to run all packages (including `internal/autosnap`).
 
 ---
 
@@ -55,9 +67,9 @@ All commands must be run inside a Git worktree.
 
 ### Start watcher and checkpoint creation
 
-```bash
-autosnap start --check "npm test" --idle 60
-```
+`autosnap start --check "npm test" --idle 60`
+
+`autosnap start` runs in the background by default and returns immediately.
 
 What happens:
 
@@ -70,9 +82,26 @@ What happens:
 Example startup output:
 
 ```text
+autosnap started in background (pid=12345, log=path/to/repo/.git/autosnap/autosnap.log)
 autosnap watching /path/to/repo
 branch: feature/foo check: npm test idle: 60s
 ```
+
+When running detached, all watcher logs go to `autosnap.log` under the autosnap state directory (`.git/autosnap/` in a standard worktree).
+
+To keep the process in the current terminal, pass `--foreground`:
+
+```bash
+autosnap start --foreground --check "npm test" --idle 60
+```
+
+### Stop background watcher
+
+```bash
+autosnap stop
+```
+
+Stops the background autosnap process for the current repository.
 
 When an idle check runs:
 
@@ -104,6 +133,28 @@ autosnap list
 
 Lists checkpoints for the current branch, newest-first.
 
+### Show checkpoint
+
+`autosnap show <checkpoint>` 
+
+Shows checkpoint metadata and a stat diff for the checkpoint object.
+
+Pass `--full` to show full patch content:
+
+```bash
+autosnap show --full <checkpoint>
+```
+
+Use `--color` to control syntax highlighting:
+
+- `--color=always` forces ANSI color
+- `--color=never` forces plain text
+- `--color=auto` (default) enables color only for terminal output
+
+```bash
+autosnap show --full --color=always <checkpoint>
+```
+
 ---
 
 ## Notes
@@ -113,4 +164,4 @@ Lists checkpoints for the current branch, newest-first.
 - Unchecked or failed runs are only recorded as status metadata (`status`), not as checkpoint refs.
 - Untracked files are included when tracked through the temporary-index path snapshot.
 - `.git` and common build/artifact directories are ignored by the watcher.
-
+- Additional ignores from Git's own `.gitignore` are respected by file watching.

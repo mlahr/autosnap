@@ -1,4 +1,4 @@
-package main
+package autosnap
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func main() {
+func NewRootCommand() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "autosnap",
 		Short: "Local checkpointing for Git worktrees",
@@ -21,10 +21,10 @@ func main() {
 	root.AddCommand(newStartCommand())
 	root.AddCommand(newStatusCommand())
 	root.AddCommand(newListCommand())
+	root.AddCommand(newShowCommand())
+	root.AddCommand(newStopCommand())
 
-	if err := root.Execute(); err != nil {
-		os.Exit(1)
-	}
+	return root
 }
 
 func waitUntilSignal(stop context.CancelFunc) {

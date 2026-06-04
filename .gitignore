@@ -1,4 +1,4 @@
-autosnap
+/autosnap
 *.exe
 
 # Go build/test artifacts

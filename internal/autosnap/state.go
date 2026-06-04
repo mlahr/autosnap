@@ -1,10 +1,9 @@
-package main
+package autosnap
 
 import (
 	"encoding/json"
 	"errors"
 	"os"
-	"path/filepath"
 )
 
 type autosnapState struct {
@@ -40,14 +39,9 @@ func loadAutosnapState(path string) (autosnapState, error) {
 }
 
 func saveAutosnapState(path string, state autosnapState) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-
 	raw, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return err
 	}
-
-	return os.WriteFile(path, raw, 0o644)
+	return writeFileAtomic(path, raw, 0o644)
 }

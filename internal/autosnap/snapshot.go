@@ -1,4 +1,4 @@
-package main
+package autosnap
 
 import (
 	"context"
@@ -44,6 +44,8 @@ type snapshotRunner struct {
 	pendingAfterRun bool
 	lastChange      time.Time
 	stopped         bool
+	ignoreCache     map[string]bool
+	ignoreCacheMu   sync.RWMutex
 }
 
 func newSnapshotRunner(ctx context.Context, repoRoot, branchRef, checkCommand string, idle time.Duration, statePath string) (*snapshotRunner, error) {
@@ -63,6 +65,9 @@ func newSnapshotRunner(ctx context.Context, repoRoot, branchRef, checkCommand st
 		idle:      idle,
 		statePath: statePath,
 		state:     state,
+		ignoreCache: map[string]bool{
+			"": false,
+		},
 	}, nil
 }
 
@@ -170,8 +175,14 @@ func (r *snapshotRunner) runIdleCheck() {
 }
 
 func (r *snapshotRunner) runCheck() {
+	branchRef, err := r.currentBranchRef()
+	if err != nil {
+		fmt.Println("unable to resolve current branch:", err)
+		return
+	}
+
 	duration, exitCode, err := runShellCheck(r.ctx, r.repoRoot, r.checkCmd)
-	r.state.LastBranch = r.branchRef
+	r.state.LastBranch = branchRef
 	r.state.RepoRoot = r.repoRoot
 	r.state.LastCheckAt = time.Now().UTC().Format(time.RFC3339)
 	r.state.LastCheckStatus = "passed"
@@ -205,7 +216,7 @@ func (r *snapshotRunner) runCheck() {
 		lastTree = r.state.LastCheckpointTree
 	}
 	if lastTree == "" {
-		ref, _, _, err := getLatestCheckpointForBranch(r.ctx, r.repoRoot, r.branchRef)
+		ref, _, _, err := getLatestCheckpointForBranch(r.ctx, r.repoRoot, branchRef)
 		if err == nil && ref != "" {
 			lastTree, _ = getCheckpointTree(r.ctx, r.repoRoot, ref)
 		}
@@ -216,7 +227,7 @@ func (r *snapshotRunner) runCheck() {
 		return
 	}
 
-	ref, commit, err := createCheckpoint(r.ctx, r.repoRoot, r.branchRef, r.checkCmd, r.idle, tree)
+	ref, commit, err := createCheckpoint(r.ctx, r.repoRoot, branchRef, r.checkCmd, r.idle, tree)
 	if err != nil {
 		fmt.Println("unable to create checkpoint:", err)
 		return
@@ -245,7 +256,7 @@ func (r *snapshotRunner) handleEvent(event fsnotify.Event) error {
 	if rel == "." {
 		return nil
 	}
-	if shouldIgnorePath(rel) {
+	if r.shouldIgnorePath(rel) {
 		return nil
 	}
 
@@ -264,6 +275,30 @@ func (r *snapshotRunner) handleEvent(event fsnotify.Event) error {
 	return nil
 }
 
+func (r *snapshotRunner) currentBranchRef() (string, error) {
+	result, err := runGitCommand(r.ctx, r.repoRoot, nil, "branch", "--show-current")
+	if err != nil {
+		return "", err
+	}
+
+	branchRef := strings.TrimSpace(result.Stdout)
+	if branchRef != "" {
+		return branchRef, nil
+	}
+
+	head, err := runGitCommand(r.ctx, r.repoRoot, nil, "rev-parse", "--short", "HEAD")
+	if err != nil {
+		return "", err
+	}
+
+	headSHA := strings.TrimSpace(head.Stdout)
+	if headSHA == "" {
+		return "detached", nil
+	}
+
+	return "detached-" + headSHA, nil
+}
+
 func (r *snapshotRunner) watchDirectoryTree(root string) error {
 	return filepath.WalkDir(root, func(name string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -274,7 +309,7 @@ func (r *snapshotRunner) watchDirectoryTree(root string) error {
 			return nil
 		}
 		rel = filepath.ToSlash(rel)
-		if shouldIgnorePath(rel) {
+		if r.shouldIgnorePath(rel) {
 			if d.IsDir() {
 				return filepath.SkipDir
 			}
@@ -287,14 +322,43 @@ func (r *snapshotRunner) watchDirectoryTree(root string) error {
 	})
 }
 
-func shouldIgnorePath(relPath string) bool {
+func (r *snapshotRunner) shouldIgnorePath(relPath string) bool {
+	if relPath == "." {
+		return false
+	}
+
+	if ignored, ok := r.getIgnoredFromCache(relPath); ok {
+		return ignored
+	}
+
 	segments := strings.Split(relPath, "/")
 	for _, segment := range segments {
 		if _, ok := ignoredPathSegments[segment]; ok {
+			r.setIgnoredInCache(relPath, true)
 			return true
 		}
 	}
-	return false
+
+	ignoredByGit, err := isGitIgnored(context.Background(), r.repoRoot, relPath)
+	if err != nil {
+		return false
+	}
+
+	r.setIgnoredInCache(relPath, ignoredByGit)
+	return ignoredByGit
+}
+
+func (r *snapshotRunner) getIgnoredFromCache(relPath string) (bool, bool) {
+	r.ignoreCacheMu.RLock()
+	defer r.ignoreCacheMu.RUnlock()
+	ignored, ok := r.ignoreCache[relPath]
+	return ignored, ok
+}
+
+func (r *snapshotRunner) setIgnoredInCache(relPath string, ignored bool) {
+	r.ignoreCacheMu.Lock()
+	defer r.ignoreCacheMu.Unlock()
+	r.ignoreCache[relPath] = ignored
 }
 
 func pathBase(raw string) string {
