@@ -1005,6 +1005,204 @@ func TestShowCommandColorModes(t *testing.T) {
 	})
 }
 
+func TestRestoreCommandAppliesCheckpointToWorktreeOnly(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("checkpointed\n"), 0o644); err != nil {
+			t.Fatalf("write checkpoint content failed: %v", err)
+		}
+		gitDirectory, err := gitDir(context.Background(), repo)
+		if err != nil {
+			t.Fatalf("gitDir failed: %v", err)
+		}
+		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
+		if err != nil {
+			t.Fatalf("computeWorktreeTree failed: %v", err)
+		}
+		ref, _, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree, "restore me")
+		if err != nil {
+			t.Fatalf("create checkpoint failed: %v", err)
+		}
+		runGit(t, repo, "reset", "--hard", "HEAD")
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newRestoreCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"restore", path.Base(ref)})
+
+		if err := root.Execute(); err != nil {
+			t.Fatalf("restore command failed: %v", err)
+		}
+
+		got, err := os.ReadFile(filepath.Join(repo, "file.txt"))
+		if err != nil {
+			t.Fatalf("read restored file failed: %v", err)
+		}
+		if string(got) != "checkpointed\n" {
+			t.Fatalf("expected restored file content, got %q", got)
+		}
+		runGit(t, repo, "diff", "--cached", "--quiet")
+		if status := runGitOutput(t, repo, "status", "--porcelain"); !strings.Contains(status, "file.txt") {
+			t.Fatalf("expected unstaged restored change in status, got %q", status)
+		}
+	})
+}
+
+func TestRestoreCommandRefusesDirtyStateByDefault(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("checkpointed\n"), 0o644); err != nil {
+			t.Fatalf("write checkpoint content failed: %v", err)
+		}
+		gitDirectory, err := gitDir(context.Background(), repo)
+		if err != nil {
+			t.Fatalf("gitDir failed: %v", err)
+		}
+		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
+		if err != nil {
+			t.Fatalf("computeWorktreeTree failed: %v", err)
+		}
+		ref, _, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree, "")
+		if err != nil {
+			t.Fatalf("create checkpoint failed: %v", err)
+		}
+		runGit(t, repo, "reset", "--hard", "HEAD")
+		if err := os.WriteFile(filepath.Join(repo, "dirty.txt"), []byte("dirty\n"), 0o644); err != nil {
+			t.Fatalf("write dirty file failed: %v", err)
+		}
+
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newRestoreCommand())
+		root.SetArgs([]string{"restore", path.Base(ref)})
+
+		err = root.Execute()
+		if err == nil {
+			t.Fatalf("expected restore to refuse dirty worktree")
+		}
+		if !strings.Contains(err.Error(), "clean worktree") {
+			t.Fatalf("expected clean worktree error, got %v", err)
+		}
+	})
+}
+
+func TestPromoteCommandCreatesBranchCommitFromCheckpoint(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		oldHead := runGitOutput(t, repo, "rev-parse", "HEAD")
+
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("promoted\n"), 0o644); err != nil {
+			t.Fatalf("write checkpoint content failed: %v", err)
+		}
+		gitDirectory, err := gitDir(context.Background(), repo)
+		if err != nil {
+			t.Fatalf("gitDir failed: %v", err)
+		}
+		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
+		if err != nil {
+			t.Fatalf("computeWorktreeTree failed: %v", err)
+		}
+		message := "feat: promote checkpoint\n\nbody line"
+		ref, checkpointCommit, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree, message)
+		if err != nil {
+			t.Fatalf("create checkpoint failed: %v", err)
+		}
+		runGit(t, repo, "reset", "--hard", "HEAD")
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newPromoteCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"promote", path.Base(ref)})
+
+		if err := root.Execute(); err != nil {
+			t.Fatalf("promote command failed: %v", err)
+		}
+
+		newHead := runGitOutput(t, repo, "rev-parse", "HEAD")
+		if newHead == oldHead {
+			t.Fatalf("expected promote to create a new HEAD")
+		}
+		if parent := runGitOutput(t, repo, "rev-parse", "HEAD^"); parent != oldHead {
+			t.Fatalf("expected promoted commit parent %s, got %s", oldHead, parent)
+		}
+		if promotedTree := runGitOutput(t, repo, "rev-parse", "HEAD^{tree}"); promotedTree != tree {
+			t.Fatalf("expected promoted tree %s, got %s", tree, promotedTree)
+		}
+		checkpointTree := runGitOutput(t, repo, "rev-parse", checkpointCommit+"^{tree}")
+		if promotedTree := runGitOutput(t, repo, "rev-parse", "HEAD^{tree}"); promotedTree != checkpointTree {
+			t.Fatalf("expected promoted tree to match checkpoint tree %s, got %s", checkpointTree, promotedTree)
+		}
+		if got := runGitOutput(t, repo, "log", "-1", "--pretty=%B"); got != message {
+			t.Fatalf("expected promoted message %q, got %q", message, got)
+		}
+		if status := runGitOutput(t, repo, "status", "--porcelain"); status != "" {
+			t.Fatalf("expected clean status after promote, got %q", status)
+		}
+	})
+}
+
+func TestPromoteCommandNoOpsWhenCheckpointMatchesHead(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		oldHead := runGitOutput(t, repo, "rev-parse", "HEAD")
+
+		gitDirectory, err := gitDir(context.Background(), repo)
+		if err != nil {
+			t.Fatalf("gitDir failed: %v", err)
+		}
+		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
+		if err != nil {
+			t.Fatalf("computeWorktreeTree failed: %v", err)
+		}
+		ref, _, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree, "")
+		if err != nil {
+			t.Fatalf("create checkpoint failed: %v", err)
+		}
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newPromoteCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"promote", path.Base(ref)})
+
+		if err := root.Execute(); err != nil {
+			t.Fatalf("promote command failed: %v", err)
+		}
+		if newHead := runGitOutput(t, repo, "rev-parse", "HEAD"); newHead != oldHead {
+			t.Fatalf("expected HEAD to stay %s, got %s", oldHead, newHead)
+		}
+		if !strings.Contains(buf.String(), "already matches HEAD") {
+			t.Fatalf("expected no-op output, got %q", buf.String())
+		}
+	})
+}
+
 func TestComputeWorktreeTreeSnapshotModes(t *testing.T) {
 	requireIntegration(t)
 	repo := createTestRepo(t)

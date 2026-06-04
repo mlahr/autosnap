@@ -172,6 +172,105 @@ func getCheckpointTree(ctx context.Context, repoRoot, ref string) (string, error
 	return strings.TrimSpace(result.Stdout), nil
 }
 
+func getCommitParent(ctx context.Context, repoRoot, commit string) (string, error) {
+	result, err := runGitCommand(ctx, repoRoot, nil, "rev-list", "--parents", "-n", "1", commit)
+	if err != nil {
+		return "", err
+	}
+
+	fields := strings.Fields(result.Stdout)
+	if len(fields) < 2 {
+		return "", fmt.Errorf("checkpoint commit %q has no parent", commit)
+	}
+
+	return fields[1], nil
+}
+
+func ensureCleanWorktree(ctx context.Context, repoRoot, command string, force bool) error {
+	if force {
+		return nil
+	}
+
+	result, err := runGitCommand(ctx, repoRoot, nil, "status", "--porcelain")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(result.Stdout) != "" {
+		return fmt.Errorf("%s requires a clean worktree and index; pass --force to skip this check", command)
+	}
+
+	return nil
+}
+
+func restoreCheckpoint(ctx context.Context, repoRoot string, meta checkpointRefInfo, force bool) error {
+	if err := ensureCleanWorktree(ctx, repoRoot, "restore", force); err != nil {
+		return err
+	}
+
+	parent, err := getCommitParent(ctx, repoRoot, meta.Commit)
+	if err != nil {
+		return err
+	}
+
+	diff, err := runGitCommand(ctx, repoRoot, nil, "diff", "--binary", parent, meta.Commit)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(diff.Stdout) == "" {
+		return nil
+	}
+
+	if _, err := runGitCommandWithInput(ctx, repoRoot, nil, diff.Stdout, "apply", "--binary"); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func promoteCheckpoint(ctx context.Context, repoRoot string, meta checkpointRefInfo, force bool) (string, bool, error) {
+	if err := ensureCleanWorktree(ctx, repoRoot, "promote", force); err != nil {
+		return "", false, err
+	}
+
+	headResult, err := runGitCommand(ctx, repoRoot, nil, "rev-parse", "HEAD")
+	if err != nil {
+		return "", false, err
+	}
+	head := strings.TrimSpace(headResult.Stdout)
+
+	checkpointTree, err := getCheckpointTree(ctx, repoRoot, meta.Commit)
+	if err != nil {
+		return "", false, err
+	}
+	headTree, err := getCheckpointTree(ctx, repoRoot, "HEAD")
+	if err != nil {
+		return "", false, err
+	}
+	if checkpointTree == headTree {
+		return head, false, nil
+	}
+
+	message, err := getCommitMessage(ctx, repoRoot, meta.Commit)
+	if err != nil {
+		return "", false, err
+	}
+
+	commitResult, err := runGitCommandWithInput(ctx, repoRoot, nil, strings.TrimSpace(message), "commit-tree", checkpointTree, "-p", head, "-F", "-")
+	if err != nil {
+		return "", false, err
+	}
+	commit := strings.TrimSpace(commitResult.Stdout)
+	if commit == "" {
+		return "", false, fmt.Errorf("promote did not create a commit")
+	}
+
+	if _, err := runGitCommand(ctx, repoRoot, nil, "reset", "--hard", commit); err != nil {
+		return "", false, err
+	}
+
+	return commit, true, nil
+}
+
 func getLatestCheckpointForBranch(ctx context.Context, repoRoot, branchRef string) (string, string, string, error) {
 	refPrefix := snapshotRefPrefix(branchRef)
 	result, err := runGitCommand(

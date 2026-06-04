@@ -9,6 +9,8 @@ It is implemented as a minimal Go prototype for the MVP command set:
 - `autosnap status`
 - `autosnap list`
 - `autosnap show <checkpoint>`
+- `autosnap restore <checkpoint>`
+- `autosnap promote <checkpoint>`
 
 Checkpoints are stored as Git refs under:
 
@@ -171,6 +173,32 @@ Use `--color` to control syntax highlighting:
 
 ```bash
 autosnap show --full --color=always <checkpoint>
+```
+
+### Restore checkpoint changes
+
+`autosnap restore <checkpoint>`
+
+Applies the checkpoint diff back into the working tree without staging it or moving `HEAD`.
+By default, restore refuses to run unless the worktree and index are clean.
+
+Pass `--force` to skip the clean-state precheck and let Git apply the patch normally:
+
+```bash
+autosnap restore --force <checkpoint>
+```
+
+### Promote checkpoint to a branch commit
+
+`autosnap promote <checkpoint>`
+
+Creates a normal commit on the current branch using the checkpoint tree and commit message.
+By default, promote refuses to run unless the worktree and index are clean.
+
+Pass `--force` to skip the clean-state precheck:
+
+```bash
+autosnap promote --force <checkpoint>
 ```
 
 ---
