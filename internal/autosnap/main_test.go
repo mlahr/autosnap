@@ -1099,6 +1099,53 @@ func TestRestoreCommandRefusesDirtyStateByDefault(t *testing.T) {
 	})
 }
 
+func TestRestoreCommandReportsGitApplyError(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("checkpointed\n"), 0o644); err != nil {
+			t.Fatalf("write checkpoint content failed: %v", err)
+		}
+		gitDirectory, err := gitDir(context.Background(), repo)
+		if err != nil {
+			t.Fatalf("gitDir failed: %v", err)
+		}
+		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
+		if err != nil {
+			t.Fatalf("computeWorktreeTree failed: %v", err)
+		}
+		ref, _, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree, "")
+		if err != nil {
+			t.Fatalf("create checkpoint failed: %v", err)
+		}
+		runGit(t, repo, "reset", "--hard", "HEAD")
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("conflicting\n"), 0o644); err != nil {
+			t.Fatalf("write conflicting file failed: %v", err)
+		}
+
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newRestoreCommand())
+		root.SetArgs([]string{"restore", "--force", path.Base(ref)})
+
+		err = root.Execute()
+		if err == nil {
+			t.Fatalf("expected restore to report git apply failure")
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, "failed to restore checkpoint") {
+			t.Fatalf("expected restore context in error, got %v", err)
+		}
+		if !strings.Contains(msg, "error:") && !strings.Contains(msg, "patch failed") {
+			t.Fatalf("expected git apply details in error, got %v", err)
+		}
+	})
+}
+
 func TestPromoteCommandCreatesBranchCommitFromCheckpoint(t *testing.T) {
 	requireIntegration(t)
 	repo := createTestRepo(t)

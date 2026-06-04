@@ -19,6 +19,22 @@ type commandResult struct {
 	ExitCode int
 }
 
+func gitCommandError(err error, result commandResult) error {
+	if err == nil {
+		return nil
+	}
+
+	detail := strings.TrimSpace(result.Stderr)
+	if detail == "" {
+		detail = strings.TrimSpace(result.Stdout)
+	}
+	if detail == "" {
+		return err
+	}
+
+	return fmt.Errorf("%w: %s", err, detail)
+}
+
 func runGitCommand(ctx context.Context, dir string, env map[string]string, args ...string) (commandResult, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
