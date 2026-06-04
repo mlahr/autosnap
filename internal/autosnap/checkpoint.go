@@ -21,6 +21,11 @@ const (
 	snapshotModeWorking = "working"
 )
 
+const (
+	commitModeCheckpoint = "checkpoint"
+	commitModeDirect     = "direct"
+)
+
 type checkpointInfo struct {
 	Ref       string
 	Timestamp string
@@ -162,6 +167,17 @@ func normalizeSnapshotMode(mode string) (string, error) {
 	return "", fmt.Errorf("invalid snapshot mode %q (expected both, staged, working)", mode)
 }
 
+func normalizeCommitMode(mode string) (string, error) {
+	if mode == "" {
+		return commitModeCheckpoint, nil
+	}
+	switch mode {
+	case commitModeCheckpoint, commitModeDirect:
+		return mode, nil
+	}
+	return "", fmt.Errorf("invalid commit mode %q (expected checkpoint, direct)", mode)
+}
+
 func createCheckpoint(ctx context.Context, repoRoot, branchRef, checkCommand string, idle time.Duration, tree string, commitMessage string) (string, string, error) {
 	return createCheckpointChecked(ctx, repoRoot, branchRef, "", checkCommand, idle, tree, commitMessage)
 }
@@ -179,6 +195,64 @@ func createCheckpointChecked(ctx context.Context, repoRoot, expectedBranchRef, e
 	}
 
 	ts := currentTimestamp()
+	message := autosnapCommitMessage(commitMessage, ts, position, checkCommand, idle)
+
+	commit, err := createCommitFromTree(ctx, repoRoot, tree, position.Head, message)
+	if err != nil {
+		return "", "", err
+	}
+
+	ref := snapshotRef(position.BranchRef, ts)
+	if _, err := runGitCommand(ctx, repoRoot, nil, "update-ref", ref, commit); err != nil {
+		return "", "", err
+	}
+
+	return ref, commit, nil
+}
+
+func createDirectCommitChecked(ctx context.Context, repoRoot, expectedBranchRef, expectedHead, checkCommand string, idle time.Duration, tree string, commitMessage string) (string, bool, string, error) {
+	branchResult, err := runGitCommand(ctx, repoRoot, nil, "symbolic-ref", "--quiet", "--short", "HEAD")
+	if err != nil || strings.TrimSpace(branchResult.Stdout) == "" {
+		return "", false, "", fmt.Errorf("direct commit mode requires a checked-out branch")
+	}
+
+	position, err := currentGitPosition(ctx, repoRoot)
+	if err != nil {
+		return "", false, "", err
+	}
+	if expectedBranchRef != "" && position.BranchRef != expectedBranchRef {
+		return "", false, "", fmt.Errorf("git branch changed during direct commit: was %s, now %s", expectedBranchRef, position.BranchRef)
+	}
+	if expectedHead != "" && position.Head != expectedHead {
+		return "", false, "", fmt.Errorf("git HEAD changed during direct commit: was %s, now %s", expectedHead, position.Head)
+	}
+
+	headTree, err := getCheckpointTree(ctx, repoRoot, "HEAD")
+	if err != nil {
+		return "", false, "", err
+	}
+	if headTree == tree {
+		return position.Head, false, "", nil
+	}
+
+	ts := currentTimestamp()
+	message := autosnapCommitMessage(commitMessage, ts, position, checkCommand, idle)
+	commit, err := createCommitFromTree(ctx, repoRoot, tree, position.Head, message)
+	if err != nil {
+		return "", false, "", err
+	}
+	if commit == "" {
+		return "", false, "", fmt.Errorf("direct commit did not create a commit")
+	}
+
+	if _, err := runGitCommand(ctx, repoRoot, nil, "reset", "--hard", commit); err != nil {
+		return "", false, "", err
+	}
+
+	return commit, true, ts, nil
+}
+
+func autosnapCommitMessage(commitMessage, timestamp string, position gitPosition, checkCommand string, idle time.Duration) string {
 	base := "unknown"
 	if len(position.Head) >= 7 {
 		base = position.Head[:7]
@@ -187,26 +261,22 @@ func createCheckpointChecked(ctx context.Context, repoRoot, expectedBranchRef, e
 	if message == "" {
 		message = fmt.Sprintf(
 			"autosnap: passing checkpoint %s branch: %s check: %s idle_seconds: %d base: %s",
-			ts,
+			timestamp,
 			position.BranchRef,
 			checkCommand,
 			int(idle.Seconds()),
 			base,
 		)
 	}
+	return message
+}
 
-	commitResult, err := runGitCommandWithInput(ctx, repoRoot, nil, message, "commit-tree", tree, "-p", position.Head, "-F", "-")
+func createCommitFromTree(ctx context.Context, repoRoot, tree, parent, message string) (string, error) {
+	commitResult, err := runGitCommandWithInput(ctx, repoRoot, nil, message, "commit-tree", tree, "-p", parent, "-F", "-")
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
-	commit := strings.TrimSpace(commitResult.Stdout)
-
-	ref := snapshotRef(position.BranchRef, ts)
-	if _, err := runGitCommand(ctx, repoRoot, nil, "update-ref", ref, commit); err != nil {
-		return "", "", err
-	}
-
-	return ref, commit, nil
+	return strings.TrimSpace(commitResult.Stdout), nil
 }
 
 func getCheckpointTree(ctx context.Context, repoRoot, ref string) (string, error) {

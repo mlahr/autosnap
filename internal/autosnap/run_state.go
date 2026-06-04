@@ -27,6 +27,7 @@ type autosnapRunState struct {
 	MsgSourceCmd    string        `json:"msgSourceCmd"`
 	MsgSourceCmdSet bool          `json:"msgSourceCmdSet,omitempty"`
 	SnapshotMode    string        `json:"snapshotMode"`
+	CommitMode      string        `json:"commitMode"`
 	WatchMode       string        `json:"watchMode"`
 	PollInterval    time.Duration `json:"pollInterval"`
 	RunToken        string        `json:"runToken"`

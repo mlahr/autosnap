@@ -44,6 +44,7 @@ type snapshotRunner struct {
 	checkCmd     string
 	msgSourceCmd string
 	snapshotMode string
+	commitMode   string
 	watchMode    string
 	pollInterval time.Duration
 	idle         time.Duration
@@ -65,10 +66,10 @@ type snapshotRunner struct {
 }
 
 func newSnapshotRunner(ctx context.Context, repoRoot, branchRef, checkCommand, msgSourceCommand, snapshotMode string, idle time.Duration, statePath string) (*snapshotRunner, error) {
-	return newSnapshotRunnerWithWatch(ctx, repoRoot, branchRef, checkCommand, msgSourceCommand, snapshotMode, watchModeRecursive, defaultPollInterval, idle, statePath)
+	return newSnapshotRunnerWithWatch(ctx, repoRoot, branchRef, checkCommand, msgSourceCommand, snapshotMode, commitModeCheckpoint, watchModeRecursive, defaultPollInterval, idle, statePath)
 }
 
-func newSnapshotRunnerWithWatch(ctx context.Context, repoRoot, branchRef, checkCommand, msgSourceCommand, snapshotMode, watchMode string, pollInterval, idle time.Duration, statePath string) (*snapshotRunner, error) {
+func newSnapshotRunnerWithWatch(ctx context.Context, repoRoot, branchRef, checkCommand, msgSourceCommand, snapshotMode, commitMode, watchMode string, pollInterval, idle time.Duration, statePath string) (*snapshotRunner, error) {
 	state, err := loadAutosnapState(statePath)
 	if err != nil {
 		return nil, err
@@ -79,6 +80,13 @@ func newSnapshotRunnerWithWatch(ctx context.Context, repoRoot, branchRef, checkC
 	normalizedWatchMode, err := normalizeWatchMode(watchMode)
 	if err != nil {
 		return nil, err
+	}
+	normalizedCommitMode, err := normalizeCommitMode(commitMode)
+	if err != nil {
+		return nil, err
+	}
+	if normalizedCommitMode == commitModeDirect && snapshotMode != snapshotModeBoth {
+		return nil, errors.New("commit_mode direct requires snapshot_mode both")
 	}
 	if pollInterval <= 0 {
 		return nil, errors.New("poll interval must be greater than 0")
@@ -95,6 +103,7 @@ func newSnapshotRunnerWithWatch(ctx context.Context, repoRoot, branchRef, checkC
 		checkCmd:     checkCommand,
 		msgSourceCmd: msgSourceCommand,
 		snapshotMode: snapshotMode,
+		commitMode:   normalizedCommitMode,
 		watchMode:    normalizedWatchMode,
 		pollInterval: pollInterval,
 		idle:         idle,
@@ -321,7 +330,7 @@ func (r *snapshotRunner) runCheck() {
 
 	previousCheckpointRef, previousCheckpointTree := resolvePreviousCheckpoint(r.ctx, r.repoRoot, branchRef, previousState)
 
-	if previousCheckpointTree != "" && previousCheckpointTree == tree {
+	if r.commitMode == commitModeCheckpoint && previousCheckpointTree != "" && previousCheckpointTree == tree {
 		logln("no meaningful diff; checkpoint skipped")
 		return
 	}
@@ -349,24 +358,50 @@ func (r *snapshotRunner) runCheck() {
 		}
 	}
 
-	ref, commit, err := createCheckpointChecked(r.ctx, r.repoRoot, branchRef, position.Head, r.checkCmd, r.idle, tree, commitMessage)
-	if err != nil {
-		logf("unable to create checkpoint: %v\n", err)
-		return
-	}
+	switch r.commitMode {
+	case commitModeDirect:
+		commit, created, ts, err := createDirectCommitChecked(r.ctx, r.repoRoot, branchRef, position.Head, r.checkCmd, r.idle, tree, commitMessage)
+		if err != nil {
+			logf("unable to create direct commit: %v\n", err)
+			return
+		}
+		if !created {
+			logln("no meaningful diff; direct commit skipped")
+			return
+		}
 
-	r.state.LastCheckpointRef = ref
-	r.state.LastCheckpointAt = pathBase(ref)
-	r.state.LastCheckpointTree = tree
-	if err := saveAutosnapState(r.statePath, r.state); err != nil {
-		logf("unable to persist state: %v\n", err)
-	}
+		r.state.LastCheckpointRef = commit
+		r.state.LastCheckpointAt = ts
+		r.state.LastCheckpointTree = tree
+		if err := saveAutosnapState(r.statePath, r.state); err != nil {
+			logf("unable to persist state: %v\n", err)
+		}
 
-	commitShort := commit
-	if len(commitShort) > 7 {
-		commitShort = commitShort[:7]
+		commitShort := commit
+		if len(commitShort) > 7 {
+			commitShort = commitShort[:7]
+		}
+		logf("direct commit saved: %s\n", commitShort)
+	default:
+		ref, commit, err := createCheckpointChecked(r.ctx, r.repoRoot, branchRef, position.Head, r.checkCmd, r.idle, tree, commitMessage)
+		if err != nil {
+			logf("unable to create checkpoint: %v\n", err)
+			return
+		}
+
+		r.state.LastCheckpointRef = ref
+		r.state.LastCheckpointAt = pathBase(ref)
+		r.state.LastCheckpointTree = tree
+		if err := saveAutosnapState(r.statePath, r.state); err != nil {
+			logf("unable to persist state: %v\n", err)
+		}
+
+		commitShort := commit
+		if len(commitShort) > 7 {
+			commitShort = commitShort[:7]
+		}
+		logf("checkpoint saved: %s\n", commitShort)
 	}
-	logf("checkpoint saved: %s\n", commitShort)
 }
 
 func resolvePreviousCheckpoint(ctx context.Context, repoRoot, branchRef string, state autosnapState) (string, string) {

@@ -19,6 +19,7 @@ type autosnapConfig struct {
 	Check        string              `toml:"check"`
 	IdleSeconds  int                 `toml:"idle_seconds"`
 	SnapshotMode string              `toml:"snapshot_mode"`
+	CommitMode   string              `toml:"commit_mode"`
 	MsgSourceCmd string              `toml:"msg_source_cmd"`
 	Watch        autosnapWatchConfig `toml:"watch"`
 }
@@ -32,6 +33,7 @@ func defaultAutosnapConfig() autosnapConfig {
 	return autosnapConfig{
 		IdleSeconds:  60,
 		SnapshotMode: snapshotModeBoth,
+		CommitMode:   commitModeCheckpoint,
 		Watch: autosnapWatchConfig{
 			Mode:         watchModeRecursive,
 			PollInterval: defaultPollInterval,
@@ -59,7 +61,7 @@ func loadAutosnapConfig(repoRoot string) (autosnapConfig, bool, error) {
 	return cfg, true, nil
 }
 
-func resolveStartConfig(repoRoot string, cmd *cobra.Command, checkCommand, msgSourceCmd string, idleSeconds int, snapshotMode, watchMode string, pollInterval time.Duration) (autosnapConfig, bool, error) {
+func resolveStartConfig(repoRoot string, cmd *cobra.Command, checkCommand, msgSourceCmd string, idleSeconds int, snapshotMode, commitMode, watchMode string, pollInterval time.Duration) (autosnapConfig, bool, error) {
 	cfg := defaultAutosnapConfig()
 	fileCfg, found, err := loadAutosnapConfig(repoRoot)
 	if err != nil {
@@ -83,6 +85,9 @@ func resolveStartConfig(repoRoot string, cmd *cobra.Command, checkCommand, msgSo
 	if flags.Changed("snapshot-mode") {
 		cfg.SnapshotMode = snapshotMode
 	}
+	if flags.Changed("commit-mode") {
+		cfg.CommitMode = commitMode
+	}
 	if flags.Changed("watch-mode") {
 		cfg.Watch.Mode = watchMode
 	}
@@ -93,6 +98,7 @@ func resolveStartConfig(repoRoot string, cmd *cobra.Command, checkCommand, msgSo
 	cfg.Check = strings.TrimSpace(cfg.Check)
 	cfg.MsgSourceCmd = strings.TrimSpace(cfg.MsgSourceCmd)
 	cfg.SnapshotMode = strings.TrimSpace(cfg.SnapshotMode)
+	cfg.CommitMode = strings.TrimSpace(cfg.CommitMode)
 	cfg.Watch.Mode = strings.TrimSpace(cfg.Watch.Mode)
 
 	if err := validateStartConfig(cfg, flags.Changed("idle"), flags.Changed("poll-interval")); err != nil {
@@ -107,6 +113,18 @@ func resolveStartConfig(repoRoot string, cmd *cobra.Command, checkCommand, msgSo
 		return cfg, found, fmt.Errorf("invalid snapshot_mode %q (expected both, staged, working)", cfg.SnapshotMode)
 	}
 	cfg.SnapshotMode = normalizedSnapshotMode
+
+	normalizedCommitMode, err := normalizeCommitMode(cfg.CommitMode)
+	if err != nil {
+		if flags.Changed("commit-mode") {
+			return cfg, found, fmt.Errorf("invalid --commit-mode %q (expected checkpoint, direct)", cfg.CommitMode)
+		}
+		return cfg, found, fmt.Errorf("invalid commit_mode %q (expected checkpoint, direct)", cfg.CommitMode)
+	}
+	cfg.CommitMode = normalizedCommitMode
+	if cfg.CommitMode == commitModeDirect && cfg.SnapshotMode != snapshotModeBoth {
+		return cfg, found, fmt.Errorf("commit_mode direct requires snapshot_mode both")
+	}
 
 	normalizedWatchMode, err := normalizeWatchMode(cfg.Watch.Mode)
 	if err != nil {
@@ -129,6 +147,9 @@ func mergeAutosnapConfig(dst *autosnapConfig, src autosnapConfig) {
 	}
 	if src.SnapshotMode != "" {
 		dst.SnapshotMode = src.SnapshotMode
+	}
+	if src.CommitMode != "" {
+		dst.CommitMode = src.CommitMode
 	}
 	if src.MsgSourceCmd != "" {
 		dst.MsgSourceCmd = src.MsgSourceCmd
@@ -173,6 +194,7 @@ func defaultAutosnapConfigTemplate() []byte {
 	return []byte(`check = "npm test"
 idle_seconds = 60
 snapshot_mode = "both"
+commit_mode = "checkpoint"
 msg_source_cmd = ""
 
 [watch]

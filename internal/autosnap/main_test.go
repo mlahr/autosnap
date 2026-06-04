@@ -382,7 +382,7 @@ func TestAutosnapRunStateLifecycle(t *testing.T) {
 		MsgSourceCmd:    "printf msg",
 		MsgSourceCmdSet: true,
 		IdleSeconds:     60,
-		SnapshotMode:    snapshotModeStaged,
+		SnapshotMode:    snapshotModeBoth,
 		WatchMode:       watchModePoll,
 		PollInterval:    2 * time.Second,
 		StartedAt:       time.Now().UTC().Format(time.RFC3339),
@@ -744,7 +744,7 @@ func TestAutosnapIgnoreIsWatchOnlyForPolling(t *testing.T) {
 		if err != nil {
 			t.Fatalf("stateFilePath failed: %v", err)
 		}
-		runner, err := newSnapshotRunnerWithWatch(context.Background(), repo, branchRef, "true", "", snapshotModeBoth, watchModePoll, time.Second, time.Second, statePath)
+		runner, err := newSnapshotRunnerWithWatch(context.Background(), repo, branchRef, "true", "", snapshotModeBoth, commitModeCheckpoint, watchModePoll, time.Second, time.Second, statePath)
 		if err != nil {
 			t.Fatalf("newSnapshotRunnerWithWatch failed: %v", err)
 		}
@@ -805,7 +805,7 @@ func TestPollingDetectsRepeatedWorkingFileContentChanges(t *testing.T) {
 		if err != nil {
 			t.Fatalf("stateFilePath failed: %v", err)
 		}
-		runner, err := newSnapshotRunnerWithWatch(context.Background(), repo, branchRef, "true", "", snapshotModeBoth, watchModePoll, time.Second, time.Second, statePath)
+		runner, err := newSnapshotRunnerWithWatch(context.Background(), repo, branchRef, "true", "", snapshotModeBoth, commitModeCheckpoint, watchModePoll, time.Second, time.Second, statePath)
 		if err != nil {
 			t.Fatalf("newSnapshotRunnerWithWatch failed: %v", err)
 		}
@@ -847,7 +847,7 @@ func TestPollingDetectsRepeatedUntrackedFileContentChanges(t *testing.T) {
 		if err != nil {
 			t.Fatalf("stateFilePath failed: %v", err)
 		}
-		runner, err := newSnapshotRunnerWithWatch(context.Background(), repo, branchRef, "true", "", snapshotModeWorking, watchModePoll, time.Second, time.Second, statePath)
+		runner, err := newSnapshotRunnerWithWatch(context.Background(), repo, branchRef, "true", "", snapshotModeWorking, commitModeCheckpoint, watchModePoll, time.Second, time.Second, statePath)
 		if err != nil {
 			t.Fatalf("newSnapshotRunnerWithWatch failed: %v", err)
 		}
@@ -890,7 +890,7 @@ func TestPollingDetectsRepeatedStagedContentChanges(t *testing.T) {
 		if err != nil {
 			t.Fatalf("stateFilePath failed: %v", err)
 		}
-		runner, err := newSnapshotRunnerWithWatch(context.Background(), repo, branchRef, "true", "", snapshotModeStaged, watchModePoll, time.Second, time.Second, statePath)
+		runner, err := newSnapshotRunnerWithWatch(context.Background(), repo, branchRef, "true", "", snapshotModeStaged, commitModeCheckpoint, watchModePoll, time.Second, time.Second, statePath)
 		if err != nil {
 			t.Fatalf("newSnapshotRunnerWithWatch failed: %v", err)
 		}
@@ -957,6 +957,7 @@ func TestLoadAutosnapConfig(t *testing.T) {
 	raw := []byte(`check = "go test ./..."
 idle_seconds = 15
 snapshot_mode = "staged"
+commit_mode = "direct"
 msg_source_cmd = "printf msg"
 
 [watch]
@@ -974,7 +975,7 @@ poll_interval = "2s"
 	if !found {
 		t.Fatalf("expected config to be found")
 	}
-	if cfg.Check != "go test ./..." || cfg.IdleSeconds != 15 || cfg.SnapshotMode != snapshotModeStaged || cfg.MsgSourceCmd != "printf msg" || cfg.Watch.Mode != watchModeAuto || cfg.Watch.PollInterval != 2*time.Second {
+	if cfg.Check != "go test ./..." || cfg.IdleSeconds != 15 || cfg.SnapshotMode != snapshotModeStaged || cfg.CommitMode != commitModeDirect || cfg.MsgSourceCmd != "printf msg" || cfg.Watch.Mode != watchModeAuto || cfg.Watch.PollInterval != 2*time.Second {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
 }
@@ -984,6 +985,7 @@ func TestResolveStartConfigPrefersFlagsOverConfig(t *testing.T) {
 	raw := []byte(`check = "go test ./..."
 idle_seconds = 15
 snapshot_mode = "staged"
+commit_mode = "direct"
 
 [watch]
 mode = "poll"
@@ -1003,19 +1005,41 @@ poll_interval = "2s"
 	if err := cmd.Flags().Set("watch-mode", "auto"); err != nil {
 		t.Fatalf("set watch-mode flag failed: %v", err)
 	}
+	if err := cmd.Flags().Set("commit-mode", "checkpoint"); err != nil {
+		t.Fatalf("set commit-mode flag failed: %v", err)
+	}
 
-	cfg, found, err := resolveStartConfig(repo, cmd, "make test", "", 30, snapshotModeBoth, watchModeAuto, defaultPollInterval)
+	cfg, found, err := resolveStartConfig(repo, cmd, "make test", "", 30, snapshotModeBoth, commitModeCheckpoint, watchModeAuto, defaultPollInterval)
 	if err != nil {
 		t.Fatalf("resolve config failed: %v", err)
 	}
 	if !found {
 		t.Fatalf("expected config to be found")
 	}
-	if cfg.Check != "make test" || cfg.IdleSeconds != 30 || cfg.Watch.Mode != watchModeAuto {
+	if cfg.Check != "make test" || cfg.IdleSeconds != 30 || cfg.CommitMode != commitModeCheckpoint || cfg.Watch.Mode != watchModeAuto {
 		t.Fatalf("expected flags to override config, got %+v", cfg)
 	}
 	if cfg.SnapshotMode != snapshotModeStaged || cfg.Watch.PollInterval != 2*time.Second {
 		t.Fatalf("expected config values to remain for unset flags, got %+v", cfg)
+	}
+}
+
+func TestResolveStartConfigRejectsUnsafeDirectSnapshotMode(t *testing.T) {
+	repo := t.TempDir()
+	raw := []byte(`check = "go test ./..."
+snapshot_mode = "staged"
+commit_mode = "direct"
+`)
+	if err := os.WriteFile(autosnapConfigPath(repo), raw, 0o644); err != nil {
+		t.Fatalf("write config failed: %v", err)
+	}
+
+	_, _, err := resolveStartConfig(repo, newStartCommand(), "", "", 60, snapshotModeBoth, commitModeCheckpoint, watchModeRecursive, defaultPollInterval)
+	if err == nil {
+		t.Fatalf("expected unsafe direct snapshot mode to fail")
+	}
+	if !strings.Contains(err.Error(), "commit_mode direct requires snapshot_mode both") {
+		t.Fatalf("expected direct snapshot mode error, got %v", err)
 	}
 }
 
@@ -1049,15 +1073,16 @@ poll_interval = "5s"
 		MsgSourceCmd:    "",
 		MsgSourceCmdSet: true,
 		IdleSeconds:     45,
-		SnapshotMode:    snapshotModeStaged,
+		SnapshotMode:    snapshotModeBoth,
+		CommitMode:      commitModeDirect,
 		WatchMode:       watchModePoll,
 		PollInterval:    2 * time.Second,
 	}
-	cfg, err := resolveRestartConfig(repo, newRestartCommand(), runState, true, "", "", 60, snapshotModeBoth, watchModeRecursive, defaultPollInterval)
+	cfg, err := resolveRestartConfig(repo, newRestartCommand(), runState, true, "", "", 60, snapshotModeBoth, commitModeCheckpoint, watchModeRecursive, defaultPollInterval)
 	if err != nil {
 		t.Fatalf("resolve restart config failed: %v", err)
 	}
-	if cfg.Check != "make verify" || cfg.MsgSourceCmd != "" || cfg.IdleSeconds != 45 || cfg.SnapshotMode != snapshotModeStaged || cfg.Watch.Mode != watchModePoll || cfg.Watch.PollInterval != 2*time.Second {
+	if cfg.Check != "make verify" || cfg.MsgSourceCmd != "" || cfg.IdleSeconds != 45 || cfg.SnapshotMode != snapshotModeBoth || cfg.CommitMode != commitModeDirect || cfg.Watch.Mode != watchModePoll || cfg.Watch.PollInterval != 2*time.Second {
 		t.Fatalf("expected active run state to win, got %+v", cfg)
 	}
 }
@@ -1070,6 +1095,7 @@ func TestResolveRestartConfigFlagsOverrideActiveRunState(t *testing.T) {
 		MsgSourceCmdSet: true,
 		IdleSeconds:     45,
 		SnapshotMode:    snapshotModeStaged,
+		CommitMode:      commitModeDirect,
 		WatchMode:       watchModePoll,
 		PollInterval:    2 * time.Second,
 	}
@@ -1086,15 +1112,18 @@ func TestResolveRestartConfigFlagsOverrideActiveRunState(t *testing.T) {
 	if err := cmd.Flags().Set("watch-mode", "auto"); err != nil {
 		t.Fatalf("set watch-mode flag failed: %v", err)
 	}
+	if err := cmd.Flags().Set("commit-mode", "checkpoint"); err != nil {
+		t.Fatalf("set commit-mode flag failed: %v", err)
+	}
 	if err := cmd.Flags().Set("poll-interval", "3s"); err != nil {
 		t.Fatalf("set poll-interval flag failed: %v", err)
 	}
 
-	cfg, err := resolveRestartConfig(repo, cmd, runState, true, "npm test", "printf new", 30, snapshotModeBoth, watchModeAuto, 3*time.Second)
+	cfg, err := resolveRestartConfig(repo, cmd, runState, true, "npm test", "printf new", 30, snapshotModeBoth, commitModeCheckpoint, watchModeAuto, 3*time.Second)
 	if err != nil {
 		t.Fatalf("resolve restart config failed: %v", err)
 	}
-	if cfg.Check != "npm test" || cfg.MsgSourceCmd != "printf new" || cfg.IdleSeconds != 30 || cfg.Watch.Mode != watchModeAuto || cfg.Watch.PollInterval != 3*time.Second {
+	if cfg.Check != "npm test" || cfg.MsgSourceCmd != "printf new" || cfg.IdleSeconds != 30 || cfg.CommitMode != commitModeCheckpoint || cfg.Watch.Mode != watchModeAuto || cfg.Watch.PollInterval != 3*time.Second {
 		t.Fatalf("expected flags to override active run state, got %+v", cfg)
 	}
 	if cfg.SnapshotMode != snapshotModeStaged {
@@ -1106,7 +1135,8 @@ func TestResolveRestartConfigLegacyRunStateUsesConfigBeforeDefaults(t *testing.T
 	repo := t.TempDir()
 	raw := []byte(`check = "go test ./..."
 idle_seconds = 15
-snapshot_mode = "working"
+snapshot_mode = "both"
+commit_mode = "direct"
 msg_source_cmd = "printf config"
 
 [watch]
@@ -1121,14 +1151,14 @@ poll_interval = "4s"
 		CheckCommand: "make verify",
 		IdleSeconds:  45,
 	}
-	cfg, err := resolveRestartConfig(repo, newRestartCommand(), runState, true, "", "", 60, snapshotModeBoth, watchModeRecursive, defaultPollInterval)
+	cfg, err := resolveRestartConfig(repo, newRestartCommand(), runState, true, "", "", 60, snapshotModeBoth, commitModeCheckpoint, watchModeRecursive, defaultPollInterval)
 	if err != nil {
 		t.Fatalf("resolve restart config failed: %v", err)
 	}
 	if cfg.Check != "make verify" || cfg.IdleSeconds != 45 {
 		t.Fatalf("expected present legacy run values to win, got %+v", cfg)
 	}
-	if cfg.MsgSourceCmd != "printf config" || cfg.SnapshotMode != snapshotModeWorking || cfg.Watch.Mode != watchModeAuto || cfg.Watch.PollInterval != 4*time.Second {
+	if cfg.MsgSourceCmd != "printf config" || cfg.SnapshotMode != snapshotModeBoth || cfg.CommitMode != commitModeDirect || cfg.Watch.Mode != watchModeAuto || cfg.Watch.PollInterval != 4*time.Second {
 		t.Fatalf("expected missing legacy values from config before defaults, got %+v", cfg)
 	}
 }
@@ -1145,7 +1175,7 @@ mode = "poll"
 		t.Fatalf("write config failed: %v", err)
 	}
 
-	cfg, err := resolveRestartConfig(repo, newRestartCommand(), autosnapRunState{}, false, "", "", 60, snapshotModeBoth, watchModeRecursive, defaultPollInterval)
+	cfg, err := resolveRestartConfig(repo, newRestartCommand(), autosnapRunState{}, false, "", "", 60, snapshotModeBoth, commitModeCheckpoint, watchModeRecursive, defaultPollInterval)
 	if err != nil {
 		t.Fatalf("resolve restart config failed: %v", err)
 	}
@@ -1196,6 +1226,7 @@ func TestConfigInitAndShowCommands(t *testing.T) {
 			"path: " + expectedConfigPath,
 			"exists: true",
 			"check: npm test",
+			"commit_mode: checkpoint",
 			"watch.mode: recursive",
 			"watch.poll_interval: 5s",
 		} {
@@ -1224,11 +1255,12 @@ func TestStartCommandAcceptsConfigCheck(t *testing.T) {
 }
 
 func TestStartDetachedArgsForwardWatchOptions(t *testing.T) {
-	args := startDetachedArgs("/bin/autosnap", "make build", "printf msg", 30, snapshotModeBoth, watchModeAuto, 2*time.Second, "token")
+	args := startDetachedArgs("/bin/autosnap", "make build", "printf msg", 30, snapshotModeBoth, commitModeCheckpoint, watchModeAuto, 2*time.Second, "token")
 	joined := strings.Join(args, "\n")
 	for _, want := range []string{
 		"--watch-mode\nauto",
 		"--poll-interval\n2s",
+		"--commit-mode\ncheckpoint",
 		"--msg-source-cmd\nprintf msg",
 	} {
 		if !strings.Contains(joined, want) {
@@ -1252,6 +1284,18 @@ func TestWatchModeHelpers(t *testing.T) {
 	}
 	if !isWatchLimitError(&os.PathError{Op: "open", Path: "x", Err: syscall.EMFILE}) {
 		t.Fatalf("expected EMFILE to be recognized as watch limit")
+	}
+}
+
+func TestCommitModeHelpers(t *testing.T) {
+	if mode, err := normalizeCommitMode(""); err != nil || mode != commitModeCheckpoint {
+		t.Fatalf("expected empty commit mode to normalize to checkpoint, got %q err=%v", mode, err)
+	}
+	if mode, err := normalizeCommitMode(commitModeDirect); err != nil || mode != commitModeDirect {
+		t.Fatalf("expected direct commit mode to normalize, got %q err=%v", mode, err)
+	}
+	if _, err := normalizeCommitMode("bad"); err == nil {
+		t.Fatalf("expected invalid commit mode error")
 	}
 }
 
@@ -1469,6 +1513,202 @@ func TestRunCheckUsesCurrentBranchOnEachRun(t *testing.T) {
 			t.Fatalf("expected checkpoints to be isolated by branch, got shared ref %q", featureRef)
 		}
 
+	})
+}
+
+func TestRunCheckDirectCommitCreatesBranchCommitAndCleansWorktree(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		ctx := context.Background()
+		repoRoot, _, branchRef, err := detectRepository(ctx)
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		initialHead := runGitOutput(t, repoRoot, "rev-parse", "HEAD")
+
+		statePath, err := stateFilePath(repoRoot)
+		if err != nil {
+			t.Fatalf("stateFilePath failed: %v", err)
+		}
+		msgSourceCmd := `printf 'direct autosnap commit
+
+base:%s
+prev:%s
+' "$AUTOSNAP_DIFF_BASE" "$AUTOSNAP_PREVIOUS_CHECKPOINT_REF"`
+		runner, err := newSnapshotRunnerWithWatch(ctx, repoRoot, branchRef, "true", msgSourceCmd, snapshotModeBoth, commitModeDirect, watchModePoll, time.Second, time.Second, statePath)
+		if err != nil {
+			t.Fatalf("newSnapshotRunnerWithWatch failed: %v", err)
+		}
+
+		if err := os.WriteFile(filepath.Join(repoRoot, "file.txt"), []byte("direct change"), 0o644); err != nil {
+			t.Fatalf("write tracked file failed: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(repoRoot, "new.txt"), []byte("new file"), 0o644); err != nil {
+			t.Fatalf("write untracked file failed: %v", err)
+		}
+
+		runner.runCheck()
+
+		newHead := runGitOutput(t, repoRoot, "rev-parse", "HEAD")
+		if newHead == initialHead {
+			t.Fatalf("expected direct mode to advance HEAD")
+		}
+		if runner.state.LastCheckpointRef != newHead {
+			t.Fatalf("expected state to record direct commit %s, got %s", newHead, runner.state.LastCheckpointRef)
+		}
+		if runner.state.LastCheckpointAt == "" {
+			t.Fatalf("expected state to record direct commit timestamp")
+		}
+		if status := runGitOutput(t, repoRoot, "status", "--porcelain"); status != "" {
+			t.Fatalf("expected direct commit to leave clean worktree, got %q", status)
+		}
+		if got := runGitOutput(t, repoRoot, "show", "HEAD:file.txt"); got != "direct change" {
+			t.Fatalf("expected tracked change in direct commit, got %q", got)
+		}
+		if got := runGitOutput(t, repoRoot, "show", "HEAD:new.txt"); got != "new file" {
+			t.Fatalf("expected untracked file in direct commit, got %q", got)
+		}
+		message := runGitOutput(t, repoRoot, "log", "-1", "--pretty=%B")
+		if !strings.Contains(message, "direct autosnap commit") || !strings.Contains(message, "base:"+initialHead) || !strings.Contains(message, "prev:") {
+			t.Fatalf("expected direct commit message source output, got %q", message)
+		}
+
+		ref, _, _, err := getLatestCheckpointForBranch(ctx, repoRoot, branchRef)
+		if err != nil {
+			t.Fatalf("getLatestCheckpointForBranch failed: %v", err)
+		}
+		if ref != "" {
+			t.Fatalf("expected direct mode not to create checkpoint refs, got %s", ref)
+		}
+	})
+}
+
+func TestRunCheckDirectCommitComparesAgainstHeadNotCheckpoint(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		ctx := context.Background()
+		repoRoot, _, branchRef, err := detectRepository(ctx)
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		statePath, err := stateFilePath(repoRoot)
+		if err != nil {
+			t.Fatalf("stateFilePath failed: %v", err)
+		}
+		runner, err := newSnapshotRunnerWithWatch(ctx, repoRoot, branchRef, "true", "", snapshotModeBoth, commitModeCheckpoint, watchModePoll, time.Second, time.Second, statePath)
+		if err != nil {
+			t.Fatalf("new checkpoint runner failed: %v", err)
+		}
+
+		if err := os.WriteFile(filepath.Join(repoRoot, "file.txt"), []byte("same tree as checkpoint"), 0o644); err != nil {
+			t.Fatalf("write checkpoint content failed: %v", err)
+		}
+		runner.runCheck()
+		checkpointTree := runner.state.LastCheckpointTree
+		checkpointRef := runner.state.LastCheckpointRef
+		if checkpointTree == "" || checkpointRef == "" {
+			t.Fatalf("expected checkpoint state to be populated")
+		}
+
+		directRunner, err := newSnapshotRunnerWithWatch(ctx, repoRoot, branchRef, "true", "", snapshotModeBoth, commitModeDirect, watchModePoll, time.Second, time.Second, statePath)
+		if err != nil {
+			t.Fatalf("new direct runner failed: %v", err)
+		}
+		initialHead := runGitOutput(t, repoRoot, "rev-parse", "HEAD")
+
+		directRunner.runCheck()
+
+		newHead := runGitOutput(t, repoRoot, "rev-parse", "HEAD")
+		if newHead == initialHead {
+			t.Fatalf("expected direct mode to commit when worktree matches previous checkpoint but differs from HEAD")
+		}
+		if directRunner.state.LastCheckpointRef != newHead {
+			t.Fatalf("expected direct mode state to record new HEAD %s, got %s", newHead, directRunner.state.LastCheckpointRef)
+		}
+		if status := runGitOutput(t, repoRoot, "status", "--porcelain"); status != "" {
+			t.Fatalf("expected direct commit to leave clean worktree, got %q", status)
+		}
+		if got := runGitOutput(t, repoRoot, "show", "HEAD:file.txt"); got != "same tree as checkpoint" {
+			t.Fatalf("expected direct commit to capture checkpoint-matching tree, got %q", got)
+		}
+	})
+}
+
+func TestRunCheckDirectCommitSkipsFailedCheck(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		ctx := context.Background()
+		repoRoot, _, branchRef, err := detectRepository(ctx)
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		initialHead := runGitOutput(t, repoRoot, "rev-parse", "HEAD")
+
+		statePath, err := stateFilePath(repoRoot)
+		if err != nil {
+			t.Fatalf("stateFilePath failed: %v", err)
+		}
+		runner, err := newSnapshotRunnerWithWatch(ctx, repoRoot, branchRef, "false", "", snapshotModeBoth, commitModeDirect, watchModePoll, time.Second, time.Second, statePath)
+		if err != nil {
+			t.Fatalf("newSnapshotRunnerWithWatch failed: %v", err)
+		}
+
+		if err := os.WriteFile(filepath.Join(repoRoot, "file.txt"), []byte("failed check change"), 0o644); err != nil {
+			t.Fatalf("write file failed: %v", err)
+		}
+		runner.runCheck()
+
+		if head := runGitOutput(t, repoRoot, "rev-parse", "HEAD"); head != initialHead {
+			t.Fatalf("expected failed check not to advance HEAD, got %s want %s", head, initialHead)
+		}
+		if runner.state.LastCheckpointRef != "" {
+			t.Fatalf("expected failed check not to record commit, got %s", runner.state.LastCheckpointRef)
+		}
+		if status := runGitOutput(t, repoRoot, "status", "--porcelain"); status == "" {
+			t.Fatalf("expected failed check to leave working-tree changes")
+		}
+	})
+}
+
+func TestRunCheckDirectCommitRejectsDetachedHead(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		ctx := context.Background()
+		initialHead := runGitOutput(t, repo, "rev-parse", "HEAD")
+		runGit(t, repo, "checkout", "--detach", "HEAD")
+		repoRoot, _, branchRef, err := detectRepository(ctx)
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		statePath, err := stateFilePath(repoRoot)
+		if err != nil {
+			t.Fatalf("stateFilePath failed: %v", err)
+		}
+		runner, err := newSnapshotRunnerWithWatch(ctx, repoRoot, branchRef, "true", "", snapshotModeBoth, commitModeDirect, watchModePoll, time.Second, time.Second, statePath)
+		if err != nil {
+			t.Fatalf("newSnapshotRunnerWithWatch failed: %v", err)
+		}
+
+		if err := os.WriteFile(filepath.Join(repoRoot, "file.txt"), []byte("detached change"), 0o644); err != nil {
+			t.Fatalf("write file failed: %v", err)
+		}
+		runner.runCheck()
+
+		if head := runGitOutput(t, repoRoot, "rev-parse", "HEAD"); head != initialHead {
+			t.Fatalf("expected detached direct mode not to advance HEAD, got %s want %s", head, initialHead)
+		}
+		if runner.state.LastCheckpointRef != "" {
+			t.Fatalf("expected detached direct mode not to record commit, got %s", runner.state.LastCheckpointRef)
+		}
+		if status := runGitOutput(t, repoRoot, "status", "--porcelain"); status == "" {
+			t.Fatalf("expected detached direct mode to leave working-tree changes")
+		}
 	})
 }
 

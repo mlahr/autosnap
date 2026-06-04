@@ -108,13 +108,17 @@ func getDaemonStatus(repoRoot string) (string, error) {
 	if snapshotMode == "" {
 		snapshotMode = snapshotModeBoth
 	}
+	commitMode := state.CommitMode
+	if commitMode == "" {
+		commitMode = commitModeCheckpoint
+	}
 
 	startAt := state.StartedAt
 	if startAt == "" {
 		startAt = "unknown"
 	}
 
-	return fmt.Sprintf("daemon: running (pid=%d branch=%s check=%q idle=%ds mode=%s started=%s)", state.PID, branch, state.CheckCommand, state.IdleSeconds, snapshotMode, startAt), nil
+	return fmt.Sprintf("daemon: running (pid=%d branch=%s check=%q idle=%ds snapshot-mode=%s commit-mode=%s started=%s)", state.PID, branch, state.CheckCommand, state.IdleSeconds, snapshotMode, commitMode, startAt), nil
 }
 
 func hasWorkingTreeChanges(ctx context.Context, repoRoot string) (bool, error) {
