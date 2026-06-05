@@ -17,9 +17,9 @@ import (
 
 const (
 	maxCheckpointRefCollisionRetries = 20
-	snapshotModeBoth    = "both"
-	snapshotModeStaged  = "staged"
-	snapshotModeWorking = "working"
+	snapshotModeBoth                 = "both"
+	snapshotModeStaged               = "staged"
+	snapshotModeWorking              = "working"
 )
 
 const (
@@ -247,6 +247,14 @@ func createCheckpointChecked(ctx context.Context, repoRoot, expectedBranchRef, e
 	}
 	if expectedHead != "" && position.Head != expectedHead {
 		return "", "", fmt.Errorf("git HEAD changed during checkpoint: was %s, now %s", expectedHead, position.Head)
+	}
+
+	headTree, err := getCheckpointTree(ctx, repoRoot, "HEAD")
+	if err != nil {
+		return "", "", err
+	}
+	if headTree == tree {
+		return "", "", nil
 	}
 
 	ts := currentTimestamp()

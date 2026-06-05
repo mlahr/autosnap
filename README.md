@@ -14,6 +14,7 @@ It is implemented as a minimal Go prototype for the MVP command set:
 - `autosnap promote <checkpoint>`
 - `autosnap prune`
 - `autosnap config`
+- `autosnap pending`
 
 Checkpoints are stored as Git refs under a generated path:
 
@@ -279,6 +280,16 @@ Scope flags:
 - current branch by default
 - `--branch <name>`
 - `--all`
+
+### List pending checkpoints
+
+```bash
+autosnap pending
+autosnap pending --branch feature/foo
+autosnap pending --all
+```
+
+Shows checkpoints after the latest checkpoint whose snapshot has an empty diff against the corresponding branch tip.
 
 ### Show checkpoint
 

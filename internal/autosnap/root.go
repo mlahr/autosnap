@@ -21,6 +21,7 @@ func NewRootCommand() *cobra.Command {
 	root.AddCommand(newStartCommand())
 	root.AddCommand(newStatusCommand())
 	root.AddCommand(newListCommand())
+	root.AddCommand(newPendingCommand())
 	root.AddCommand(newShowCommand())
 	root.AddCommand(newRestoreCommand())
 	root.AddCommand(newPromoteCommand())

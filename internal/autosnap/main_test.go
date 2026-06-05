@@ -1411,6 +1411,9 @@ func TestGetLatestAndListCheckpointForBranch(t *testing.T) {
 			t.Fatalf("gitDir failed: %v", err)
 		}
 
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("changed 1\n"), 0o644); err != nil {
+			t.Fatalf("write first checkpoint failed: %v", err)
+		}
 		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
 		if err != nil {
 			t.Fatalf("computeWorktreeTree failed: %v", err)
@@ -1485,6 +1488,9 @@ func TestCreateCheckpointAllocatesUniqueRefsForSameTimestamp(t *testing.T) {
 			t.Fatalf("gitDir failed: %v", err)
 		}
 
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("first\n"), 0o644); err != nil {
+			t.Fatalf("write first checkpoint failed: %v", err)
+		}
 		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
 		if err != nil {
 			t.Fatalf("computeWorktreeTree failed: %v", err)
@@ -1595,6 +1601,9 @@ func TestRunCheckUsesCurrentBranchOnEachRun(t *testing.T) {
 			t.Fatalf("newSnapshotRunner failed: %v", err)
 		}
 
+		if err := os.WriteFile(filepath.Join(repo, "main.txt"), []byte("main checkpoint"), 0o644); err != nil {
+			t.Fatalf("write main checkpoint file failed: %v", err)
+		}
 		runner.runCheck()
 
 		if runner.state.LastBranch != branchRef {
@@ -1920,6 +1929,215 @@ func TestListCommandRejectsMultipleScopes(t *testing.T) {
 	})
 }
 
+func TestPendingCommandCurrentBranch(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		if _, err := os.Create(filepath.Join(repo, "file2.txt")); err != nil {
+			t.Fatalf("write file failed: %v", err)
+		}
+		runGit(t, repo, "add", "file2.txt")
+		runGit(t, repo, "commit", "-m", "regular commit")
+		pendingRef := createAutosnapTestCommitRef(t, repo, branchRef, "20200102T000000Z", "pending checkpoint")
+		runGit(t, repo, "commit", "--allow-empty", "-m", "regular commit 2")
+
+		initial := runGitOutput(t, repo, "rev-parse", "HEAD~2")
+		runGit(t, repo, "reset", "--hard", initial)
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newPendingCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"pending"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("pending command failed: %v", err)
+		}
+
+		output := buf.String()
+		if !strings.Contains(output, pendingRef) || !strings.Contains(output, "pending checkpoint") {
+			t.Fatalf("expected pending checkpoint output, got %q", output)
+		}
+	})
+}
+
+func TestPendingCommandBranchAndAllScopes(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		mainInitial := runGitOutput(t, repo, "rev-parse", "HEAD")
+
+		if _, err := os.Create(filepath.Join(repo, "main.txt")); err != nil {
+			t.Fatalf("write file failed: %v", err)
+		}
+		runGit(t, repo, "add", "main.txt")
+		runGit(t, repo, "commit", "-m", "main commit")
+		mainPendingRef := createAutosnapTestCommitRef(t, repo, branchRef, "20210101T000000Z", "main pending")
+		runGit(t, repo, "reset", "--hard", mainInitial)
+
+		runGit(t, repo, "checkout", "-b", "feature/foo")
+		if _, err := os.Create(filepath.Join(repo, "feature.txt")); err != nil {
+			t.Fatalf("write file failed: %v", err)
+		}
+		runGit(t, repo, "add", "feature.txt")
+		runGit(t, repo, "commit", "-m", "feature commit")
+		featurePendingRef := createAutosnapTestCommitRef(t, repo, "feature/foo", "20210103T000000Z", "feature pending")
+		runGit(t, repo, "commit", "--allow-empty", "-m", "feature same-tree commit")
+		featureInitial := runGitOutput(t, repo, "rev-parse", "HEAD~2")
+		runGit(t, repo, "reset", "--hard", featureInitial)
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newPendingCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"pending", "--branch", "feature/foo"})
+
+		if err := root.Execute(); err != nil {
+			t.Fatalf("pending branch failed: %v", err)
+		}
+
+		output := buf.String()
+		if !strings.Contains(output, featurePendingRef) || !strings.Contains(output, "feature pending") {
+			t.Fatalf("expected feature pending output, got %q", output)
+		}
+		if strings.Contains(output, mainPendingRef) {
+			t.Fatalf("expected feature scope to exclude main pending checkpoint, got %q", output)
+		}
+
+		buf.Reset()
+		allRoot := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		allRoot.AddCommand(newPendingCommand())
+		allRoot.SetOut(buf)
+		allRoot.SetErr(buf)
+		allRoot.SetArgs([]string{"pending", "--all"})
+		if err := allRoot.Execute(); err != nil {
+			t.Fatalf("pending all failed: %v", err)
+		}
+
+		output = buf.String()
+		if !strings.Contains(output, mainPendingRef) || !strings.Contains(output, featurePendingRef) {
+			t.Fatalf("expected all output to include both pending checkpoints, got %q", output)
+		}
+		if !strings.Contains(output, branchRef) || !strings.Contains(output, "feature/foo") || !strings.Contains(output, "main pending") || !strings.Contains(output, "feature pending") {
+			t.Fatalf("expected all output to include both branch names and summaries, got %q", output)
+		}
+	})
+}
+
+func TestPendingCommandListsCheckpointsAfterLatestHeadMatch(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("one\n"), 0o644); err != nil {
+			t.Fatalf("write first checkpoint file failed: %v", err)
+		}
+		runGit(t, repo, "add", "file.txt")
+		syncedRef := createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20210104T000000Z", "synced checkpoint")
+		runGit(t, repo, "commit", "-m", "manual synced commit")
+
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("two\n"), 0o644); err != nil {
+			t.Fatalf("write pending checkpoint file failed: %v", err)
+		}
+		runGit(t, repo, "add", "file.txt")
+		pendingRef := createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20210105T000000Z", "pending checkpoint")
+		runGit(t, repo, "reset", "--hard", "HEAD")
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newPendingCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"pending"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("pending command failed: %v", err)
+		}
+
+		output := buf.String()
+		if strings.Contains(output, syncedRef) {
+			t.Fatalf("expected synced checkpoint to be excluded, got %q", output)
+		}
+		if !strings.Contains(output, pendingRef) || !strings.Contains(output, "pending checkpoint") {
+			t.Fatalf("expected pending checkpoint output, got %q", output)
+		}
+	})
+}
+
+func TestPendingCommandAllSkipsDeletedBranches(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		if _, err := os.Create(filepath.Join(repo, "main.txt")); err != nil {
+			t.Fatalf("write main file failed: %v", err)
+		}
+		runGit(t, repo, "add", "main.txt")
+		runGit(t, repo, "commit", "-m", "main commit")
+		mainRef := createAutosnapTestCommitRef(t, repo, branchRef, "20210106T000000Z", "main checkpoint")
+		runGit(t, repo, "reset", "--hard", "HEAD~1")
+
+		runGit(t, repo, "checkout", "-b", "deleted-branch")
+		deletedRef := createAutosnapTestCommitRef(t, repo, "deleted-branch", "20210107T000000Z", "deleted branch checkpoint")
+		runGit(t, repo, "checkout", branchRef)
+		runGit(t, repo, "branch", "-D", "deleted-branch")
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newPendingCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"pending", "--all"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("pending all failed: %v", err)
+		}
+
+		output := buf.String()
+		if !strings.Contains(output, mainRef) {
+			t.Fatalf("expected all output to include resolvable branch checkpoint, got %q", output)
+		}
+		if strings.Contains(output, deletedRef) || strings.Contains(output, "deleted branch checkpoint") {
+			t.Fatalf("expected all output to skip deleted branch checkpoint, got %q", output)
+		}
+	})
+}
+
+func TestPendingCommandRejectsMultipleScopes(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newPendingCommand())
+		root.SetArgs([]string{"pending", "--branch", "feature/foo", "--all"})
+
+		err := root.Execute()
+		if err == nil {
+			t.Fatalf("expected pending to fail")
+		}
+		if !strings.Contains(err.Error(), "at most one scope") {
+			t.Fatalf("expected scope error, got %v", err)
+		}
+	})
+}
+
 func TestRunCheckPassesMessageSourceEnvForFirstCheckpoint(t *testing.T) {
 	requireIntegration(t)
 	repo := createTestRepo(t)
@@ -2100,6 +2318,9 @@ func TestShowCommandRejectsTimestamp(t *testing.T) {
 			t.Fatalf("gitDir failed: %v", err)
 		}
 
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("timestamp checkpoint\n"), 0o644); err != nil {
+			t.Fatalf("write checkpoint failed: %v", err)
+		}
 		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
 		if err != nil {
 			t.Fatalf("computeWorktreeTree failed: %v", err)
@@ -2155,6 +2376,9 @@ func TestShowCommandSupportsFirstAndLastSelectors(t *testing.T) {
 			t.Fatalf("gitDir failed: %v", err)
 		}
 
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("changed 1\n"), 0o644); err != nil {
+			t.Fatalf("write first checkpoint failed: %v", err)
+		}
 		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
 		if err != nil {
 			t.Fatalf("computeWorktreeTree failed: %v", err)
@@ -2241,6 +2465,9 @@ func TestShowCommandSupportsRelativeSelectors(t *testing.T) {
 			t.Fatalf("gitDir failed: %v", err)
 		}
 
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("changed 1\n"), 0o644); err != nil {
+			t.Fatalf("write first checkpoint failed: %v", err)
+		}
 		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
 		if err != nil {
 			t.Fatalf("computeWorktreeTree failed: %v", err)
@@ -2326,6 +2553,9 @@ func TestShowCommandErrorsOnOutOfRangeSelector(t *testing.T) {
 			t.Fatalf("gitDir failed: %v", err)
 		}
 
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("first\n"), 0o644); err != nil {
+			t.Fatalf("write checkpoint failed: %v", err)
+		}
 		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
 		if err != nil {
 			t.Fatalf("computeWorktreeTree failed: %v", err)
@@ -2365,6 +2595,9 @@ func TestRestoreCommandRejectsTimestamp(t *testing.T) {
 			t.Fatalf("gitDir failed: %v", err)
 		}
 
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("restore timestamp checkpoint\n"), 0o644); err != nil {
+			t.Fatalf("write checkpoint failed: %v", err)
+		}
 		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
 		if err != nil {
 			t.Fatalf("computeWorktreeTree failed: %v", err)
@@ -2408,6 +2641,9 @@ func TestShowCommandResolvesCheckpointByRefAndCommit(t *testing.T) {
 			t.Fatalf("gitDir failed: %v", err)
 		}
 
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("show ref checkpoint\n"), 0o644); err != nil {
+			t.Fatalf("write checkpoint failed: %v", err)
+		}
 		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
 		if err != nil {
 			t.Fatalf("computeWorktreeTree failed: %v", err)
@@ -2481,6 +2717,9 @@ func TestShowCommandFullFlagShowsPatch(t *testing.T) {
 			t.Fatalf("gitDir failed: %v", err)
 		}
 
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("checkpoint base\n"), 0o644); err != nil {
+			t.Fatalf("write first checkpoint failed: %v", err)
+		}
 		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
 		if err != nil {
 			t.Fatalf("computeWorktreeTree failed: %v", err)
@@ -2544,6 +2783,9 @@ func TestShowCommandFullUsesPreviousCheckpointForDiffBase(t *testing.T) {
 			t.Fatalf("gitDir failed: %v", err)
 		}
 
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("checkpoint base\n"), 0o644); err != nil {
+			t.Fatalf("write first checkpoint failed: %v", err)
+		}
 		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
 		if err != nil {
 			t.Fatalf("computeWorktreeTree failed: %v", err)
@@ -2760,6 +3002,7 @@ func TestRestoreCommandAppliesCheckpointToWorktreeAndIndex(t *testing.T) {
 		if err != nil {
 			t.Fatalf("gitDir failed: %v", err)
 		}
+
 		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
 		if err != nil {
 			t.Fatalf("computeWorktreeTree failed: %v", err)
@@ -2908,6 +3151,9 @@ func TestPromoteCommandRejectsTimestamp(t *testing.T) {
 		if err != nil {
 			t.Fatalf("gitDir failed: %v", err)
 		}
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("promote timestamp checkpoint\n"), 0o644); err != nil {
+			t.Fatalf("write checkpoint failed: %v", err)
+		}
 		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
 		if err != nil {
 			t.Fatalf("computeWorktreeTree failed: %v", err)
@@ -3010,18 +3256,8 @@ func TestPromoteCommandNoOpsWhenCheckpointMatchesHead(t *testing.T) {
 		}
 		oldHead := runGitOutput(t, repo, "rev-parse", "HEAD")
 
-		gitDirectory, err := gitDir(context.Background(), repo)
-		if err != nil {
-			t.Fatalf("gitDir failed: %v", err)
-		}
-		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
-		if err != nil {
-			t.Fatalf("computeWorktreeTree failed: %v", err)
-		}
-		_, checkpointCommit, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree, "")
-		if err != nil {
-			t.Fatalf("create checkpoint failed: %v", err)
-		}
+		checkpointRef := createAutosnapTestCommitRef(t, repo, branchRef, "20210108T000000Z", "matching checkpoint")
+		checkpointCommit := runGitOutput(t, repo, "rev-parse", checkpointRef)
 
 		buf := &bytes.Buffer{}
 		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
@@ -3388,6 +3624,20 @@ func createAutosnapTestCommitRef(t *testing.T, repoRoot, branchRef, timestamp, m
 	return ref
 }
 
+func createAutosnapTestCommitRefFromIndex(t *testing.T, repoRoot, branchRef, timestamp, message string) string {
+	t.Helper()
+	tree := runGitOutput(t, repoRoot, "write-tree")
+	parent := runGitOutput(t, repoRoot, "rev-parse", "HEAD")
+	result, err := runGitCommandWithInput(context.Background(), repoRoot, nil, message, "commit-tree", tree, "-p", parent, "-F", "-")
+	if err != nil {
+		t.Fatalf("create test commit failed: %v", err)
+	}
+	commit := strings.TrimSpace(result.Stdout)
+	ref := snapshotRef(branchRef, timestamp)
+	runGit(t, repoRoot, "update-ref", ref, commit)
+	return ref
+}
+
 func gitRefExists(t *testing.T, repoRoot, ref string) bool {
 	t.Helper()
 	cmd := exec.Command("git", "rev-parse", "--verify", ref)
@@ -3409,6 +3659,9 @@ func TestCreateCheckpointUsesCustomMessage(t *testing.T) {
 			t.Fatalf("gitDir failed: %v", err)
 		}
 
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("custom message checkpoint\n"), 0o644); err != nil {
+			t.Fatalf("write checkpoint failed: %v", err)
+		}
 		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
 		if err != nil {
 			t.Fatalf("computeWorktreeTree failed: %v", err)
@@ -3527,6 +3780,9 @@ func TestCreateCheckpointFallsBackToGeneratedMessageForEmptyMessage(t *testing.T
 			t.Fatalf("gitDir failed: %v", err)
 		}
 
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("generated message checkpoint\n"), 0o644); err != nil {
+			t.Fatalf("write checkpoint failed: %v", err)
+		}
 		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
 		if err != nil {
 			t.Fatalf("computeWorktreeTree failed: %v", err)

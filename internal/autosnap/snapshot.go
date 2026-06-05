@@ -388,6 +388,10 @@ func (r *snapshotRunner) runCheck() {
 			logf("unable to create checkpoint: %v\n", err)
 			return
 		}
+		if ref == "" {
+			logln("no meaningful diff; checkpoint skipped")
+			return
+		}
 
 		r.state.LastCheckpointRef = ref
 		r.state.LastCheckpointAt = checkpointRefTimestamp(ref)
