@@ -304,6 +304,11 @@ autosnap show --full --color=always <checkpoint>
 
 Checkpoint argument examples:
 
+- `last`
+- `last-N` (for example, `last-1`, `last-2`, and so on)
+- `first`
+- `first+N` (for example, `first+1`, `first+2`, and so on)
+
 - `refs/autosnapshots/<branch>/<timestamp>` (explicit ref)
 - full or short commit hash of the checkpoint commit
 
@@ -320,7 +325,7 @@ Timestamp-only input (for example `20260605T120000Z`) is not accepted as a check
 `autosnap restore <checkpoint>`
 
 	Applies the checkpoint diff back into the working tree and index without moving `HEAD`.
-`<checkpoint>` accepts the same selectors as `show` (explicit ref or commit hash; timestamp-only values are rejected).
+`<checkpoint>` accepts an explicit ref or commit hash; timestamp-only values are rejected.
 By default, restore refuses to run unless the worktree and index are clean.
 When changes overlap, restore attempts a three-way apply and may leave conflict markers for manual resolution.
 
@@ -335,7 +340,7 @@ autosnap restore --force <checkpoint>
 `autosnap promote <checkpoint>`
 
 Creates a normal commit on the current branch using the checkpoint tree and commit message.
-`<checkpoint>` accepts the same selectors as `show` (explicit ref or commit hash; timestamp-only values are rejected).
+`<checkpoint>` accepts an explicit ref or commit hash; timestamp-only values are rejected.
 By default, promote refuses to run unless the worktree and index are clean.
 
 Pass `--force` to skip the clean-state precheck:
