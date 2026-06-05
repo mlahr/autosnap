@@ -78,7 +78,7 @@ func newListCommand() *cobra.Command {
 }
 
 func formatCheckpointTimestampForList(timestamp string) string {
-	parsed, err := time.Parse("20060102T150405Z", timestamp)
+	parsed, err := time.Parse("20060102T150405Z", checkpointRefTimestamp(timestamp))
 	if err != nil {
 		return timestamp
 	}

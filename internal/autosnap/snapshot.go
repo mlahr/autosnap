@@ -390,7 +390,7 @@ func (r *snapshotRunner) runCheck() {
 		}
 
 		r.state.LastCheckpointRef = ref
-		r.state.LastCheckpointAt = pathBase(ref)
+		r.state.LastCheckpointAt = checkpointRefTimestamp(ref)
 		r.state.LastCheckpointTree = tree
 		if err := saveAutosnapState(r.statePath, r.state); err != nil {
 			logf("unable to persist state: %v\n", err)

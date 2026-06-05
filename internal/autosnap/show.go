@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -36,7 +35,7 @@ func newShowCommand() *cobra.Command {
 
 			fmt.Fprintf(out, "checkpoint: %s\n", meta.Ref)
 			fmt.Fprintf(out, "commit: %s\n", meta.Commit)
-			fmt.Fprintf(out, "timestamp: %s\n", path.Base(meta.Ref))
+			fmt.Fprintf(out, "timestamp: %s\n", meta.Timestamp)
 
 			message, err := getCommitMessage(ctx, repoRoot, meta.Ref)
 			if err == nil && message != "" {
@@ -52,14 +51,19 @@ func newShowCommand() *cobra.Command {
 				return err
 			}
 
-			showArgs := []string{colorArg}
-			if full {
-				showArgs = append(showArgs, meta.Ref)
-			} else {
-				showArgs = append(showArgs, "--stat", meta.Ref)
+			diffBase, err := resolveShowDiffBase(ctx, repoRoot, branchRef, meta.Ref, meta.Commit)
+			if err != nil {
+				return fmt.Errorf("failed to resolve show diff base for checkpoint %q: %w", meta.Ref, err)
 			}
 
-			showResult, err := runGitCommand(ctx, repoRoot, nil, append([]string{"show"}, showArgs...)...)
+			showArgs := []string{colorArg}
+			if full {
+				showArgs = append(showArgs, diffBase, meta.Commit)
+			} else {
+				showArgs = append(showArgs, "--stat", diffBase, meta.Commit)
+			}
+
+			showResult, err := runGitCommand(ctx, repoRoot, nil, append([]string{"diff"}, showArgs...)...)
 			if err != nil {
 				return fmt.Errorf("failed to show checkpoint %q: %w", meta.Ref, err)
 			}
@@ -96,6 +100,35 @@ func normalizeShowColorArg(mode string, outWriter io.Writer) (string, error) {
 	default:
 		return "", fmt.Errorf("invalid --color value %q (expected auto, always, never)", mode)
 	}
+}
+
+func resolveShowDiffBase(ctx context.Context, repoRoot, branchRef, targetRef, targetCommit string) (string, error) {
+	targetBranch := branchRef
+	if parsedBranch := branchFromCheckpointRef(targetRef); parsedBranch != "" {
+		targetBranch = parsedBranch
+	}
+
+	checkpoints, err := listCheckpointRefsForBranch(ctx, repoRoot, targetBranch)
+	if err != nil {
+		return "", err
+	}
+
+	var previousRef string
+	for _, checkpoint := range checkpoints {
+		if checkpoint.Ref == targetRef {
+			if previousRef != "" {
+				return previousRef, nil
+			}
+			break
+		}
+		previousRef = checkpoint.Ref
+	}
+
+	parent, err := getCommitParent(ctx, repoRoot, targetCommit)
+	if err != nil {
+		return "", err
+	}
+	return parent, nil
 }
 
 func isTerminalWriter(writer io.Writer) bool {

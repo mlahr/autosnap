@@ -527,6 +527,20 @@ func TestFormatCheckpointTimestampForList(t *testing.T) {
 	if got := formatCheckpointTimestampForList("not-a-timestamp"); got != "not-a-timestamp" {
 		t.Fatalf("expected invalid timestamp fallback, got %q", got)
 	}
+
+	if got := formatCheckpointTimestampForList("20210101T000000Z.abc"); got != want {
+		t.Fatalf("expected suffixed timestamp formatted as %q, got %q", want, got)
+	}
+}
+
+func TestParseCheckpointTimestampSupportsSuffix(t *testing.T) {
+	parsed, err := parseCheckpointTimestamp("20210101T000000Z.suffix")
+	if err != nil {
+		t.Fatalf("parseCheckpointTimestamp failed: %v", err)
+	}
+	if parsed.UTC().Format("20060102T150405Z") != "20210101T000000Z" {
+		t.Fatalf("expected canonical timestamp 20210101T000000Z, got %q", parsed.UTC().Format("20060102T150405Z"))
+	}
 }
 
 func TestEnsureNoActiveRunForRepo(t *testing.T) {
@@ -1450,6 +1464,117 @@ func TestGetLatestAndListCheckpointForBranch(t *testing.T) {
 	})
 }
 
+func TestCreateCheckpointAllocatesUniqueRefsForSameTimestamp(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		originalNow := currentTimestampFn
+		fixedTs := "20260101T120000Z"
+		currentTimestampFn = func() string { return fixedTs }
+		defer func() {
+			currentTimestampFn = originalNow
+		}()
+
+		gitDirectory, err := gitDir(context.Background(), repo)
+		if err != nil {
+			t.Fatalf("gitDir failed: %v", err)
+		}
+
+		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
+		if err != nil {
+			t.Fatalf("computeWorktreeTree failed: %v", err)
+		}
+		ref1, commit1, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree, "")
+		if err != nil {
+			t.Fatalf("create first checkpoint failed: %v", err)
+		}
+		if path.Base(ref1) != fixedTs {
+			t.Fatalf("expected first checkpoint ref to be timestamp %q, got %q", fixedTs, ref1)
+		}
+
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("updated"), 0o644); err != nil {
+			t.Fatalf("update file failed: %v", err)
+		}
+		tree2, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
+		if err != nil {
+			t.Fatalf("computeWorktreeTree for second checkpoint failed: %v", err)
+		}
+		ref2, _, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree2, "")
+		if err != nil {
+			t.Fatalf("create second checkpoint failed: %v", err)
+		}
+		if ref1 == ref2 {
+			t.Fatalf("expected unique checkpoint refs, got duplicate %q", ref2)
+		}
+		if !strings.Contains(path.Base(ref2), fixedTs+".") {
+			t.Fatalf("expected suffixed timestamp ref for colliding checkpoint, got %q", ref2)
+		}
+		if !strings.HasPrefix(path.Base(ref2), fixedTs+".") {
+			t.Fatalf("expected second checkpoint to share timestamp %q, got %q", fixedTs, ref2)
+		}
+
+		checkpoints, err := listCheckpointRefsForBranch(context.Background(), repo, branchRef)
+		if err != nil {
+			t.Fatalf("listCheckpointRefsForBranch failed: %v", err)
+		}
+		if len(checkpoints) != 2 {
+			t.Fatalf("expected 2 checkpoints, got %d", len(checkpoints))
+		}
+		for _, checkpoint := range checkpoints {
+			if checkpoint.Timestamp != fixedTs {
+				t.Fatalf("expected canonical timestamp %q, got %q for %s", fixedTs, checkpoint.Timestamp, checkpoint.Ref)
+			}
+		}
+
+		secondCommit := runGitOutput(t, repo, "rev-parse", ref2)
+		if commit1 == secondCommit {
+			t.Fatalf("expected second checkpoint to point to different commit than first")
+		}
+		runGitOutput(t, repo, "rev-parse", ref1)
+		runGitOutput(t, repo, "rev-parse", ref2)
+	})
+}
+
+func TestListAndParseCheckpointRefsPreserveLegacyTimestampFormat(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		timestamp := "20200101T000000Z"
+		ref := createAutosnapTestRef(t, repo, branchRef, timestamp)
+
+		checkpoints, err := listCheckpointRefsForBranch(context.Background(), repo, branchRef)
+		if err != nil {
+			t.Fatalf("listCheckpointRefsForBranch failed: %v", err)
+		}
+		if len(checkpoints) != 1 {
+			t.Fatalf("expected one checkpoint, got %d", len(checkpoints))
+		}
+		if checkpoints[0].Ref != ref {
+			t.Fatalf("expected listed ref %s, got %s", ref, checkpoints[0].Ref)
+		}
+		if checkpoints[0].Timestamp != timestamp {
+			t.Fatalf("expected canonical timestamp %q, got %q", timestamp, checkpoints[0].Timestamp)
+		}
+
+		output := formatCheckpointTimestampForList(checkpoints[0].Timestamp)
+		formatted, _ := time.Parse("20060102T150405Z", timestamp)
+		expected := formatted.Local().Format("2006-01-02 15:04:05 MST")
+		if output != expected {
+			t.Fatalf("expected formatted %q, got %q", expected, output)
+		}
+	})
+}
+
 func TestRunCheckUsesCurrentBranchOnEachRun(t *testing.T) {
 	requireIntegration(t)
 	repo := createTestRepo(t)
@@ -1961,7 +2086,7 @@ prev:%s
 	})
 }
 
-func TestShowCommandResolvesCheckpointByTimestamp(t *testing.T) {
+func TestShowCommandRejectsTimestamp(t *testing.T) {
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -1993,16 +2118,58 @@ func TestShowCommandResolvesCheckpointByTimestamp(t *testing.T) {
 		root.SetErr(buf)
 		root.SetArgs([]string{"show", timestamp})
 
-		if err := root.Execute(); err != nil {
-			t.Fatalf("show command failed: %v", err)
+		err = root.Execute()
+		if err == nil {
+			t.Fatalf("expected show to reject timestamp identifier %q", timestamp)
+		}
+		if !strings.Contains(err.Error(), "checkpoint identifier") && !strings.Contains(err.Error(), "checkpoint not found") {
+			t.Fatalf("expected rejection for unsupported show argument, got: %v", err)
+		}
+		if strings.Contains(err.Error(), ref) {
+			t.Fatalf("expected no successful show output, got: %q", err.Error())
+		}
+	})
+}
+
+func TestRestoreCommandRejectsTimestamp(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
 		}
 
-		output := buf.String()
-		if !strings.Contains(output, "checkpoint: "+ref) {
-			t.Fatalf("expected output to include checkpoint ref, got %q", output)
+		gitDirectory, err := gitDir(context.Background(), repo)
+		if err != nil {
+			t.Fatalf("gitDir failed: %v", err)
 		}
-		if !strings.Contains(output, "status: passing") {
-			t.Fatalf("expected output to include passing status, got %q", output)
+
+		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
+		if err != nil {
+			t.Fatalf("computeWorktreeTree failed: %v", err)
+		}
+		ref, _, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree, "")
+		if err != nil {
+			t.Fatalf("create checkpoint failed: %v", err)
+		}
+
+		timestamp := path.Base(ref)
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newRestoreCommand())
+		root.SetOut(&bytes.Buffer{})
+		root.SetErr(&bytes.Buffer{})
+		root.SetArgs([]string{"restore", timestamp})
+
+		err = root.Execute()
+		if err == nil {
+			t.Fatalf("expected restore to reject timestamp identifier %q", timestamp)
+		}
+		if !strings.Contains(err.Error(), "checkpoint identifier") && !strings.Contains(err.Error(), "checkpoint not found") {
+			t.Fatalf("expected rejection for unsupported restore argument, got: %v", err)
+		}
+		if strings.Contains(err.Error(), ref) {
+			t.Fatalf("expected no successful restore output, got: %q", err.Error())
 		}
 	})
 }
@@ -2121,7 +2288,7 @@ func TestShowCommandFullFlagShowsPatch(t *testing.T) {
 		root.AddCommand(newShowCommand())
 		root.SetOut(buf)
 		root.SetErr(buf)
-		root.SetArgs([]string{"show", "--full", path.Base(ref2)})
+		root.SetArgs([]string{"show", "--full", ref2})
 
 		if err := root.Execute(); err != nil {
 			t.Fatalf("show --full failed: %v", err)
@@ -2136,6 +2303,156 @@ func TestShowCommandFullFlagShowsPatch(t *testing.T) {
 		}
 		if !strings.Contains(output, "+++ b/file.txt") {
 			t.Fatalf("expected file diff in output, got: %q", output)
+		}
+	})
+}
+
+func TestShowCommandFullUsesPreviousCheckpointForDiffBase(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		originalNow := currentTimestampFn
+		currentTimestampFn = func() string { return "20260101T120000Z" }
+		defer func() { currentTimestampFn = originalNow }()
+
+		gitDirectory, err := gitDir(context.Background(), repo)
+		if err != nil {
+			t.Fatalf("gitDir failed: %v", err)
+		}
+
+		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
+		if err != nil {
+			t.Fatalf("computeWorktreeTree failed: %v", err)
+		}
+		ref1, _, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree, "")
+		if err != nil {
+			t.Fatalf("create first checkpoint failed: %v", err)
+		}
+
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("intermediate\n"), 0o644); err != nil {
+			t.Fatalf("update file for intermediate commit failed: %v", err)
+		}
+		runGit(t, repo, "add", "file.txt")
+		runGit(t, repo, "commit", "-m", "intermediate commit")
+
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("checkpointed\n"), 0o644); err != nil {
+			t.Fatalf("update file for second checkpoint failed: %v", err)
+		}
+
+		tree2, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
+		if err != nil {
+			t.Fatalf("computeWorktreeTree for second checkpoint failed: %v", err)
+		}
+		ref2, _, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree2, "")
+		if err != nil {
+			t.Fatalf("create second checkpoint failed: %v", err)
+		}
+		if ref1 == ref2 {
+			t.Fatalf("expected unique checkpoint refs for timestamp collision, got duplicate %q", ref2)
+		}
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newShowCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"show", "--full", ref2})
+
+		if err := root.Execute(); err != nil {
+			t.Fatalf("show --full with previous checkpoint diff base failed: %v", err)
+		}
+
+		output := buf.String()
+		if !strings.Contains(output, "+checkpointed") {
+			t.Fatalf("expected checkpointed patch in output, got: %q", output)
+		}
+		if !strings.Contains(output, "timestamp: 20260101T120000Z") {
+			t.Fatalf("expected canonical show timestamp, got: %q", output)
+		}
+		if strings.Contains(output, "timestamp: 20260101T120000Z.") {
+			t.Fatalf("expected timestamp to omit collision suffix in show output: %q", output)
+		}
+		if strings.Contains(output, "-intermediate") {
+			t.Fatalf("expected diff to compare against previous checkpoint, got output containing intermediate: %q", output)
+		}
+	})
+}
+
+func TestShowCommandFullUsesTargetCheckpointBranchForExplicitRefDiffBase(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		originalNow := currentTimestampFn
+		currentTimestampFn = func() string { return "20260102T120000Z" }
+		defer func() { currentTimestampFn = originalNow }()
+
+		_, _, mainBranchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		gitDirectory, err := gitDir(context.Background(), repo)
+		if err != nil {
+			t.Fatalf("gitDir failed: %v", err)
+		}
+
+		runGit(t, repo, "checkout", "-b", "feature/explicit-ref")
+		_, _, featureBranchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository on feature branch failed: %v", err)
+		}
+
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("checkpoint one\n"), 0o644); err != nil {
+			t.Fatalf("write feature checkpoint one failed: %v", err)
+		}
+		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
+		if err != nil {
+			t.Fatalf("computeWorktreeTree for checkpoint one failed: %v", err)
+		}
+		ref1, _, err := createCheckpoint(context.Background(), repo, featureBranchRef, "npm test", 5*time.Second, tree, "")
+		if err != nil {
+			t.Fatalf("create feature checkpoint one failed: %v", err)
+		}
+		runGit(t, repo, "reset", "--hard", "HEAD")
+
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("checkpoint two\n"), 0o644); err != nil {
+			t.Fatalf("write feature checkpoint two failed: %v", err)
+		}
+		tree2, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
+		if err != nil {
+			t.Fatalf("computeWorktreeTree for checkpoint two failed: %v", err)
+		}
+		ref2, _, err := createCheckpoint(context.Background(), repo, featureBranchRef, "npm test", 5*time.Second, tree2, "")
+		if err != nil {
+			t.Fatalf("create feature checkpoint two failed: %v", err)
+		}
+		if ref1 == ref2 {
+			t.Fatalf("expected unique checkpoint refs for timestamp collision, got duplicate %q", ref2)
+		}
+		runGit(t, repo, "reset", "--hard", "HEAD")
+		runGit(t, repo, "checkout", mainBranchRef)
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newShowCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"show", "--full", ref2})
+
+		if err := root.Execute(); err != nil {
+			t.Fatalf("show --full explicit ref failed: %v", err)
+		}
+
+		output := buf.String()
+		if !strings.Contains(output, "-checkpoint one") {
+			t.Fatalf("expected previous checkpoint diff context, missing removed line; got: %q", output)
+		}
+		if !strings.Contains(output, "+checkpoint two") {
+			t.Fatalf("expected explicit ref diff output for latest checkpoint, missing added line; got: %q", output)
 		}
 	})
 }
@@ -2175,7 +2492,7 @@ func TestShowCommandColorModes(t *testing.T) {
 			t.Fatalf("create checkpoint changed failed: %v", err)
 		}
 
-		fullArgs := []string{"show", "--full", "--color=always", path.Base(ref2)}
+		fullArgs := []string{"show", "--full", "--color=always", ref2}
 		colorBuf := &bytes.Buffer{}
 		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
 		root.AddCommand(newShowCommand())
@@ -2190,7 +2507,7 @@ func TestShowCommandColorModes(t *testing.T) {
 			t.Fatalf("expected ANSI color escapes for --color=always, got: %q", colorBuf.String())
 		}
 
-		autoArgs := []string{"show", "--full", path.Base(ref2)}
+		autoArgs := []string{"show", "--full", ref2}
 		autoBuf := &bytes.Buffer{}
 		root = &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
 		root.AddCommand(newShowCommand())
@@ -2227,7 +2544,7 @@ func TestRestoreCommandAppliesCheckpointToWorktreeAndIndex(t *testing.T) {
 		if err != nil {
 			t.Fatalf("computeWorktreeTree failed: %v", err)
 		}
-		ref, _, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree, "restore me")
+		_, checkpointCommit, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree, "restore me")
 		if err != nil {
 			t.Fatalf("create checkpoint failed: %v", err)
 		}
@@ -2238,7 +2555,7 @@ func TestRestoreCommandAppliesCheckpointToWorktreeAndIndex(t *testing.T) {
 		root.AddCommand(newRestoreCommand())
 		root.SetOut(buf)
 		root.SetErr(buf)
-		root.SetArgs([]string{"restore", path.Base(ref)})
+		root.SetArgs([]string{"restore", checkpointCommit[:7]})
 
 		if err := root.Execute(); err != nil {
 			t.Fatalf("restore command failed: %v", err)
@@ -2278,7 +2595,7 @@ func TestRestoreCommandRefusesDirtyStateByDefault(t *testing.T) {
 		if err != nil {
 			t.Fatalf("computeWorktreeTree failed: %v", err)
 		}
-		ref, _, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree, "")
+		_, checkpointCommit, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree, "")
 		if err != nil {
 			t.Fatalf("create checkpoint failed: %v", err)
 		}
@@ -2289,7 +2606,7 @@ func TestRestoreCommandRefusesDirtyStateByDefault(t *testing.T) {
 
 		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
 		root.AddCommand(newRestoreCommand())
-		root.SetArgs([]string{"restore", path.Base(ref)})
+		root.SetArgs([]string{"restore", checkpointCommit[:7]})
 
 		err = root.Execute()
 		if err == nil {
@@ -2321,7 +2638,7 @@ func TestRestoreCommandLeavesConflictMarkers(t *testing.T) {
 		if err != nil {
 			t.Fatalf("computeWorktreeTree failed: %v", err)
 		}
-		ref, _, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree, "")
+		_, checkpointCommit, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree, "")
 		if err != nil {
 			t.Fatalf("create checkpoint failed: %v", err)
 		}
@@ -2334,7 +2651,7 @@ func TestRestoreCommandLeavesConflictMarkers(t *testing.T) {
 
 		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
 		root.AddCommand(newRestoreCommand())
-		root.SetArgs([]string{"restore", "--force", path.Base(ref)})
+		root.SetArgs([]string{"restore", "--force", checkpointCommit[:7]})
 
 		err = root.Execute()
 		if err == nil {
@@ -2354,6 +2671,49 @@ func TestRestoreCommandLeavesConflictMarkers(t *testing.T) {
 		}
 		if !strings.Contains(string(content), "<<<<<<<") {
 			t.Fatalf("expected conflict markers in file, got %q", content)
+		}
+	})
+}
+
+func TestPromoteCommandRejectsTimestamp(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		gitDirectory, err := gitDir(context.Background(), repo)
+		if err != nil {
+			t.Fatalf("gitDir failed: %v", err)
+		}
+		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
+		if err != nil {
+			t.Fatalf("computeWorktreeTree failed: %v", err)
+		}
+		ref, _, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree, "timestamp test")
+		if err != nil {
+			t.Fatalf("create checkpoint failed: %v", err)
+		}
+
+		timestamp := path.Base(ref)
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newPromoteCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"promote", timestamp})
+
+		err = root.Execute()
+		if err == nil {
+			t.Fatalf("expected promote to reject timestamp identifier %q", timestamp)
+		}
+		if !strings.Contains(err.Error(), "checkpoint identifier") && !strings.Contains(err.Error(), "checkpoint not found") {
+			t.Fatalf("expected rejection for unsupported promote argument, got: %v", err)
+		}
+		if strings.Contains(err.Error(), ref) {
+			t.Fatalf("expected no successful promote output, got: %q", err.Error())
 		}
 	})
 }
@@ -2380,7 +2740,7 @@ func TestPromoteCommandCreatesBranchCommitFromCheckpoint(t *testing.T) {
 			t.Fatalf("computeWorktreeTree failed: %v", err)
 		}
 		message := "feat: promote checkpoint\n\nbody line"
-		ref, checkpointCommit, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree, message)
+		_, checkpointCommit, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree, message)
 		if err != nil {
 			t.Fatalf("create checkpoint failed: %v", err)
 		}
@@ -2391,7 +2751,7 @@ func TestPromoteCommandCreatesBranchCommitFromCheckpoint(t *testing.T) {
 		root.AddCommand(newPromoteCommand())
 		root.SetOut(buf)
 		root.SetErr(buf)
-		root.SetArgs([]string{"promote", path.Base(ref)})
+		root.SetArgs([]string{"promote", checkpointCommit[:7]})
 
 		if err := root.Execute(); err != nil {
 			t.Fatalf("promote command failed: %v", err)
@@ -2438,7 +2798,7 @@ func TestPromoteCommandNoOpsWhenCheckpointMatchesHead(t *testing.T) {
 		if err != nil {
 			t.Fatalf("computeWorktreeTree failed: %v", err)
 		}
-		ref, _, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree, "")
+		_, checkpointCommit, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree, "")
 		if err != nil {
 			t.Fatalf("create checkpoint failed: %v", err)
 		}
@@ -2448,7 +2808,7 @@ func TestPromoteCommandNoOpsWhenCheckpointMatchesHead(t *testing.T) {
 		root.AddCommand(newPromoteCommand())
 		root.SetOut(buf)
 		root.SetErr(buf)
-		root.SetArgs([]string{"promote", path.Base(ref)})
+		root.SetArgs([]string{"promote", checkpointCommit[:7]})
 
 		if err := root.Execute(); err != nil {
 			t.Fatalf("promote command failed: %v", err)

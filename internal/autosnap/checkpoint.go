@@ -16,6 +16,7 @@ import (
 )
 
 const (
+	maxCheckpointRefCollisionRetries = 20
 	snapshotModeBoth    = "both"
 	snapshotModeStaged  = "staged"
 	snapshotModeWorking = "working"
@@ -56,8 +57,62 @@ func snapshotRef(branch string, timestamp string) string {
 	return path.Join(snapshotRefPrefix(branch), timestamp)
 }
 
-func currentTimestamp() string {
+var currentTimestampFn = func() string {
 	return time.Now().UTC().Format("20060102T150405Z")
+}
+
+func currentTimestamp() string {
+	return currentTimestampFn()
+}
+
+var zeroObjectID = strings.Repeat("0", 40)
+
+func checkpointRefTimestamp(ref string) string {
+	leaf := path.Base(ref)
+	if idx := strings.Index(leaf, "."); idx != -1 {
+		return leaf[:idx]
+	}
+	return leaf
+}
+
+func checkpointRefForAttempt(branchRef, timestamp, commit string, attempt int) string {
+	leaf := timestamp
+	if attempt > 0 {
+		shortCommit := commit
+		if len(shortCommit) > 7 {
+			shortCommit = shortCommit[:7]
+		}
+		leaf = leaf + "." + shortCommit
+		if attempt > 1 {
+			leaf = leaf + "." + strconv.Itoa(attempt)
+		}
+	}
+	return snapshotRef(branchRef, leaf)
+}
+
+func isCheckpointRefCollisionErr(result commandResult, err error) bool {
+	return err != nil &&
+		result.ExitCode == 128 &&
+		strings.Contains(strings.ToLower(result.Stderr), "reference already exists")
+}
+
+func createUniqueCheckpointRef(ctx context.Context, repoRoot, branchRef, timestamp, commit string) (string, error) {
+	maxAttempts := maxCheckpointRefCollisionRetries + 1
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		ref := checkpointRefForAttempt(branchRef, timestamp, commit, attempt)
+		result, err := runGitCommand(ctx, repoRoot, nil, "update-ref", ref, commit, zeroObjectID)
+		if err == nil {
+			return ref, nil
+		}
+		if isCheckpointRefCollisionErr(result, err) {
+			if attempt < maxAttempts-1 {
+				continue
+			}
+			return "", fmt.Errorf("failed to allocate unique checkpoint ref for timestamp %s after %d attempts", timestamp, maxAttempts)
+		}
+		return "", gitCommandError(err, result)
+	}
+	return "", fmt.Errorf("failed to allocate unique checkpoint ref for timestamp %s after %d attempts", timestamp, maxAttempts)
 }
 
 func currentGitPosition(ctx context.Context, repoRoot string) (gitPosition, error) {
@@ -202,8 +257,8 @@ func createCheckpointChecked(ctx context.Context, repoRoot, expectedBranchRef, e
 		return "", "", err
 	}
 
-	ref := snapshotRef(position.BranchRef, ts)
-	if _, err := runGitCommand(ctx, repoRoot, nil, "update-ref", ref, commit); err != nil {
+	ref, err := createUniqueCheckpointRef(ctx, repoRoot, position.BranchRef, ts, commit)
+	if err != nil {
 		return "", "", err
 	}
 
@@ -423,7 +478,7 @@ func getLatestCheckpointForBranch(ctx context.Context, repoRoot, branchRef strin
 	}
 
 	if ts == "" {
-		ts = path.Base(ref)
+		ts = checkpointRefTimestamp(ref)
 	}
 
 	return ref, ts, commit, nil
@@ -471,7 +526,7 @@ func listCheckpointRefsUnderPrefix(ctx context.Context, repoRoot, refPrefix, bra
 
 		refName := parts[0]
 		sha := parts[1]
-		timestamp := path.Base(refName)
+		timestamp := checkpointRefTimestamp(refName)
 		branch := branchRef
 		if branch == "" {
 			branch = branchFromCheckpointRef(refName)
@@ -516,25 +571,12 @@ func resolveCheckpointRefForArg(ctx context.Context, repoRoot, branchRef, arg st
 		return trimmed, nil
 	}
 
-	exactRef := snapshotRef(branchRef, trimmed)
-	if _, err := resolveAutosnapRefToCommit(ctx, repoRoot, exactRef); err == nil {
-		return exactRef, nil
-	}
-
 	entries, err := listCheckpointRefsForBranch(ctx, repoRoot, branchRef)
 	if err != nil {
 		return "", err
 	}
 	if len(entries) == 0 {
 		return "", fmt.Errorf("no checkpoints for current branch")
-	}
-
-	exactMatches := filterCheckpointRefsByTimestamp(entries, trimmed)
-	if len(exactMatches) == 1 {
-		return exactMatches[0].Ref, nil
-	}
-	if len(exactMatches) > 1 {
-		return "", fmt.Errorf("checkpoint identifier %q is ambiguous", trimmed)
 	}
 
 	if !isCommitLike(trimmed) {
@@ -592,7 +634,7 @@ func resolveCheckpointRefMetadata(ctx context.Context, repoRoot, branchRef, arg 
 		return checkpointRefInfo{
 			Ref:       ref,
 			Commit:    commit,
-			Timestamp: path.Base(ref),
+			Timestamp: checkpointRefTimestamp(ref),
 		}, nil
 	}
 
@@ -615,7 +657,7 @@ func resolveCheckpointRefMetadata(ctx context.Context, repoRoot, branchRef, arg 
 	return checkpointRefInfo{
 		Ref:       ref,
 		Commit:    commit,
-		Timestamp: path.Base(ref),
+		Timestamp: checkpointRefTimestamp(ref),
 	}, nil
 }
 
@@ -632,16 +674,6 @@ func isCommitLike(candidate string) bool {
 		return false
 	}
 	return true
-}
-
-func filterCheckpointRefsByTimestamp(entries []checkpointRefInfo, timestamp string) []checkpointRefInfo {
-	var matches []checkpointRefInfo
-	for _, entry := range entries {
-		if entry.Timestamp == timestamp {
-			matches = append(matches, entry)
-		}
-	}
-	return matches
 }
 
 func filterCheckpointRefsByCommit(entries []checkpointRefInfo, commit string, prefix bool) []checkpointRefInfo {

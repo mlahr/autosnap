@@ -208,6 +208,7 @@ func parsePruneDuration(value string) (time.Duration, error) {
 }
 
 func parseCheckpointTimestamp(timestamp string) (time.Time, error) {
+	timestamp = checkpointRefTimestamp(timestamp)
 	parsed, err := time.Parse("20060102T150405Z", timestamp)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("invalid checkpoint timestamp %q", timestamp)
