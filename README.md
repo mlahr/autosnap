@@ -15,13 +15,14 @@ It is implemented as a minimal Go prototype for the MVP command set:
 - `autosnap prune`
 - `autosnap config`
 
-Checkpoints are stored as Git refs under:
+Checkpoints are stored as Git refs under a generated path:
 
 ```
 refs/autosnapshots/<branch>/<timestamp>
 ```
 
-and are created only when checks pass.
+where `<timestamp>` is an internal, UTC-based, collision-resilient identifier.
+Checkpoints are created only when checks pass.
 
 ---
 
@@ -189,7 +190,7 @@ You can control what gets snapshotted:
 
 You can control where passing snapshots are saved:
 
-- `--commit-mode checkpoint` (default): save autosnap commits under `refs/autosnapshots/<branch>/<timestamp>`
+- `--commit-mode checkpoint` (default): save autosnap commits under `refs/autosnapshots/<branch>/<timestamp>`; collision handling appends deterministic suffixes to the timestamp in the ref name (for example `.abc1234`)
 - `--commit-mode direct`: commit all captured changes directly to the current branch and leave the worktree clean
 
 Direct commit mode requires `--snapshot-mode both`, so autosnap does not discard staged or unstaged changes that were intentionally left out of a snapshot.
@@ -258,7 +259,7 @@ Output includes:
 
 - repo path
 - branch
-- last checkpoint timestamp
+- last checkpoint creation identifier (internal UTC timestamp-based ref suffix)
 - last check result
 - last failed check (if any)
 - pending working-tree changes
@@ -301,11 +302,25 @@ Use `--color` to control syntax highlighting:
 autosnap show --full --color=always <checkpoint>
 ```
 
+Checkpoint argument examples:
+
+- `refs/autosnapshots/<branch>/<timestamp>` (explicit ref)
+- full or short commit hash of the checkpoint commit
+
+Timestamp-only input (for example `20260605T120000Z`) is not accepted as a checkpoint selector.
+
+`show` output includes a `status` line derived from the checkpoint commit message:
+
+- `passing`: generated autosnap checkpoint message or a custom message containing a recognized passing state
+- `failing`: generated/autosnap checkpoint message with explicit failing state
+- `unknown`: commit message is not in autosnap checkpoint format
+
 ### Restore checkpoint changes
 
 `autosnap restore <checkpoint>`
 
 	Applies the checkpoint diff back into the working tree and index without moving `HEAD`.
+`<checkpoint>` accepts the same selectors as `show` (explicit ref or commit hash; timestamp-only values are rejected).
 By default, restore refuses to run unless the worktree and index are clean.
 When changes overlap, restore attempts a three-way apply and may leave conflict markers for manual resolution.
 
@@ -320,6 +335,7 @@ autosnap restore --force <checkpoint>
 `autosnap promote <checkpoint>`
 
 Creates a normal commit on the current branch using the checkpoint tree and commit message.
+`<checkpoint>` accepts the same selectors as `show` (explicit ref or commit hash; timestamp-only values are rejected).
 By default, promote refuses to run unless the worktree and index are clean.
 
 Pass `--force` to skip the clean-state precheck:
