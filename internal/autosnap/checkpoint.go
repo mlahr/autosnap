@@ -800,10 +800,19 @@ func listCheckpointsForBranch(ctx context.Context, repoRoot, branchRef string) (
 	return listCheckpointsFromRefs(ctx, repoRoot, entries)
 }
 
+const failedCommitMetadataSummary = "failed to read commit metadata"
+
+type checkpointSubjectMetadata struct {
+	subject string
+	found   bool
+}
+
 func listCheckpointsFromRefs(ctx context.Context, repoRoot string, entries []checkpointRefInfo) ([]checkpointInfo, error) {
 	if len(entries) == 0 {
 		return nil, nil
 	}
+
+	subjectByRef := batchCheckpointSubjects(ctx, repoRoot, entries)
 
 	checkpoints := make([]checkpointInfo, 0, len(entries))
 	for _, entry := range entries {
@@ -811,10 +820,12 @@ func listCheckpointsFromRefs(ctx context.Context, repoRoot string, entries []che
 		status := "unknown"
 		summary := "unknown"
 
-		msg, err := getCommitMessage(ctx, repoRoot, entry.Ref)
-		if err == nil {
-			status, checkCmd = parseCheckpointMessage(msg)
-			summary = checkpointListSummary(msg)
+		meta := subjectByRef[entry.Ref]
+		if !meta.found {
+			summary = failedCommitMetadataSummary
+		} else {
+			status, checkCmd = parseCheckpointMessage(meta.subject)
+			summary = checkpointListSummary(meta.subject)
 		}
 
 		checkpoints = append(checkpoints, checkpointInfo{
@@ -839,4 +850,43 @@ func listCheckpointsFromRefs(ctx context.Context, repoRoot string, entries []che
 	})
 
 	return checkpoints, nil
+}
+
+func batchCheckpointSubjects(ctx context.Context, repoRoot string, entries []checkpointRefInfo) map[string]checkpointSubjectMetadata {
+	subjectByRef := map[string]checkpointSubjectMetadata{}
+	if len(entries) == 0 {
+		return subjectByRef
+	}
+
+	args := []string{
+		"for-each-ref",
+		"--sort=refname",
+		"--format=%(refname)\x1f%(subject)",
+	}
+	for _, entry := range entries {
+		args = append(args, entry.Ref)
+	}
+
+	result, err := runGitCommand(ctx, repoRoot, nil, args...)
+	if err != nil {
+		return subjectByRef
+	}
+
+	lines := strings.Split(strings.TrimSpace(result.Stdout), "\n")
+	for _, line := range lines {
+		parts := strings.SplitN(line, "\x1f", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		ref := strings.TrimSpace(parts[0])
+		if ref == "" {
+			continue
+		}
+		subjectByRef[ref] = checkpointSubjectMetadata{
+			subject: strings.TrimSpace(parts[1]),
+			found:   true,
+		}
+	}
+
+	return subjectByRef
 }

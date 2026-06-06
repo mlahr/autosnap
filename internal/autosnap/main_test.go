@@ -1984,6 +1984,52 @@ func TestListCommandRejectsMultipleScopes(t *testing.T) {
 	})
 }
 
+func TestListCheckpointsFromRefsIncludesFailedMetadata(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		validRef := createAutosnapTestCommitRef(t, repo, branchRef, "20260101T000000Z", "visible checkpoint")
+		missingRef := snapshotRef(branchRef, "20990101T000000Z-missing")
+
+		checkpoints, err := listCheckpointsFromRefs(context.Background(), repo, []checkpointRefInfo{
+			{
+				Ref:       validRef,
+				Commit:    "deadbeef",
+				Timestamp: "20260101T000000Z",
+				Branch:    branchRef,
+			},
+			{
+				Ref:       missingRef,
+				Commit:    "cafebabe",
+				Timestamp: "20260102T000000Z",
+				Branch:    branchRef,
+			},
+		})
+		if err != nil {
+			t.Fatalf("listCheckpointsFromRefs failed: %v", err)
+		}
+		if len(checkpoints) != 2 {
+			t.Fatalf("expected both checkpoints to be returned, got %d", len(checkpoints))
+		}
+
+		summaries := map[string]string{}
+		for _, checkpoint := range checkpoints {
+			summaries[checkpoint.Ref] = checkpoint.Summary
+		}
+		if summaries[validRef] == failedCommitMetadataSummary {
+			t.Fatalf("expected valid ref %s not to fail", validRef)
+		}
+		if summaries[missingRef] != failedCommitMetadataSummary {
+			t.Fatalf("expected missing ref %s to fail metadata read, got %q", missingRef, summaries[missingRef])
+		}
+	})
+}
+
 func TestPendingCommandCurrentBranch(t *testing.T) {
 	requireIntegration(t)
 	repo := createTestRepo(t)
