@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/spf13/cobra"
 )
@@ -50,17 +51,12 @@ func newPendingCommand() *cobra.Command {
 				return err
 			}
 
-			checkpoints, err := listCheckpointsFromRefs(ctx, repoRoot, refs)
+			pendingRefs, err := filterPendingCheckpointRefs(ctx, repoRoot, refs, branch, allBranches)
 			if err != nil {
 				return err
 			}
 
-			if len(checkpoints) == 0 {
-				fmt.Fprintln(out, "no checkpoints")
-				return nil
-			}
-
-			pending, err := filterPendingCheckpointRefs(ctx, repoRoot, checkpoints, branch, allBranches)
+			pending, err := listCheckpointsFromRefs(ctx, repoRoot, pendingRefs)
 			if err != nil {
 				return err
 			}
@@ -93,8 +89,8 @@ func newPendingCommand() *cobra.Command {
 	return cmd
 }
 
-func filterPendingCheckpointRefs(ctx context.Context, repoRoot string, checkpoints []checkpointInfo, branch string, allBranches bool) ([]checkpointInfo, error) {
-	grouped := map[string][]checkpointInfo{}
+func filterPendingCheckpointRefs(ctx context.Context, repoRoot string, checkpoints []checkpointRefInfo, branch string, allBranches bool) ([]checkpointRefInfo, error) {
+	grouped := map[string][]checkpointRefInfo{}
 	branchOrder := []string{}
 	for _, cp := range checkpoints {
 		baseRef := strings.TrimSpace(branch)
@@ -111,50 +107,118 @@ func filterPendingCheckpointRefs(ctx context.Context, repoRoot string, checkpoin
 		grouped[baseRef] = append(grouped[baseRef], cp)
 	}
 
-	pending := make([]checkpointInfo, 0, len(checkpoints))
-	for _, baseRef := range branchOrder {
-		resolvedRef := baseRef
-		if strings.HasPrefix(resolvedRef, "detached-") {
-			resolvedRef = "HEAD"
-		}
+	if len(grouped) == 0 {
+		return nil, nil
+	}
 
-		result, err := runGitCommand(ctx, repoRoot, nil, "rev-parse", resolvedRef)
-		if err != nil {
-			if allBranches {
-				continue
-			}
-			return nil, fmt.Errorf("failed to resolve branch tip %q: %w", resolvedRef, gitCommandError(err, result))
-		}
-		if strings.TrimSpace(result.Stdout) == "" {
-			if allBranches {
-				continue
-			}
-			return nil, fmt.Errorf("failed to resolve branch tip %q", resolvedRef)
-		}
+	type branchPending struct {
+		index     int
+		checkrefs []checkpointRefInfo
+		err       error
+	}
+	pendingByBranch := make([]branchPending, len(branchOrder))
+	resultCh := make(chan branchPending, len(branchOrder))
 
-		syncedIndex := -1
-		for i, cp := range grouped[baseRef] {
-			synced, err := checkpointMatchesRef(ctx, repoRoot, resolvedRef, cp.Commit)
-			if err != nil {
-				return nil, err
-			}
-			if synced {
-				syncedIndex = i
-			}
+	var wg sync.WaitGroup
+	for i, baseRef := range branchOrder {
+		cpList := grouped[baseRef]
+		wg.Add(1)
+		go func(index int, ref string, refs []checkpointRefInfo) {
+			defer wg.Done()
+			pending, err := filterPendingRefsForBranch(ctx, repoRoot, ref, refs, allBranches)
+			resultCh <- branchPending{index: index, checkrefs: pending, err: err}
+		}(i, baseRef, cpList)
+	}
+
+	go func() {
+		wg.Wait()
+		close(resultCh)
+	}()
+
+	for result := range resultCh {
+		if result.err != nil {
+			return nil, result.err
 		}
-		pending = append(pending, grouped[baseRef][syncedIndex+1:]...)
+		pendingByBranch[result.index] = result
+	}
+
+	pending := make([]checkpointRefInfo, 0, len(checkpoints))
+	for _, result := range pendingByBranch {
+		pending = append(pending, result.checkrefs...)
 	}
 
 	return pending, nil
 }
 
-func checkpointMatchesRef(ctx context.Context, repoRoot, baseRef, checkpointCommit string) (bool, error) {
-	result, err := runGitCommand(ctx, repoRoot, nil, "diff", "--quiet", baseRef, checkpointCommit)
-	if err == nil {
-		return true, nil
+func filterPendingRefsForBranch(ctx context.Context, repoRoot, baseRef string, checkpoints []checkpointRefInfo, allBranches bool) ([]checkpointRefInfo, error) {
+	if len(checkpoints) == 0 {
+		return nil, nil
 	}
-	if result.ExitCode == 1 {
-		return false, nil
+
+	resolvedRef := baseRef
+	if strings.HasPrefix(resolvedRef, "detached-") {
+		resolvedRef = "HEAD"
 	}
-	return false, gitCommandError(err, result)
+
+	result, err := runGitCommand(ctx, repoRoot, nil, "rev-parse", resolvedRef)
+	if err != nil {
+		if allBranches {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to resolve branch tip %q: %w", resolvedRef, gitCommandError(err, result))
+	}
+	branchTip := strings.TrimSpace(result.Stdout)
+	if branchTip == "" {
+		if allBranches {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to resolve branch tip %q", resolvedRef)
+	}
+
+	branchTipTreeResult, err := runGitCommand(ctx, repoRoot, nil, "rev-parse", branchTip+"^{tree}")
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve branch tip tree %q: %w", resolvedRef, gitCommandError(err, branchTipTreeResult))
+	}
+	branchTipTree := strings.TrimSpace(branchTipTreeResult.Stdout)
+	if branchTipTree == "" {
+		return nil, fmt.Errorf("failed to resolve branch tip tree %q", resolvedRef)
+	}
+
+	revParseArgs := make([]string, 0, len(checkpoints)+1)
+	revParseArgs = append(revParseArgs, "rev-parse")
+	for _, cp := range checkpoints {
+		revParseArgs = append(revParseArgs, cp.Commit+"^{tree}")
+	}
+	treesResult, err := runGitCommand(ctx, repoRoot, nil, revParseArgs...)
+	if err != nil {
+		return nil, gitCommandError(err, treesResult)
+	}
+
+	treeLines := strings.Split(strings.TrimSpace(treesResult.Stdout), "\n")
+	if len(treeLines) != len(checkpoints) {
+		treeLines = make([]string, len(checkpoints))
+		for i, cp := range checkpoints {
+			tree, treeErr := getCheckpointTree(ctx, repoRoot, cp.Commit)
+			if treeErr != nil {
+				return nil, treeErr
+			}
+			treeLines[i] = strings.TrimSpace(tree)
+		}
+	}
+
+	syncedIndex := -1
+	for i := len(checkpoints) - 1; i >= 0; i-- {
+		if i >= len(treeLines) {
+			continue
+		}
+		if strings.TrimSpace(treeLines[i]) == "" {
+			continue
+		}
+		if strings.TrimSpace(treeLines[i]) == branchTipTree {
+			syncedIndex = i
+			break
+		}
+	}
+
+	return checkpoints[syncedIndex+1:], nil
 }
