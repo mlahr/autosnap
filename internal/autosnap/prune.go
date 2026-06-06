@@ -108,7 +108,7 @@ func newPruneCommand() *cobra.Command {
 			}
 
 			for _, row := range rows {
-				fmt.Fprintf(out, "%s %s %s %s\n", row.Timestamp, row.Commit, row.Ref, row.Summary)
+				fmt.Fprintf(out, "%s %s %s %s\n", formatCheckpointTimestamp(row.Timestamp), row.Commit, row.Ref, row.Summary)
 			}
 			return nil
 		},

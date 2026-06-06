@@ -45,6 +45,8 @@ func newStatusCommand() *cobra.Command {
 				}
 			}
 
+			lastCheckpoint = formatCheckpointTimestamp(lastCheckpoint)
+
 			lastCheck := "never"
 			if state.LastCheckStatus != "" && state.LastBranch == branchRef {
 				lastCheck = state.LastCheckStatus

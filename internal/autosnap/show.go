@@ -36,7 +36,7 @@ func newShowCommand() *cobra.Command {
 
 			fmt.Fprintf(out, "checkpoint: %s\n", meta.Ref)
 			fmt.Fprintf(out, "commit: %s\n", meta.Commit)
-			fmt.Fprintf(out, "timestamp: %s\n", meta.Timestamp)
+			fmt.Fprintf(out, "timestamp: %s\n", formatCheckpointTimestamp(meta.Timestamp))
 
 			message, err := getCommitMessage(ctx, repoRoot, meta.Ref)
 			if err == nil && message != "" {

@@ -67,6 +67,20 @@ func currentTimestamp() string {
 
 var zeroObjectID = strings.Repeat("0", 40)
 
+func formatCheckpointTimestamp(timestamp string) string {
+	parsed, err := time.Parse("20060102T150405Z", checkpointRefTimestamp(timestamp))
+	if err == nil {
+		return parsed.Local().Format("2006-01-02 15:04:05 MST")
+	}
+
+	parsedLegacy, err := time.Parse("2006-01-02 15:04:05", timestamp)
+	if err == nil {
+		return parsedLegacy.Local().Format("2006-01-02 15:04:05 MST")
+	}
+
+	return timestamp
+}
+
 func checkpointRefTimestamp(ref string) string {
 	leaf := path.Base(ref)
 	if idx := strings.Index(leaf, "."); idx != -1 {

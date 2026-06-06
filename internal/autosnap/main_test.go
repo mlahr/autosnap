@@ -309,6 +309,52 @@ func TestStatusOutputIncludesDaemonLine(t *testing.T) {
 	})
 }
 
+func TestStatusOutputsFormattedLastCheckpoint(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		statePath, err := stateFilePath(repo)
+		if err != nil {
+			t.Fatalf("stateFilePath failed: %v", err)
+		}
+		state := autosnapState{
+			RepoRoot:         repo,
+			LastBranch:       branchRef,
+			LastCheckpointAt: "20260101T120000Z",
+		}
+		if err := saveAutosnapState(statePath, state); err != nil {
+			t.Fatalf("saveAutosnapState failed: %v", err)
+		}
+
+		parsed, err := time.Parse("20060102T150405Z", "20260101T120000Z")
+		if err != nil {
+			t.Fatalf("parse timestamp failed: %v", err)
+		}
+		want := parsed.Local().Format("2006-01-02 15:04:05 MST")
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newStatusCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"status"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("status command failed: %v", err)
+		}
+		if !strings.Contains(buf.String(), "last checkpoint: "+want) {
+			t.Fatalf("expected formatted status checkpoint timestamp, got: %q", buf.String())
+		}
+		if strings.Contains(buf.String(), "last checkpoint: 20260101T120000Z") {
+			t.Fatalf("expected formatted status checkpoint timestamp, got: %q", buf.String())
+		}
+	})
+}
+
 func TestStopCommandRemovesStalePidState(t *testing.T) {
 	requireIntegration(t)
 	repo := createTestRepo(t)
@@ -530,6 +576,15 @@ func TestFormatCheckpointTimestampForList(t *testing.T) {
 
 	if got := formatCheckpointTimestampForList("20210101T000000Z.abc"); got != want {
 		t.Fatalf("expected suffixed timestamp formatted as %q, got %q", want, got)
+	}
+
+	parsedLegacy, err := time.Parse("2006-01-02 15:04:05", "2026-06-01 12:00:00")
+	if err != nil {
+		t.Fatalf("parse legacy timestamp failed: %v", err)
+	}
+	wantLegacy := parsedLegacy.Local().Format("2006-01-02 15:04:05 MST")
+	if got := formatCheckpointTimestampForList("2026-06-01 12:00:00"); got != wantLegacy {
+		t.Fatalf("expected legacy formatted timestamp %q, got %q", wantLegacy, got)
 	}
 }
 
@@ -2832,8 +2887,13 @@ func TestShowCommandFullUsesPreviousCheckpointForDiffBase(t *testing.T) {
 		if !strings.Contains(output, "+checkpointed") {
 			t.Fatalf("expected checkpointed patch in output, got: %q", output)
 		}
-		if !strings.Contains(output, "timestamp: 20260101T120000Z") {
-			t.Fatalf("expected canonical show timestamp, got: %q", output)
+		parsedTs, err := time.Parse("20060102T150405Z", "20260101T120000Z")
+		if err != nil {
+			t.Fatalf("parse timestamp failed: %v", err)
+		}
+		want := parsedTs.Local().Format("2006-01-02 15:04:05 MST")
+		if !strings.Contains(output, "timestamp: "+want) {
+			t.Fatalf("expected formatted show timestamp, got: %q", output)
 		}
 		if strings.Contains(output, "timestamp: 20260101T120000Z.") {
 			t.Fatalf("expected timestamp to omit collision suffix in show output: %q", output)
@@ -3374,11 +3434,25 @@ func TestPruneCommandDryRunKeepsRefs(t *testing.T) {
 		}
 
 		output := buf.String()
+		parsedOldest, err := time.Parse("20060102T150405Z", "20200101T000000Z")
+		if err != nil {
+			t.Fatalf("parse timestamp failed: %v", err)
+		}
+		wantOldest := parsedOldest.Local().Format("2006-01-02 15:04:05 MST")
+		parsedMiddle, err := time.Parse("20060102T150405Z", "20210101T000000Z")
+		if err != nil {
+			t.Fatalf("parse timestamp failed: %v", err)
+		}
+		wantMiddle := parsedMiddle.Local().Format("2006-01-02 15:04:05 MST")
+
 		if !strings.Contains(output, "dry run: 2 checkpoint(s) would be pruned") {
 			t.Fatalf("expected dry-run count, got %q", output)
 		}
 		if !strings.Contains(output, oldest) || !strings.Contains(output, middle) {
 			t.Fatalf("expected old refs in dry-run output, got %q", output)
+		}
+		if !strings.Contains(output, wantOldest) || !strings.Contains(output, wantMiddle) {
+			t.Fatalf("expected formatted timestamps in prune output, got %q", output)
 		}
 		if !strings.Contains(output, "old checkpoint message") || !strings.Contains(output, "middle checkpoint message") {
 			t.Fatalf("expected commit messages in dry-run output, got %q", output)
