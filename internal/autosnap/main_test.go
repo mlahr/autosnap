@@ -2804,7 +2804,7 @@ func TestShowCommandReturnsNotFoundForUnknownCheckpoint(t *testing.T) {
 	})
 }
 
-func TestShowCommandFullFlagShowsPatch(t *testing.T) {
+func TestShowCommandShowsPatchByDefault(t *testing.T) {
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -2848,10 +2848,10 @@ func TestShowCommandFullFlagShowsPatch(t *testing.T) {
 		root.AddCommand(newShowCommand())
 		root.SetOut(buf)
 		root.SetErr(buf)
-		root.SetArgs([]string{"show", "--full", ref2})
+		root.SetArgs([]string{"show", ref2})
 
 		if err := root.Execute(); err != nil {
-			t.Fatalf("show --full failed: %v", err)
+			t.Fatalf("show failed: %v", err)
 		}
 
 		output := buf.String()
@@ -2864,10 +2864,90 @@ func TestShowCommandFullFlagShowsPatch(t *testing.T) {
 		if !strings.Contains(output, "+++ b/file.txt") {
 			t.Fatalf("expected file diff in output, got: %q", output)
 		}
+
+		buf.Reset()
+		root = &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newShowCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"show", "--full", ref2})
+
+		if err := root.Execute(); err != nil {
+			t.Fatalf("show --full failed: %v", err)
+		}
+		if !strings.Contains(buf.String(), "diff --git") {
+			t.Fatalf("expected --full compatibility flag to show patch output, got: %q", buf.String())
+		}
 	})
 }
 
-func TestShowCommandFullUsesPreviousCheckpointForDiffBase(t *testing.T) {
+func TestShowCommandNameOnlyShowsChangedFileNames(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		gitDirectory, err := gitDir(context.Background(), repo)
+		if err != nil {
+			t.Fatalf("gitDir failed: %v", err)
+		}
+
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("checkpoint base\n"), 0o644); err != nil {
+			t.Fatalf("write first checkpoint failed: %v", err)
+		}
+		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
+		if err != nil {
+			t.Fatalf("computeWorktreeTree failed: %v", err)
+		}
+		_, _, err = createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree, "")
+		if err != nil {
+			t.Fatalf("create checkpoint failed: %v", err)
+		}
+
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("updated\n"), 0o644); err != nil {
+			t.Fatalf("update file failed: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, "new.txt"), []byte("new\n"), 0o644); err != nil {
+			t.Fatalf("write new file failed: %v", err)
+		}
+
+		tree2, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
+		if err != nil {
+			t.Fatalf("computeWorktreeTree changed failed: %v", err)
+		}
+		ref2, _, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree2, "")
+		if err != nil {
+			t.Fatalf("create checkpoint changed failed: %v", err)
+		}
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newShowCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"show", "--name-only", ref2})
+
+		if err := root.Execute(); err != nil {
+			t.Fatalf("show --name-only failed: %v", err)
+		}
+
+		output := buf.String()
+		if !strings.Contains(output, "file.txt") {
+			t.Fatalf("expected changed file name in output, got: %q", output)
+		}
+		if !strings.Contains(output, "new.txt") {
+			t.Fatalf("expected new file name in output, got: %q", output)
+		}
+		if strings.Contains(output, "diff --git") {
+			t.Fatalf("expected name-only output without patch body, got: %q", output)
+		}
+	})
+}
+
+func TestShowCommandUsesPreviousCheckpointForDiffBase(t *testing.T) {
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -2923,10 +3003,10 @@ func TestShowCommandFullUsesPreviousCheckpointForDiffBase(t *testing.T) {
 		root.AddCommand(newShowCommand())
 		root.SetOut(buf)
 		root.SetErr(buf)
-		root.SetArgs([]string{"show", "--full", ref2})
+		root.SetArgs([]string{"show", ref2})
 
 		if err := root.Execute(); err != nil {
-			t.Fatalf("show --full with previous checkpoint diff base failed: %v", err)
+			t.Fatalf("show with previous checkpoint diff base failed: %v", err)
 		}
 
 		output := buf.String()
@@ -2950,7 +3030,7 @@ func TestShowCommandFullUsesPreviousCheckpointForDiffBase(t *testing.T) {
 	})
 }
 
-func TestShowCommandFullUsesTargetCheckpointBranchForExplicitRefDiffBase(t *testing.T) {
+func TestShowCommandUsesTargetCheckpointBranchForExplicitRefDiffBase(t *testing.T) {
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -3009,10 +3089,10 @@ func TestShowCommandFullUsesTargetCheckpointBranchForExplicitRefDiffBase(t *test
 		root.AddCommand(newShowCommand())
 		root.SetOut(buf)
 		root.SetErr(buf)
-		root.SetArgs([]string{"show", "--full", ref2})
+		root.SetArgs([]string{"show", ref2})
 
 		if err := root.Execute(); err != nil {
-			t.Fatalf("show --full explicit ref failed: %v", err)
+			t.Fatalf("show explicit ref failed: %v", err)
 		}
 
 		output := buf.String()
@@ -3060,7 +3140,7 @@ func TestShowCommandColorModes(t *testing.T) {
 			t.Fatalf("create checkpoint changed failed: %v", err)
 		}
 
-		fullArgs := []string{"show", "--full", "--color=always", ref2}
+		fullArgs := []string{"show", "--color=always", ref2}
 		colorBuf := &bytes.Buffer{}
 		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
 		root.AddCommand(newShowCommand())
@@ -3069,13 +3149,13 @@ func TestShowCommandColorModes(t *testing.T) {
 		root.SetArgs(fullArgs)
 
 		if err := root.Execute(); err != nil {
-			t.Fatalf("show --full --color=always failed: %v", err)
+			t.Fatalf("show --color=always failed: %v", err)
 		}
 		if !strings.Contains(colorBuf.String(), "\x1b[") {
 			t.Fatalf("expected ANSI color escapes for --color=always, got: %q", colorBuf.String())
 		}
 
-		autoArgs := []string{"show", "--full", ref2}
+		autoArgs := []string{"show", ref2}
 		autoBuf := &bytes.Buffer{}
 		root = &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
 		root.AddCommand(newShowCommand())
@@ -3084,7 +3164,7 @@ func TestShowCommandColorModes(t *testing.T) {
 		root.SetArgs(autoArgs)
 
 		if err := root.Execute(); err != nil {
-			t.Fatalf("show --full (auto) failed: %v", err)
+			t.Fatalf("show (auto) failed: %v", err)
 		}
 		if strings.Contains(autoBuf.String(), "\x1b[") {
 			t.Fatalf("expected auto mode to avoid ANSI when output is not a terminal: %q", autoBuf.String())

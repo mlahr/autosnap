@@ -295,12 +295,12 @@ Shows checkpoints after the latest checkpoint whose snapshot has an empty diff a
 
 `autosnap show <checkpoint>`
 
-Shows checkpoint metadata and a stat diff for the checkpoint object.
+Shows checkpoint metadata and the full patch diff for the checkpoint object.
 
-Pass `--full` to show full patch content:
+Pass `--name-only` to show only changed file names:
 
 ```bash
-autosnap show --full <checkpoint>
+autosnap show --name-only <checkpoint>
 ```
 
 Use `--color` to control syntax highlighting:
@@ -310,7 +310,7 @@ Use `--color` to control syntax highlighting:
 - `--color=auto` (default) enables color only for terminal output
 
 ```bash
-autosnap show --full --color=always <checkpoint>
+autosnap show --color=always <checkpoint>
 ```
 
 Checkpoint argument examples:

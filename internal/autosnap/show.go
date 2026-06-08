@@ -14,6 +14,7 @@ import (
 func newShowCommand() *cobra.Command {
 	var (
 		full      bool
+		nameOnly  bool
 		colorMode string
 	)
 
@@ -58,11 +59,10 @@ func newShowCommand() *cobra.Command {
 			}
 
 			showArgs := []string{colorArg}
-			if full {
-				showArgs = append(showArgs, diffBase, meta.Commit)
-			} else {
-				showArgs = append(showArgs, "--stat", diffBase, meta.Commit)
+			if nameOnly {
+				showArgs = append(showArgs, "--name-only")
 			}
+			showArgs = append(showArgs, diffBase, meta.Commit)
 
 			showResult, err := runGitCommand(ctx, repoRoot, nil, append([]string{"diff"}, showArgs...)...)
 			if err != nil {
@@ -82,7 +82,8 @@ func newShowCommand() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().BoolVar(&full, "full", false, "Show full checkpoint diff")
+	cmd.Flags().BoolVar(&full, "full", false, "Show full checkpoint diff (default)")
+	cmd.Flags().BoolVar(&nameOnly, "name-only", false, "Show only changed file names")
 	cmd.Flags().StringVar(&colorMode, "color", "auto", "Color output: auto, always, never")
 	return cmd
 }
