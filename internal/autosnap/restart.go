@@ -61,7 +61,7 @@ func newRestartCommand() *cobra.Command {
 	cmd.Flags().StringVar(&msgSourceCmd, "msg-source-cmd", "", "Shell command that returns the checkpoint commit message (multiline supported)")
 	cmd.Flags().IntVar(&idleSeconds, "idle", 60, "Seconds without changes before running the check")
 	cmd.Flags().StringVar(&snapshotMode, "snapshot-mode", snapshotModeBoth, "Snapshot source: both, staged, working")
-	cmd.Flags().StringVar(&commitMode, "commit-mode", commitModeCheckpoint, "Commit target: checkpoint, direct")
+	cmd.Flags().StringVar(&commitMode, "commit-mode", commitModeCheckpoint, "Commit target: checkpoint, direct, sync")
 	cmd.Flags().StringVar(&watchMode, "watch-mode", watchModeRecursive, "Watch strategy: recursive, poll, auto")
 	cmd.Flags().DurationVar(&pollInterval, "poll-interval", defaultPollInterval, "Polling interval for poll or auto watch mode")
 
@@ -150,13 +150,13 @@ func resolveRestartConfig(repoRoot string, cmd *cobra.Command, runState autosnap
 	normalizedCommitMode, err := normalizeCommitMode(cfg.CommitMode)
 	if err != nil {
 		if flags.Changed("commit-mode") {
-			return cfg, fmt.Errorf("invalid --commit-mode %q (expected checkpoint, direct)", cfg.CommitMode)
+			return cfg, fmt.Errorf("invalid --commit-mode %q (expected checkpoint, direct, sync)", cfg.CommitMode)
 		}
-		return cfg, fmt.Errorf("invalid commit_mode %q (expected checkpoint, direct)", cfg.CommitMode)
+		return cfg, fmt.Errorf("invalid commit_mode %q (expected checkpoint, direct, sync)", cfg.CommitMode)
 	}
 	cfg.CommitMode = normalizedCommitMode
-	if cfg.CommitMode == commitModeDirect && cfg.SnapshotMode != snapshotModeBoth {
-		return cfg, fmt.Errorf("commit_mode direct requires snapshot_mode both")
+	if isDirectCommitMode(cfg.CommitMode) && cfg.SnapshotMode != snapshotModeBoth {
+		return cfg, fmt.Errorf("commit_mode %s requires snapshot_mode both", cfg.CommitMode)
 	}
 
 	normalizedWatchMode, err := normalizeWatchMode(cfg.Watch.Mode)

@@ -85,8 +85,8 @@ func newSnapshotRunnerWithWatch(ctx context.Context, repoRoot, branchRef, checkC
 	if err != nil {
 		return nil, err
 	}
-	if normalizedCommitMode == commitModeDirect && snapshotMode != snapshotModeBoth {
-		return nil, errors.New("commit_mode direct requires snapshot_mode both")
+	if isDirectCommitMode(normalizedCommitMode) && snapshotMode != snapshotModeBoth {
+		return nil, fmt.Errorf("commit_mode %s requires snapshot_mode both", normalizedCommitMode)
 	}
 	if pollInterval <= 0 {
 		return nil, errors.New("poll interval must be greater than 0")
@@ -359,7 +359,17 @@ func (r *snapshotRunner) runCheck() {
 	}
 
 	switch r.commitMode {
-	case commitModeDirect:
+	case commitModeDirect, commitModeSync:
+		freshTree, err := computeWorktreeTree(r.ctx, r.repoRoot, gitDirectory, r.snapshotMode)
+		if err != nil {
+			logf("unable to re-check working tree before direct commit: %v\n", err)
+			return
+		}
+		if freshTree != tree {
+			logln("worktree changed during check; direct commit deferred")
+			return
+		}
+
 		commit, created, ts, err := createDirectCommitChecked(r.ctx, r.repoRoot, branchRef, position.Head, r.checkCmd, r.idle, tree, commitMessage)
 		if err != nil {
 			logf("unable to create direct commit: %v\n", err)
@@ -370,18 +380,41 @@ func (r *snapshotRunner) runCheck() {
 			return
 		}
 
-		r.state.LastCheckpointRef = commit
+		commitShort := commit
+		if len(commitShort) > 7 {
+			commitShort = commitShort[:7]
+		}
+		logf("direct commit saved locally: %s\n", commitShort)
+
+		recordedCommit := commit
+		if r.commitMode == commitModeSync {
+			if status, err := worktreeStatus(r.ctx, r.repoRoot); err != nil {
+				logf("sync skipped after local commit %s: unable to verify clean worktree: %v\n", commitShort, err)
+			} else if status != "" {
+				logf("sync skipped after local commit %s: worktree changed during commit:\n%s\n", commitShort, status)
+			} else {
+				syncedHead, err := syncDirectCommit(r.ctx, r.repoRoot)
+				if syncedHead != "" {
+					recordedCommit = syncedHead
+				}
+				if err != nil {
+					logf("sync failed after local commit %s: %v\n", commitShort, err)
+				} else {
+					syncedShort := recordedCommit
+					if len(syncedShort) > 7 {
+						syncedShort = syncedShort[:7]
+					}
+					logf("sync completed: %s\n", syncedShort)
+				}
+			}
+		}
+
+		r.state.LastCheckpointRef = recordedCommit
 		r.state.LastCheckpointAt = ts
 		r.state.LastCheckpointTree = tree
 		if err := saveAutosnapState(r.statePath, r.state); err != nil {
 			logf("unable to persist state: %v\n", err)
 		}
-
-		commitShort := commit
-		if len(commitShort) > 7 {
-			commitShort = commitShort[:7]
-		}
-		logf("direct commit saved: %s\n", commitShort)
 	default:
 		ref, commit, err := createCheckpointChecked(r.ctx, r.repoRoot, branchRef, position.Head, r.checkCmd, r.idle, tree, commitMessage)
 		if err != nil {

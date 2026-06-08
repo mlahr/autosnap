@@ -1026,7 +1026,7 @@ func TestLoadAutosnapConfig(t *testing.T) {
 	raw := []byte(`check = "go test ./..."
 idle_seconds = 15
 snapshot_mode = "staged"
-commit_mode = "direct"
+commit_mode = "sync"
 msg_source_cmd = "printf msg"
 
 [watch]
@@ -1044,7 +1044,7 @@ poll_interval = "2s"
 	if !found {
 		t.Fatalf("expected config to be found")
 	}
-	if cfg.Check != "go test ./..." || cfg.IdleSeconds != 15 || cfg.SnapshotMode != snapshotModeStaged || cfg.CommitMode != commitModeDirect || cfg.MsgSourceCmd != "printf msg" || cfg.Watch.Mode != watchModeAuto || cfg.Watch.PollInterval != 2*time.Second {
+	if cfg.Check != "go test ./..." || cfg.IdleSeconds != 15 || cfg.SnapshotMode != snapshotModeStaged || cfg.CommitMode != commitModeSync || cfg.MsgSourceCmd != "printf msg" || cfg.Watch.Mode != watchModeAuto || cfg.Watch.PollInterval != 2*time.Second {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
 }
@@ -1109,6 +1109,25 @@ commit_mode = "direct"
 	}
 	if !strings.Contains(err.Error(), "commit_mode direct requires snapshot_mode both") {
 		t.Fatalf("expected direct snapshot mode error, got %v", err)
+	}
+}
+
+func TestResolveStartConfigRejectsUnsafeSyncSnapshotMode(t *testing.T) {
+	repo := t.TempDir()
+	raw := []byte(`check = "go test ./..."
+snapshot_mode = "staged"
+commit_mode = "sync"
+`)
+	if err := os.WriteFile(autosnapConfigPath(repo), raw, 0o644); err != nil {
+		t.Fatalf("write config failed: %v", err)
+	}
+
+	_, _, err := resolveStartConfig(repo, newStartCommand(), "", "", 60, snapshotModeBoth, commitModeCheckpoint, watchModeRecursive, defaultPollInterval)
+	if err == nil {
+		t.Fatalf("expected unsafe sync snapshot mode to fail")
+	}
+	if !strings.Contains(err.Error(), "commit_mode sync requires snapshot_mode both") {
+		t.Fatalf("expected sync snapshot mode error, got %v", err)
 	}
 }
 
@@ -1362,6 +1381,9 @@ func TestCommitModeHelpers(t *testing.T) {
 	}
 	if mode, err := normalizeCommitMode(commitModeDirect); err != nil || mode != commitModeDirect {
 		t.Fatalf("expected direct commit mode to normalize, got %q err=%v", mode, err)
+	}
+	if mode, err := normalizeCommitMode(commitModeSync); err != nil || mode != commitModeSync {
+		t.Fatalf("expected sync commit mode to normalize, got %q err=%v", mode, err)
 	}
 	if _, err := normalizeCommitMode("bad"); err == nil {
 		t.Fatalf("expected invalid commit mode error")
@@ -1897,6 +1919,217 @@ func TestRunCheckDirectCommitRejectsDetachedHead(t *testing.T) {
 		}
 		if status := runGitOutput(t, repoRoot, "status", "--porcelain"); status == "" {
 			t.Fatalf("expected detached direct mode to leave working-tree changes")
+		}
+	})
+}
+
+func TestRunCheckDirectCommitDefersWhenWorktreeChangesDuringCheck(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		ctx := context.Background()
+		repoRoot, _, branchRef, err := detectRepository(ctx)
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		initialHead := runGitOutput(t, repoRoot, "rev-parse", "HEAD")
+
+		statePath, err := stateFilePath(repoRoot)
+		if err != nil {
+			t.Fatalf("stateFilePath failed: %v", err)
+		}
+		runner, err := newSnapshotRunnerWithWatch(ctx, repoRoot, branchRef, "true", "printf changed > late.txt && printf message", snapshotModeBoth, commitModeSync, watchModePoll, time.Second, time.Second, statePath)
+		if err != nil {
+			t.Fatalf("new sync runner failed: %v", err)
+		}
+
+		if err := os.WriteFile(filepath.Join(repoRoot, "file.txt"), []byte("initial direct change"), 0o644); err != nil {
+			t.Fatalf("write tracked file failed: %v", err)
+		}
+
+		runner.runCheck()
+
+		if head := runGitOutput(t, repoRoot, "rev-parse", "HEAD"); head != initialHead {
+			t.Fatalf("expected stale direct snapshot to defer commit, got HEAD %s want %s", head, initialHead)
+		}
+		if runner.state.LastCheckpointRef != "" {
+			t.Fatalf("expected deferred commit not to record checkpoint ref, got %s", runner.state.LastCheckpointRef)
+		}
+		status := runGitOutput(t, repoRoot, "status", "--porcelain")
+		if !strings.Contains(status, "M file.txt") || !strings.Contains(status, "?? late.txt") {
+			t.Fatalf("expected original and late changes to remain pending, got %q", status)
+		}
+	})
+}
+
+func TestRunCheckSyncCommitPullsRebasesAndPushes(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	remoteRoot := t.TempDir()
+	remote := filepath.Join(remoteRoot, "origin.git")
+	runGit(t, remoteRoot, "init", "--bare", remote)
+	runGit(t, repo, "remote", "add", "origin", remote)
+	runGit(t, repo, "push", "-u", "origin", "HEAD")
+
+	other := filepath.Join(t.TempDir(), "other")
+	runGit(t, t.TempDir(), "clone", remote, other)
+	runGit(t, other, "config", "user.name", "Autosnap Test")
+	runGit(t, other, "config", "user.email", "test@autosnap.local")
+	if err := os.WriteFile(filepath.Join(other, "upstream.txt"), []byte("upstream change"), 0o644); err != nil {
+		t.Fatalf("write upstream file failed: %v", err)
+	}
+	runGit(t, other, "add", "upstream.txt")
+	runGit(t, other, "commit", "-m", "upstream change")
+	runGit(t, other, "push")
+
+	withWorkingDir(t, repo, func() {
+		ctx := context.Background()
+		repoRoot, _, branchRef, err := detectRepository(ctx)
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		initialHead := runGitOutput(t, repoRoot, "rev-parse", "HEAD")
+
+		statePath, err := stateFilePath(repoRoot)
+		if err != nil {
+			t.Fatalf("stateFilePath failed: %v", err)
+		}
+		runner, err := newSnapshotRunnerWithWatch(ctx, repoRoot, branchRef, "true", "", snapshotModeBoth, commitModeSync, watchModePoll, time.Second, time.Second, statePath)
+		if err != nil {
+			t.Fatalf("new sync runner failed: %v", err)
+		}
+
+		if err := os.WriteFile(filepath.Join(repoRoot, "file.txt"), []byte("sync change"), 0o644); err != nil {
+			t.Fatalf("write tracked file failed: %v", err)
+		}
+
+		runner.runCheck()
+
+		newHead := runGitOutput(t, repoRoot, "rev-parse", "HEAD")
+		if newHead == initialHead {
+			t.Fatalf("expected sync mode to advance HEAD")
+		}
+		if runner.state.LastCheckpointRef != newHead {
+			t.Fatalf("expected state to record synced HEAD %s, got %s", newHead, runner.state.LastCheckpointRef)
+		}
+		if status := runGitOutput(t, repoRoot, "status", "--porcelain"); status != "" {
+			t.Fatalf("expected sync commit to leave clean worktree, got %q", status)
+		}
+		if got := runGitOutput(t, repoRoot, "show", "HEAD:file.txt"); got != "sync change" {
+			t.Fatalf("expected local change in synced commit, got %q", got)
+		}
+		if got := runGitOutput(t, repoRoot, "show", "HEAD:upstream.txt"); got != "upstream change" {
+			t.Fatalf("expected pulled upstream change, got %q", got)
+		}
+
+		remoteHead := runGitOutput(t, repoRoot, "ls-remote", "origin", "refs/heads/"+branchRef)
+		if !strings.HasPrefix(remoteHead, newHead+"\t") {
+			t.Fatalf("expected remote branch to be pushed to %s, got %q", newHead, remoteHead)
+		}
+	})
+}
+
+func TestRunCheckSyncCommitAbortsRebaseConflictAndKeepsLocalCommit(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	remoteRoot := t.TempDir()
+	remote := filepath.Join(remoteRoot, "origin.git")
+	runGit(t, remoteRoot, "init", "--bare", remote)
+	runGit(t, repo, "remote", "add", "origin", remote)
+	runGit(t, repo, "push", "-u", "origin", "HEAD")
+
+	other := filepath.Join(t.TempDir(), "other")
+	runGit(t, t.TempDir(), "clone", remote, other)
+	runGit(t, other, "config", "user.name", "Autosnap Test")
+	runGit(t, other, "config", "user.email", "test@autosnap.local")
+	if err := os.WriteFile(filepath.Join(other, "file.txt"), []byte("upstream conflict"), 0o644); err != nil {
+		t.Fatalf("write upstream file failed: %v", err)
+	}
+	runGit(t, other, "add", "file.txt")
+	runGit(t, other, "commit", "-m", "upstream conflict")
+	runGit(t, other, "push")
+
+	withWorkingDir(t, repo, func() {
+		ctx := context.Background()
+		repoRoot, _, branchRef, err := detectRepository(ctx)
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		initialHead := runGitOutput(t, repoRoot, "rev-parse", "HEAD")
+
+		statePath, err := stateFilePath(repoRoot)
+		if err != nil {
+			t.Fatalf("stateFilePath failed: %v", err)
+		}
+		runner, err := newSnapshotRunnerWithWatch(ctx, repoRoot, branchRef, "true", "", snapshotModeBoth, commitModeSync, watchModePoll, time.Second, time.Second, statePath)
+		if err != nil {
+			t.Fatalf("new sync runner failed: %v", err)
+		}
+
+		if err := os.WriteFile(filepath.Join(repoRoot, "file.txt"), []byte("local conflict"), 0o644); err != nil {
+			t.Fatalf("write local file failed: %v", err)
+		}
+
+		runner.runCheck()
+
+		localHead := runGitOutput(t, repoRoot, "rev-parse", "HEAD")
+		if localHead == initialHead {
+			t.Fatalf("expected sync mode to create local commit before failed rebase")
+		}
+		if runner.state.LastCheckpointRef != localHead {
+			t.Fatalf("expected state to record local HEAD %s, got %s", localHead, runner.state.LastCheckpointRef)
+		}
+		if status := runGitOutput(t, repoRoot, "status", "--porcelain"); status != "" {
+			t.Fatalf("expected failed rebase to abort back to clean worktree, got %q", status)
+		}
+		if got := runGitOutput(t, repoRoot, "show", "HEAD:file.txt"); got != "local conflict" {
+			t.Fatalf("expected local commit content after abort, got %q", got)
+		}
+		remoteHead := runGitOutput(t, repoRoot, "rev-parse", "origin/"+branchRef)
+		if remoteHead == localHead {
+			t.Fatalf("expected failed sync not to push local commit")
+		}
+	})
+}
+
+func TestRunCheckSyncCommitKeepsLocalCommitWithoutUpstream(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		ctx := context.Background()
+		repoRoot, _, branchRef, err := detectRepository(ctx)
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		initialHead := runGitOutput(t, repoRoot, "rev-parse", "HEAD")
+
+		statePath, err := stateFilePath(repoRoot)
+		if err != nil {
+			t.Fatalf("stateFilePath failed: %v", err)
+		}
+		runner, err := newSnapshotRunnerWithWatch(ctx, repoRoot, branchRef, "true", "", snapshotModeBoth, commitModeSync, watchModePoll, time.Second, time.Second, statePath)
+		if err != nil {
+			t.Fatalf("new sync runner failed: %v", err)
+		}
+
+		if err := os.WriteFile(filepath.Join(repoRoot, "file.txt"), []byte("local sync change"), 0o644); err != nil {
+			t.Fatalf("write tracked file failed: %v", err)
+		}
+
+		runner.runCheck()
+
+		newHead := runGitOutput(t, repoRoot, "rev-parse", "HEAD")
+		if newHead == initialHead {
+			t.Fatalf("expected sync mode to keep local commit even without upstream")
+		}
+		if runner.state.LastCheckpointRef != newHead {
+			t.Fatalf("expected state to record local HEAD %s, got %s", newHead, runner.state.LastCheckpointRef)
+		}
+		if status := runGitOutput(t, repoRoot, "status", "--porcelain"); status != "" {
+			t.Fatalf("expected failed sync to leave clean worktree after local commit, got %q", status)
+		}
+		if got := runGitOutput(t, repoRoot, "show", "HEAD:file.txt"); got != "local sync change" {
+			t.Fatalf("expected local change to remain committed, got %q", got)
 		}
 	})
 }

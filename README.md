@@ -1,6 +1,6 @@
 # autosnap
 
-`autosnap` is a local Git checkpointing CLI that saves passing, test-gated snapshots to Git refs without committing to your active branch. It can also run in direct commit mode, where passing snapshots are committed to the current branch.
+`autosnap` is a local Git checkpointing CLI that saves passing, test-gated snapshots to Git refs without committing to your active branch. It can also run in direct commit mode, where passing snapshots are committed to the current branch, or sync mode, where direct commits are pulled/rebased and pushed to the branch upstream.
 
 It is implemented as a minimal Go prototype for the MVP command set:
 
@@ -193,8 +193,9 @@ You can control where passing snapshots are saved:
 
 - `--commit-mode checkpoint` (default): save autosnap commits under `refs/autosnapshots/<branch>/<timestamp>`; collision handling appends deterministic suffixes to the timestamp in the ref name (for example `.abc1234`)
 - `--commit-mode direct`: commit all captured changes directly to the current branch and leave the worktree clean
+- `--commit-mode sync`: commit all captured changes directly, run `git pull --rebase`, then run `git push`; sync failures are logged and the local commit is kept
 
-Direct commit mode requires `--snapshot-mode both`, so autosnap does not discard staged or unstaged changes that were intentionally left out of a snapshot.
+Direct and sync commit modes require `--snapshot-mode both`, so autosnap does not discard staged or unstaged changes that were intentionally left out of a snapshot.
 
 To keep the process in the current terminal, pass `--foreground`:
 

@@ -117,13 +117,13 @@ func resolveStartConfig(repoRoot string, cmd *cobra.Command, checkCommand, msgSo
 	normalizedCommitMode, err := normalizeCommitMode(cfg.CommitMode)
 	if err != nil {
 		if flags.Changed("commit-mode") {
-			return cfg, found, fmt.Errorf("invalid --commit-mode %q (expected checkpoint, direct)", cfg.CommitMode)
+			return cfg, found, fmt.Errorf("invalid --commit-mode %q (expected checkpoint, direct, sync)", cfg.CommitMode)
 		}
-		return cfg, found, fmt.Errorf("invalid commit_mode %q (expected checkpoint, direct)", cfg.CommitMode)
+		return cfg, found, fmt.Errorf("invalid commit_mode %q (expected checkpoint, direct, sync)", cfg.CommitMode)
 	}
 	cfg.CommitMode = normalizedCommitMode
-	if cfg.CommitMode == commitModeDirect && cfg.SnapshotMode != snapshotModeBoth {
-		return cfg, found, fmt.Errorf("commit_mode direct requires snapshot_mode both")
+	if isDirectCommitMode(cfg.CommitMode) && cfg.SnapshotMode != snapshotModeBoth {
+		return cfg, found, fmt.Errorf("commit_mode %s requires snapshot_mode both", cfg.CommitMode)
 	}
 
 	normalizedWatchMode, err := normalizeWatchMode(cfg.Watch.Mode)

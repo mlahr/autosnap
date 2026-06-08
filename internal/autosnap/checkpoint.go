@@ -25,6 +25,7 @@ const (
 const (
 	commitModeCheckpoint = "checkpoint"
 	commitModeDirect     = "direct"
+	commitModeSync       = "sync"
 )
 
 type checkpointInfo struct {
@@ -241,10 +242,14 @@ func normalizeCommitMode(mode string) (string, error) {
 		return commitModeCheckpoint, nil
 	}
 	switch mode {
-	case commitModeCheckpoint, commitModeDirect:
+	case commitModeCheckpoint, commitModeDirect, commitModeSync:
 		return mode, nil
 	}
-	return "", fmt.Errorf("invalid commit mode %q (expected checkpoint, direct)", mode)
+	return "", fmt.Errorf("invalid commit mode %q (expected checkpoint, direct, sync)", mode)
+}
+
+func isDirectCommitMode(mode string) bool {
+	return mode == commitModeDirect || mode == commitModeSync
 }
 
 func createCheckpoint(ctx context.Context, repoRoot, branchRef, checkCommand string, idle time.Duration, tree string, commitMessage string) (string, string, error) {
@@ -327,6 +332,74 @@ func createDirectCommitChecked(ctx context.Context, repoRoot, expectedBranchRef,
 	}
 
 	return commit, true, ts, nil
+}
+
+func syncDirectCommit(ctx context.Context, repoRoot string) (string, error) {
+	pullResult, err := runGitCommand(ctx, repoRoot, nil, "pull", "--rebase")
+	if err != nil {
+		abortErr := abortRebaseIfActive(ctx, repoRoot)
+		syncErr := fmt.Errorf("git pull --rebase failed: %w", gitCommandError(err, pullResult))
+		if abortErr != nil {
+			syncErr = fmt.Errorf("%w; rebase abort failed: %v", syncErr, abortErr)
+		}
+		return currentHeadOrEmpty(ctx, repoRoot), syncErr
+	}
+
+	if status, err := worktreeStatus(ctx, repoRoot); err != nil {
+		return currentHeadOrEmpty(ctx, repoRoot), fmt.Errorf("git status after pull --rebase failed: %w", err)
+	} else if status != "" {
+		return currentHeadOrEmpty(ctx, repoRoot), fmt.Errorf("worktree not clean after pull --rebase:\n%s", status)
+	}
+
+	pushResult, err := runGitCommand(ctx, repoRoot, nil, "push")
+	if err != nil {
+		return currentHeadOrEmpty(ctx, repoRoot), fmt.Errorf("git push failed: %w", gitCommandError(err, pushResult))
+	}
+
+	return currentHeadOrEmpty(ctx, repoRoot), nil
+}
+
+func abortRebaseIfActive(ctx context.Context, repoRoot string) error {
+	gitDirectory, err := gitDir(ctx, repoRoot)
+	if err != nil {
+		return nil
+	}
+	if _, err := os.Stat(filepath.Join(gitDirectory, "rebase-merge")); err == nil {
+		return abortRebase(ctx, repoRoot)
+	}
+	if _, err := os.Stat(filepath.Join(gitDirectory, "rebase-apply")); err == nil {
+		return abortRebase(ctx, repoRoot)
+	}
+	return nil
+}
+
+func abortRebase(ctx context.Context, repoRoot string) error {
+	result, err := runGitCommand(ctx, repoRoot, nil, "rebase", "--abort")
+	if err != nil {
+		return gitCommandError(err, result)
+	}
+	if status, err := worktreeStatus(ctx, repoRoot); err != nil {
+		return fmt.Errorf("git status after rebase abort failed: %w", err)
+	} else if status != "" {
+		return fmt.Errorf("worktree not clean after rebase abort:\n%s", status)
+	}
+	return nil
+}
+
+func worktreeStatus(ctx context.Context, repoRoot string) (string, error) {
+	result, err := runGitCommand(ctx, repoRoot, nil, "status", "--porcelain=v1", "--untracked-files=all")
+	if err != nil {
+		return "", gitCommandError(err, result)
+	}
+	return strings.TrimSpace(result.Stdout), nil
+}
+
+func currentHeadOrEmpty(ctx context.Context, repoRoot string) string {
+	result, err := runGitCommand(ctx, repoRoot, nil, "rev-parse", "HEAD")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(result.Stdout)
 }
 
 func autosnapCommitMessage(commitMessage, timestamp string, position gitPosition, checkCommand string, idle time.Duration) string {
