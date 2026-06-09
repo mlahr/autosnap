@@ -2412,6 +2412,166 @@ func TestPendingCommandListsCheckpointsAfterLatestHeadMatch(t *testing.T) {
 	})
 }
 
+func TestPendingCommandHidesManuallyIntegratedCheckpoint(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		if err := os.WriteFile(filepath.Join(repo, "database.txt"), []byte("mysql\n"), 0o644); err != nil {
+			t.Fatalf("write checkpoint file failed: %v", err)
+		}
+		runGit(t, repo, "add", "database.txt")
+		integratedRef := createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20210108T000000Z", "integrated checkpoint")
+
+		if err := os.WriteFile(filepath.Join(repo, "extra.txt"), []byte("manual cleanup\n"), 0o644); err != nil {
+			t.Fatalf("write extra file failed: %v", err)
+		}
+		runGit(t, repo, "add", "extra.txt")
+		runGit(t, repo, "commit", "-m", "manual integrated commit")
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newPendingCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"pending"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("pending command failed: %v", err)
+		}
+		if output := buf.String(); strings.Contains(output, integratedRef) || !strings.Contains(output, "no pending checkpoints") {
+			t.Fatalf("expected integrated checkpoint to be hidden, got %q", output)
+		}
+
+		buf.Reset()
+		explainRoot := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		explainRoot.AddCommand(newPendingCommand())
+		explainRoot.SetOut(buf)
+		explainRoot.SetErr(buf)
+		explainRoot.SetArgs([]string{"pending", "--explain"})
+		if err := explainRoot.Execute(); err != nil {
+			t.Fatalf("pending explain command failed: %v", err)
+		}
+		if output := buf.String(); !strings.Contains(output, integratedRef) || !strings.Contains(output, " integrated ") {
+			t.Fatalf("expected explain output to show integrated checkpoint, got %q", output)
+		}
+	})
+}
+
+func TestPendingCommandMarksOlderVariantsObsolete(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		if err := os.WriteFile(filepath.Join(repo, "docker-compose.yml"), []byte("mysql: 5.7\n"), 0o644); err != nil {
+			t.Fatalf("write first variant failed: %v", err)
+		}
+		runGit(t, repo, "add", "docker-compose.yml")
+		obsoleteRef := createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20210109T000000Z", "obsolete checkpoint")
+
+		if err := os.WriteFile(filepath.Join(repo, "docker-compose.yml"), []byte("mysql: 8.4\n"), 0o644); err != nil {
+			t.Fatalf("write final variant failed: %v", err)
+		}
+		runGit(t, repo, "add", "docker-compose.yml")
+		exactRef := createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20210110T000000Z", "exact checkpoint")
+		runGit(t, repo, "commit", "-m", "manual final variant")
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newPendingCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"pending"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("pending command failed: %v", err)
+		}
+		if output := buf.String(); strings.Contains(output, obsoleteRef) || strings.Contains(output, exactRef) || !strings.Contains(output, "no pending checkpoints") {
+			t.Fatalf("expected obsolete and exact checkpoints to be hidden, got %q", output)
+		}
+
+		buf.Reset()
+		explainRoot := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		explainRoot.AddCommand(newPendingCommand())
+		explainRoot.SetOut(buf)
+		explainRoot.SetErr(buf)
+		explainRoot.SetArgs([]string{"pending", "--explain"})
+		if err := explainRoot.Execute(); err != nil {
+			t.Fatalf("pending explain command failed: %v", err)
+		}
+		output := buf.String()
+		if !strings.Contains(output, obsoleteRef) || !strings.Contains(output, " obsolete ") {
+			t.Fatalf("expected explain output to mark older variant obsolete, got %q", output)
+		}
+		if !strings.Contains(output, exactRef) || !strings.Contains(output, " exact ") {
+			t.Fatalf("expected explain output to mark final variant exact, got %q", output)
+		}
+	})
+}
+
+func TestPendingCommandShowsConflictAfterIntegratedCheckpoint(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		if err := os.WriteFile(filepath.Join(repo, "conflict.txt"), []byte("base\n"), 0o644); err != nil {
+			t.Fatalf("write base file failed: %v", err)
+		}
+		runGit(t, repo, "add", "conflict.txt")
+		runGit(t, repo, "commit", "-m", "base conflict file")
+		createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20210111T000000Z", "integrated base checkpoint")
+
+		if err := os.WriteFile(filepath.Join(repo, "conflict.txt"), []byte("checkpoint\n"), 0o644); err != nil {
+			t.Fatalf("write checkpoint conflict file failed: %v", err)
+		}
+		runGit(t, repo, "add", "conflict.txt")
+		conflictRef := createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20210112T000000Z", "conflict checkpoint")
+
+		runGit(t, repo, "reset", "--hard", "HEAD")
+		if err := os.WriteFile(filepath.Join(repo, "conflict.txt"), []byte("branch\n"), 0o644); err != nil {
+			t.Fatalf("write branch conflict file failed: %v", err)
+		}
+		runGit(t, repo, "add", "conflict.txt")
+		runGit(t, repo, "commit", "-m", "branch conflict change")
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newPendingCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"pending"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("pending command failed: %v", err)
+		}
+		if output := buf.String(); !strings.Contains(output, conflictRef) || !strings.Contains(output, "conflict checkpoint") {
+			t.Fatalf("expected conflict checkpoint to remain pending, got %q", output)
+		}
+
+		buf.Reset()
+		explainRoot := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		explainRoot.AddCommand(newPendingCommand())
+		explainRoot.SetOut(buf)
+		explainRoot.SetErr(buf)
+		explainRoot.SetArgs([]string{"pending", "--explain"})
+		if err := explainRoot.Execute(); err != nil {
+			t.Fatalf("pending explain command failed: %v", err)
+		}
+		if output := buf.String(); !strings.Contains(output, conflictRef) || !strings.Contains(output, " conflict ") {
+			t.Fatalf("expected explain output to mark conflict checkpoint, got %q", output)
+		}
+	})
+}
+
 func TestPendingCommandAllSkipsDeletedBranches(t *testing.T) {
 	requireIntegration(t)
 	repo := createTestRepo(t)
