@@ -199,7 +199,7 @@ func (r *snapshotRunner) startPolling() error {
 			if signature != lastSignature {
 				lastSignature = signature
 				if signature != "" {
-					logln("changed: polled working tree")
+					logln("changed (POLL): working tree")
 					r.touch()
 				}
 			}
@@ -474,8 +474,8 @@ func (r *snapshotRunner) handleEvent(event fsnotify.Event) error {
 		return nil
 	}
 
-	if event.Has(fsnotify.Create) || event.Has(fsnotify.Write) || event.Has(fsnotify.Remove) || event.Has(fsnotify.Rename) || event.Has(fsnotify.Chmod) {
-		logf("changed: %s\n", rel)
+	if op := snapshotEventOperations(event); op != "" {
+		logf("changed (%s): %s\n", op, rel)
 		r.touch()
 	}
 
@@ -487,6 +487,26 @@ func (r *snapshotRunner) handleEvent(event fsnotify.Event) error {
 	}
 
 	return nil
+}
+
+func snapshotEventOperations(event fsnotify.Event) string {
+	var parts []string
+	if event.Has(fsnotify.Create) {
+		parts = append(parts, "CREATE")
+	}
+	if event.Has(fsnotify.Write) {
+		parts = append(parts, "WRITE")
+	}
+	if event.Has(fsnotify.Remove) {
+		parts = append(parts, "REMOVE")
+	}
+	if event.Has(fsnotify.Rename) {
+		parts = append(parts, "RENAME")
+	}
+	if event.Has(fsnotify.Chmod) {
+		parts = append(parts, "CHMOD")
+	}
+	return strings.Join(parts, ",")
 }
 
 func (r *snapshotRunner) currentBranchRef() (string, error) {

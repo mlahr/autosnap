@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/spf13/cobra"
 )
 
@@ -1372,6 +1373,21 @@ func TestWatchModeHelpers(t *testing.T) {
 	}
 	if !isWatchLimitError(&os.PathError{Op: "open", Path: "x", Err: syscall.EMFILE}) {
 		t.Fatalf("expected EMFILE to be recognized as watch limit")
+	}
+}
+
+func TestSnapshotEventOperations(t *testing.T) {
+	if got := snapshotEventOperations(fsnotify.Event{Op: fsnotify.Create}); got != "CREATE" {
+		t.Fatalf("expected CREATE, got %q", got)
+	}
+	if got := snapshotEventOperations(fsnotify.Event{Op: fsnotify.Write}); got != "WRITE" {
+		t.Fatalf("expected WRITE, got %q", got)
+	}
+	if got := snapshotEventOperations(fsnotify.Event{Op: fsnotify.Create | fsnotify.Write}); got != "CREATE,WRITE" {
+		t.Fatalf("expected CREATE,WRITE, got %q", got)
+	}
+	if got := snapshotEventOperations(fsnotify.Event{Op: 0}); got != "" {
+		t.Fatalf("expected empty operations, got %q", got)
 	}
 }
 
