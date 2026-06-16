@@ -2316,6 +2316,108 @@ func TestPendingCommandCurrentBranch(t *testing.T) {
 	})
 }
 
+func TestPendingCommandDebugWritesProgressToStderr(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		if _, err := os.Create(filepath.Join(repo, "debug.txt")); err != nil {
+			t.Fatalf("write file failed: %v", err)
+		}
+		runGit(t, repo, "add", "debug.txt")
+		runGit(t, repo, "commit", "-m", "debug commit")
+		pendingRef := createAutosnapTestCommitRef(t, repo, branchRef, "20200103T000000Z", "debug pending checkpoint")
+		initial := runGitOutput(t, repo, "rev-parse", "HEAD~1")
+		runGit(t, repo, "reset", "--hard", initial)
+
+		stdout := &bytes.Buffer{}
+		stderr := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newPendingCommand())
+		root.SetOut(stdout)
+		root.SetErr(stderr)
+		root.SetArgs([]string{"pending", "--debug"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("pending debug command failed: %v", err)
+		}
+
+		out := stdout.String()
+		if !strings.Contains(out, pendingRef) || !strings.Contains(out, "debug pending checkpoint") {
+			t.Fatalf("expected pending checkpoint output on stdout, got %q", out)
+		}
+		if strings.Contains(out, "debug: pending:") {
+			t.Fatalf("expected debug output to stay off stdout, got %q", out)
+		}
+
+		errOut := stderr.String()
+		for _, want := range []string{
+			"debug: pending:",
+			"listing checkpoint refs scope=current branch",
+			"listed checkpoint refs count=",
+			"classifying checkpoints count=",
+			"branch classification started branch=" + branchRef,
+			"merge classification started branch=" + branchRef,
+			"loading checkpoint metadata count=",
+		} {
+			if !strings.Contains(errOut, want) {
+				t.Fatalf("expected debug stderr to contain %q, got %q", want, errOut)
+			}
+		}
+	})
+}
+
+func TestPendingCommandDebugExplainWritesMetadataProgressToStderr(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		if err := os.WriteFile(filepath.Join(repo, "debug-explain.txt"), []byte("one\n"), 0o644); err != nil {
+			t.Fatalf("write checkpoint file failed: %v", err)
+		}
+		runGit(t, repo, "add", "debug-explain.txt")
+		ref := createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20200104T000000Z", "debug explain checkpoint")
+
+		stdout := &bytes.Buffer{}
+		stderr := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newPendingCommand())
+		root.SetOut(stdout)
+		root.SetErr(stderr)
+		root.SetArgs([]string{"pending", "--debug", "--explain"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("pending debug explain command failed: %v", err)
+		}
+
+		out := stdout.String()
+		if !strings.Contains(out, ref) || !strings.Contains(out, "debug explain checkpoint") {
+			t.Fatalf("expected explain checkpoint output on stdout, got %q", out)
+		}
+		if strings.Contains(out, "debug: pending:") {
+			t.Fatalf("expected debug output to stay off stdout, got %q", out)
+		}
+
+		errOut := stderr.String()
+		for _, want := range []string{
+			"debug: pending:",
+			"loading checkpoint metadata count=",
+			"mode=explain",
+			"loaded checkpoint metadata count=",
+		} {
+			if !strings.Contains(errOut, want) {
+				t.Fatalf("expected debug stderr to contain %q, got %q", want, errOut)
+			}
+		}
+	})
+}
+
 func TestPendingCommandBranchAndAllScopes(t *testing.T) {
 	requireIntegration(t)
 	repo := createTestRepo(t)
