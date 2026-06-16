@@ -2358,8 +2358,8 @@ func TestPendingCommandDebugWritesProgressToStderr(t *testing.T) {
 			"debug: pending:",
 			"listing checkpoint refs scope=current branch",
 			"listed checkpoint refs count=",
-			"classifying checkpoints count=",
-			"branch classification started branch=" + branchRef,
+			"classifying actionable checkpoints count=",
+			"branch actionable classification started branch=" + branchRef,
 			"merge classification started branch=" + branchRef,
 			"loading checkpoint metadata count=",
 		} {
@@ -2414,6 +2414,65 @@ func TestPendingCommandDebugExplainWritesMetadataProgressToStderr(t *testing.T) 
 			if !strings.Contains(errOut, want) {
 				t.Fatalf("expected debug stderr to contain %q, got %q", want, errOut)
 			}
+		}
+	})
+}
+
+func TestPendingCommandSkipsOlderCheckpointsAfterNewestExact(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		if err := os.WriteFile(filepath.Join(repo, "conflict.txt"), []byte("checkpoint\n"), 0o644); err != nil {
+			t.Fatalf("write older checkpoint file failed: %v", err)
+		}
+		runGit(t, repo, "add", "conflict.txt")
+		olderRef := createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20200105T000000Z", "older conflict checkpoint")
+		runGit(t, repo, "reset", "--hard", "HEAD")
+
+		if err := os.WriteFile(filepath.Join(repo, "conflict.txt"), []byte("branch\n"), 0o644); err != nil {
+			t.Fatalf("write branch conflict file failed: %v", err)
+		}
+		runGit(t, repo, "add", "conflict.txt")
+		runGit(t, repo, "commit", "-m", "branch conflict commit")
+		exactRef := createAutosnapTestCommitRef(t, repo, branchRef, "20200106T000000Z", "exact checkpoint")
+
+		if err := os.WriteFile(filepath.Join(repo, "pending.txt"), []byte("pending\n"), 0o644); err != nil {
+			t.Fatalf("write pending checkpoint file failed: %v", err)
+		}
+		runGit(t, repo, "add", "pending.txt")
+		pendingRef := createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20200107T000000Z", "newer pending checkpoint")
+		runGit(t, repo, "reset", "--hard", "HEAD")
+
+		stdout := &bytes.Buffer{}
+		stderr := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newPendingCommand())
+		root.SetOut(stdout)
+		root.SetErr(stderr)
+		root.SetArgs([]string{"pending", "--debug"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("pending debug command failed: %v", err)
+		}
+
+		out := stdout.String()
+		if !strings.Contains(out, pendingRef) || !strings.Contains(out, "newer pending checkpoint") {
+			t.Fatalf("expected newer pending checkpoint output, got %q", out)
+		}
+		if strings.Contains(out, olderRef) || strings.Contains(out, exactRef) {
+			t.Fatalf("expected older and exact checkpoints to be hidden, got %q", out)
+		}
+
+		errOut := stderr.String()
+		if !strings.Contains(errOut, "order=newest-first") || !strings.Contains(errOut, "early stop branch="+branchRef) {
+			t.Fatalf("expected newest-first early stop debug output, got %q", errOut)
+		}
+		if strings.Contains(errOut, "merge classification started branch="+branchRef+" index=1/3 ref="+olderRef) {
+			t.Fatalf("expected older checkpoint merge classification to be skipped, got %q", errOut)
 		}
 	})
 }
