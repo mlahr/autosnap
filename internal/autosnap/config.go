@@ -13,7 +13,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const autosnapConfigFileName = ".autosnap.toml"
+const (
+	autosnapConfigFileName = ".autosnap.toml"
+	defaultLogMaxBytes     = int64(10 * 1024 * 1024)
+)
 
 type autosnapConfig struct {
 	Check        string              `toml:"check"`
@@ -21,7 +24,10 @@ type autosnapConfig struct {
 	SnapshotMode string              `toml:"snapshot_mode"`
 	CommitMode   string              `toml:"commit_mode"`
 	MsgSourceCmd string              `toml:"msg_source_cmd"`
+	LogMaxBytes  int64               `toml:"log_max_bytes"`
 	Watch        autosnapWatchConfig `toml:"watch"`
+
+	logMaxBytesSet bool
 }
 
 type autosnapWatchConfig struct {
@@ -34,6 +40,7 @@ func defaultAutosnapConfig() autosnapConfig {
 		IdleSeconds:  60,
 		SnapshotMode: snapshotModeBoth,
 		CommitMode:   commitModeCheckpoint,
+		LogMaxBytes:  defaultLogMaxBytes,
 		Watch: autosnapWatchConfig{
 			Mode:         watchModeRecursive,
 			PollInterval: defaultPollInterval,
@@ -55,13 +62,15 @@ func loadAutosnapConfig(repoRoot string) (autosnapConfig, bool, error) {
 		}
 		return cfg, false, err
 	}
-	if _, err := toml.Decode(string(raw), &cfg); err != nil {
+	meta, err := toml.Decode(string(raw), &cfg)
+	if err != nil {
 		return cfg, true, fmt.Errorf("parse %s: %w", path, err)
 	}
+	cfg.logMaxBytesSet = meta.IsDefined("log_max_bytes")
 	return cfg, true, nil
 }
 
-func resolveStartConfig(repoRoot string, cmd *cobra.Command, checkCommand, msgSourceCmd string, idleSeconds int, snapshotMode, commitMode, watchMode string, pollInterval time.Duration) (autosnapConfig, bool, error) {
+func resolveStartConfig(repoRoot string, cmd *cobra.Command, checkCommand, msgSourceCmd string, idleSeconds int, snapshotMode, commitMode, watchMode string, pollInterval time.Duration, logMaxBytes int64) (autosnapConfig, bool, error) {
 	cfg := defaultAutosnapConfig()
 	fileCfg, found, err := loadAutosnapConfig(repoRoot)
 	if err != nil {
@@ -94,6 +103,9 @@ func resolveStartConfig(repoRoot string, cmd *cobra.Command, checkCommand, msgSo
 	if flags.Changed("poll-interval") {
 		cfg.Watch.PollInterval = pollInterval
 	}
+	if flags.Changed("log-max-bytes") {
+		cfg.LogMaxBytes = logMaxBytes
+	}
 
 	cfg.Check = strings.TrimSpace(cfg.Check)
 	cfg.MsgSourceCmd = strings.TrimSpace(cfg.MsgSourceCmd)
@@ -101,7 +113,7 @@ func resolveStartConfig(repoRoot string, cmd *cobra.Command, checkCommand, msgSo
 	cfg.CommitMode = strings.TrimSpace(cfg.CommitMode)
 	cfg.Watch.Mode = strings.TrimSpace(cfg.Watch.Mode)
 
-	if err := validateStartConfig(cfg, flags.Changed("idle"), flags.Changed("poll-interval")); err != nil {
+	if err := validateStartConfig(cfg, flags.Changed("idle"), flags.Changed("poll-interval"), flags.Changed("log-max-bytes")); err != nil {
 		return cfg, found, err
 	}
 
@@ -154,6 +166,9 @@ func mergeAutosnapConfig(dst *autosnapConfig, src autosnapConfig) {
 	if src.MsgSourceCmd != "" {
 		dst.MsgSourceCmd = src.MsgSourceCmd
 	}
+	if src.logMaxBytesSet {
+		dst.LogMaxBytes = src.LogMaxBytes
+	}
 	if src.Watch.Mode != "" {
 		dst.Watch.Mode = src.Watch.Mode
 	}
@@ -162,7 +177,7 @@ func mergeAutosnapConfig(dst *autosnapConfig, src autosnapConfig) {
 	}
 }
 
-func validateStartConfig(cfg autosnapConfig, idleFromFlag bool, pollIntervalFromFlag bool) error {
+func validateStartConfig(cfg autosnapConfig, idleFromFlag bool, pollIntervalFromFlag bool, logMaxBytesFromFlag bool) error {
 	if cfg.Check == "" {
 		return errors.New("--check is required (or set check in .autosnap.toml)")
 	}
@@ -177,6 +192,12 @@ func validateStartConfig(cfg autosnapConfig, idleFromFlag bool, pollIntervalFrom
 			return errors.New("--poll-interval must be greater than 0")
 		}
 		return errors.New("watch.poll_interval must be greater than 0")
+	}
+	if cfg.LogMaxBytes <= 0 {
+		if logMaxBytesFromFlag {
+			return errors.New("--log-max-bytes must be greater than 0")
+		}
+		return errors.New("log_max_bytes must be greater than 0")
 	}
 	return nil
 }
@@ -196,6 +217,7 @@ idle_seconds = 60
 snapshot_mode = "both"
 commit_mode = "checkpoint"
 msg_source_cmd = ""
+log_max_bytes = 10485760
 
 [watch]
 mode = "recursive"

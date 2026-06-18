@@ -14,6 +14,7 @@ import (
 )
 
 const defaultLogFollowInterval = 500 * time.Millisecond
+const defaultLogCleanupInterval = time.Minute
 
 func newLogsCommand() *cobra.Command {
 	var (
@@ -137,4 +138,84 @@ func writeLogAppend(out io.Writer, logPath string, offset int64) (int64, error) 
 		return offset, fmt.Errorf("read autosnap log append: %w", err)
 	}
 	return offset + n, nil
+}
+
+func startLogCompactor(ctx context.Context, repoRoot string, maxBytes int64, interval time.Duration) {
+	if maxBytes <= 0 || interval <= 0 {
+		return
+	}
+
+	logPath, err := backgroundLogPath(repoRoot)
+	if err != nil {
+		logf("unable to resolve autosnap log path for cleanup: %v\n", err)
+		return
+	}
+
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := compactLogFile(logPath, maxBytes); err != nil {
+					logf("unable to compact autosnap log: %v\n", err)
+				}
+			}
+		}
+	}()
+}
+
+func compactLogFile(logPath string, maxBytes int64) error {
+	if maxBytes <= 0 {
+		return fmt.Errorf("log max bytes must be greater than 0")
+	}
+
+	stat, err := os.Stat(logPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("stat autosnap log: %w", err)
+	}
+	if stat.Size() <= maxBytes {
+		return nil
+	}
+
+	file, err := os.OpenFile(logPath, os.O_RDWR, 0o644)
+	if err != nil {
+		return fmt.Errorf("open autosnap log for cleanup: %w", err)
+	}
+	defer file.Close()
+
+	start := stat.Size() - maxBytes
+	if _, err := file.Seek(start, io.SeekStart); err != nil {
+		return fmt.Errorf("seek autosnap log for cleanup: %w", err)
+	}
+
+	kept, err := io.ReadAll(file)
+	if err != nil {
+		return fmt.Errorf("read autosnap log for cleanup: %w", err)
+	}
+	if start > 0 {
+		if idx := bytes.IndexByte(kept, '\n'); idx >= 0 && idx+1 < len(kept) {
+			kept = kept[idx+1:]
+		}
+	}
+
+	if err := file.Truncate(0); err != nil {
+		return fmt.Errorf("truncate autosnap log for cleanup: %w", err)
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("rewind autosnap log for cleanup: %w", err)
+	}
+	if len(kept) == 0 {
+		return nil
+	}
+	if _, err := file.Write(kept); err != nil {
+		return fmt.Errorf("write autosnap log for cleanup: %w", err)
+	}
+	return nil
 }

@@ -139,6 +139,7 @@ idle_seconds = 60
 snapshot_mode = "both"
 commit_mode = "checkpoint"
 msg_source_cmd = ""
+log_max_bytes = 10485760
 
 [watch]
 mode = "recursive"
@@ -181,6 +182,13 @@ View the daemon log with Docker-style tailing:
 autosnap logs
 autosnap logs -n 100
 autosnap logs -n 100 -f
+```
+
+The daemon log is capped automatically. By default, `autosnap.log` keeps the newest 10 MiB of output. Configure the cap with `log_max_bytes` in `.autosnap.toml`, or override it for one run:
+
+```bash
+autosnap start --log-max-bytes 10485760
+autosnap restart --log-max-bytes 10485760
 ```
 
 You can control what gets snapshotted:

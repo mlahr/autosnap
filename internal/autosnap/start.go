@@ -24,6 +24,7 @@ func newStartCommand() *cobra.Command {
 		commitMode   string
 		watchMode    string
 		pollInterval time.Duration
+		logMaxBytes  int64
 		foreground   bool
 		daemon       bool
 		runToken     string
@@ -38,7 +39,7 @@ func newStartCommand() *cobra.Command {
 				return err
 			}
 
-			cfg, _, err := resolveStartConfig(repoRoot, cmd, checkCommand, msgSourceCmd, idleSeconds, snapshotMode, commitMode, watchMode, pollInterval)
+			cfg, _, err := resolveStartConfig(repoRoot, cmd, checkCommand, msgSourceCmd, idleSeconds, snapshotMode, commitMode, watchMode, pollInterval, logMaxBytes)
 			if err != nil {
 				return err
 			}
@@ -49,6 +50,7 @@ func newStartCommand() *cobra.Command {
 			commitMode = cfg.CommitMode
 			watchMode = cfg.Watch.Mode
 			pollInterval = cfg.Watch.PollInterval
+			logMaxBytes = cfg.LogMaxBytes
 
 			if err := ensureNoActiveRunForRepo(repoRoot); err != nil {
 				return err
@@ -61,7 +63,7 @@ func newStartCommand() *cobra.Command {
 						return err
 					}
 				}
-				return startAutosnapDetached(repoRoot, checkCommand, msgSourceCmd, idleSeconds, snapshotMode, commitMode, watchMode, pollInterval, runToken)
+				return startAutosnapDetached(repoRoot, checkCommand, msgSourceCmd, idleSeconds, snapshotMode, commitMode, watchMode, pollInterval, logMaxBytes, runToken)
 			}
 
 			if runToken == "" {
@@ -103,6 +105,7 @@ func newStartCommand() *cobra.Command {
 					CommitMode:      commitMode,
 					WatchMode:       watchMode,
 					PollInterval:    pollInterval,
+					LogMaxBytes:     logMaxBytes,
 					RunToken:        runToken,
 					StartedAt:       time.Now().UTC().Format(time.RFC3339),
 				}
@@ -110,6 +113,7 @@ func newStartCommand() *cobra.Command {
 					return err
 				}
 				defer removeAutosnapRunState(runPath)
+				startLogCompactor(ctx, repoRoot, logMaxBytes, defaultLogCleanupInterval)
 			}
 
 			logf("autosnap watching %s\n", repoRoot)
@@ -132,6 +136,7 @@ func newStartCommand() *cobra.Command {
 	cmd.Flags().StringVar(&commitMode, "commit-mode", commitModeCheckpoint, "Commit target: checkpoint, direct, sync")
 	cmd.Flags().StringVar(&watchMode, "watch-mode", watchModeRecursive, "Watch strategy: recursive, poll, auto")
 	cmd.Flags().DurationVar(&pollInterval, "poll-interval", defaultPollInterval, "Polling interval for poll or auto watch mode")
+	cmd.Flags().Int64Var(&logMaxBytes, "log-max-bytes", defaultLogMaxBytes, "Maximum autosnap daemon log size in bytes")
 	cmd.Flags().BoolVar(&foreground, "foreground", false, "Run autosnap in the current terminal")
 	cmd.Flags().StringVar(&runToken, "run-token", "", "Internal: run identity token")
 	cmd.Flags().BoolVar(&daemon, "daemon", false, "Internal: run as background daemon")
@@ -141,12 +146,15 @@ func newStartCommand() *cobra.Command {
 	return cmd
 }
 
-func startAutosnapDetached(repoRoot, checkCommand, msgSourceCmd string, idleSeconds int, snapshotMode, commitMode, watchMode string, pollInterval time.Duration, runToken string) error {
+func startAutosnapDetached(repoRoot, checkCommand, msgSourceCmd string, idleSeconds int, snapshotMode, commitMode, watchMode string, pollInterval time.Duration, logMaxBytes int64, runToken string) error {
 	logPath, err := backgroundLogPath(repoRoot)
 	if err != nil {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		return err
+	}
+	if err := compactLogFile(logPath, logMaxBytes); err != nil {
 		return err
 	}
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
@@ -160,7 +168,7 @@ func startAutosnapDetached(repoRoot, checkCommand, msgSourceCmd string, idleSeco
 		return err
 	}
 
-	args := startDetachedArgs(exe, checkCommand, msgSourceCmd, idleSeconds, snapshotMode, commitMode, watchMode, pollInterval, runToken)
+	args := startDetachedArgs(exe, checkCommand, msgSourceCmd, idleSeconds, snapshotMode, commitMode, watchMode, pollInterval, logMaxBytes, runToken)
 
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Stdin = nil
@@ -179,7 +187,7 @@ func startAutosnapDetached(repoRoot, checkCommand, msgSourceCmd string, idleSeco
 	return nil
 }
 
-func startDetachedArgs(exe, checkCommand, msgSourceCmd string, idleSeconds int, snapshotMode, commitMode, watchMode string, pollInterval time.Duration, runToken string) []string {
+func startDetachedArgs(exe, checkCommand, msgSourceCmd string, idleSeconds int, snapshotMode, commitMode, watchMode string, pollInterval time.Duration, logMaxBytes int64, runToken string) []string {
 	args := []string{
 		exe,
 		"start",
@@ -197,6 +205,8 @@ func startDetachedArgs(exe, checkCommand, msgSourceCmd string, idleSeconds int, 
 		pollInterval.String(),
 		"--idle",
 		strconv.Itoa(idleSeconds),
+		"--log-max-bytes",
+		strconv.FormatInt(logMaxBytes, 10),
 		"--run-token",
 		runToken,
 	}

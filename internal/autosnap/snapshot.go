@@ -355,6 +355,17 @@ func (r *snapshotRunner) runCheckUnlocked() (checkpointRunResult, error) {
 		logln("no meaningful diff; checkpoint skipped")
 		return checkpointRunResult{}, nil
 	}
+	if r.commitMode == commitModeCheckpoint {
+		headTree, err := getCheckpointTree(r.ctx, r.repoRoot, "HEAD")
+		if err != nil {
+			logf("unable to resolve HEAD tree: %v\n", err)
+			return checkpointRunResult{}, err
+		}
+		if headTree == tree {
+			logln("no meaningful diff; checkpoint skipped")
+			return checkpointRunResult{}, nil
+		}
+	}
 	if isDirectCommitMode(r.commitMode) {
 		headTree, err := getCheckpointTree(r.ctx, r.repoRoot, "HEAD")
 		if err != nil {

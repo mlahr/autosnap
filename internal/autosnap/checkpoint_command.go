@@ -31,7 +31,7 @@ func newCheckpointCommand() *cobra.Command {
 				return err
 			}
 
-			cfg, _, err := resolveStartConfig(repoRoot, cmd, checkCommand, msgSourceCmd, defaultAutosnapConfig().IdleSeconds, snapshotMode, commitMode, watchModeRecursive, defaultPollInterval)
+			cfg, _, err := resolveStartConfig(repoRoot, cmd, checkCommand, msgSourceCmd, defaultAutosnapConfig().IdleSeconds, snapshotMode, commitMode, watchModeRecursive, defaultPollInterval, defaultLogMaxBytes)
 			if err != nil {
 				return err
 			}

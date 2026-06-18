@@ -18,6 +18,7 @@ func newRestartCommand() *cobra.Command {
 		commitMode   string
 		watchMode    string
 		pollInterval time.Duration
+		logMaxBytes  int64
 	)
 
 	cmd := &cobra.Command{
@@ -40,7 +41,7 @@ func newRestartCommand() *cobra.Command {
 			}
 			active := runState.PID != 0 && isAutosnapRunActive(runState)
 
-			cfg, err := resolveRestartConfig(repoRoot, cmd, runState, active, checkCommand, msgSourceCmd, idleSeconds, snapshotMode, commitMode, watchMode, pollInterval)
+			cfg, err := resolveRestartConfig(repoRoot, cmd, runState, active, checkCommand, msgSourceCmd, idleSeconds, snapshotMode, commitMode, watchMode, pollInterval, logMaxBytes)
 			if err != nil {
 				return err
 			}
@@ -53,7 +54,7 @@ func newRestartCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return startAutosnapDetached(repoRoot, cfg.Check, cfg.MsgSourceCmd, cfg.IdleSeconds, cfg.SnapshotMode, cfg.CommitMode, cfg.Watch.Mode, cfg.Watch.PollInterval, runToken)
+			return startAutosnapDetached(repoRoot, cfg.Check, cfg.MsgSourceCmd, cfg.IdleSeconds, cfg.SnapshotMode, cfg.CommitMode, cfg.Watch.Mode, cfg.Watch.PollInterval, cfg.LogMaxBytes, runToken)
 		},
 	}
 
@@ -64,13 +65,14 @@ func newRestartCommand() *cobra.Command {
 	cmd.Flags().StringVar(&commitMode, "commit-mode", commitModeCheckpoint, "Commit target: checkpoint, direct, sync")
 	cmd.Flags().StringVar(&watchMode, "watch-mode", watchModeRecursive, "Watch strategy: recursive, poll, auto")
 	cmd.Flags().DurationVar(&pollInterval, "poll-interval", defaultPollInterval, "Polling interval for poll or auto watch mode")
+	cmd.Flags().Int64Var(&logMaxBytes, "log-max-bytes", defaultLogMaxBytes, "Maximum autosnap daemon log size in bytes")
 
 	return cmd
 }
 
-func resolveRestartConfig(repoRoot string, cmd *cobra.Command, runState autosnapRunState, useRunState bool, checkCommand, msgSourceCmd string, idleSeconds int, snapshotMode, commitMode, watchMode string, pollInterval time.Duration) (autosnapConfig, error) {
+func resolveRestartConfig(repoRoot string, cmd *cobra.Command, runState autosnapRunState, useRunState bool, checkCommand, msgSourceCmd string, idleSeconds int, snapshotMode, commitMode, watchMode string, pollInterval time.Duration, logMaxBytes int64) (autosnapConfig, error) {
 	if !useRunState {
-		cfg, _, err := resolveStartConfig(repoRoot, cmd, checkCommand, msgSourceCmd, idleSeconds, snapshotMode, commitMode, watchMode, pollInterval)
+		cfg, _, err := resolveStartConfig(repoRoot, cmd, checkCommand, msgSourceCmd, idleSeconds, snapshotMode, commitMode, watchMode, pollInterval, logMaxBytes)
 		return cfg, err
 	}
 
@@ -104,6 +106,9 @@ func resolveRestartConfig(repoRoot string, cmd *cobra.Command, runState autosnap
 	if runState.PollInterval != 0 {
 		cfg.Watch.PollInterval = runState.PollInterval
 	}
+	if runState.LogMaxBytes != 0 {
+		cfg.LogMaxBytes = runState.LogMaxBytes
+	}
 
 	flags := cmd.Flags()
 	if flags.Changed("check") {
@@ -127,6 +132,9 @@ func resolveRestartConfig(repoRoot string, cmd *cobra.Command, runState autosnap
 	if flags.Changed("poll-interval") {
 		cfg.Watch.PollInterval = pollInterval
 	}
+	if flags.Changed("log-max-bytes") {
+		cfg.LogMaxBytes = logMaxBytes
+	}
 
 	cfg.Check = strings.TrimSpace(cfg.Check)
 	cfg.MsgSourceCmd = strings.TrimSpace(cfg.MsgSourceCmd)
@@ -134,7 +142,7 @@ func resolveRestartConfig(repoRoot string, cmd *cobra.Command, runState autosnap
 	cfg.CommitMode = strings.TrimSpace(cfg.CommitMode)
 	cfg.Watch.Mode = strings.TrimSpace(cfg.Watch.Mode)
 
-	if err := validateStartConfig(cfg, flags.Changed("idle"), flags.Changed("poll-interval")); err != nil {
+	if err := validateStartConfig(cfg, flags.Changed("idle"), flags.Changed("poll-interval"), flags.Changed("log-max-bytes")); err != nil {
 		return cfg, err
 	}
 

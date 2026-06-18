@@ -30,6 +30,7 @@ type autosnapRunState struct {
 	CommitMode      string        `json:"commitMode"`
 	WatchMode       string        `json:"watchMode"`
 	PollInterval    time.Duration `json:"pollInterval"`
+	LogMaxBytes     int64         `json:"logMaxBytes"`
 	RunToken        string        `json:"runToken"`
 	IdleSeconds     int           `json:"idleSeconds"`
 	StartedAt       string        `json:"startedAt"`

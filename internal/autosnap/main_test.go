@@ -509,6 +509,48 @@ func TestWriteLogTailMissingFile(t *testing.T) {
 	}
 }
 
+func TestCompactLogFileNoopsWhenUnderLimitOrMissing(t *testing.T) {
+	dir := t.TempDir()
+	missingPath := filepath.Join(dir, "missing.log")
+	if err := compactLogFile(missingPath, 10); err != nil {
+		t.Fatalf("compactLogFile missing file failed: %v", err)
+	}
+
+	logPath := filepath.Join(dir, "autosnap.log")
+	if err := os.WriteFile(logPath, []byte("one\ntwo\n"), 0o644); err != nil {
+		t.Fatalf("write log failed: %v", err)
+	}
+	if err := compactLogFile(logPath, 100); err != nil {
+		t.Fatalf("compactLogFile under limit failed: %v", err)
+	}
+	raw, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read compacted log failed: %v", err)
+	}
+	if got, want := string(raw), "one\ntwo\n"; got != want {
+		t.Fatalf("expected log to remain %q, got %q", want, got)
+	}
+}
+
+func TestCompactLogFileKeepsNewestCompleteLines(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "autosnap.log")
+	if err := os.WriteFile(logPath, []byte("alpha\nbeta\ngamma\ndelta\n"), 0o644); err != nil {
+		t.Fatalf("write log failed: %v", err)
+	}
+
+	if err := compactLogFile(logPath, int64(len("ta\ngamma\ndelta\n"))); err != nil {
+		t.Fatalf("compactLogFile failed: %v", err)
+	}
+	raw, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read compacted log failed: %v", err)
+	}
+	if got, want := string(raw), "gamma\ndelta\n"; got != want {
+		t.Fatalf("expected compacted log %q, got %q", want, got)
+	}
+}
+
 func TestFollowLogWritesAppends(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "autosnap.log")
@@ -1039,6 +1081,7 @@ idle_seconds = 15
 snapshot_mode = "staged"
 commit_mode = "sync"
 msg_source_cmd = "printf msg"
+log_max_bytes = 2048
 
 [watch]
 mode = "auto"
@@ -1055,7 +1098,7 @@ poll_interval = "2s"
 	if !found {
 		t.Fatalf("expected config to be found")
 	}
-	if cfg.Check != "go test ./..." || cfg.IdleSeconds != 15 || cfg.SnapshotMode != snapshotModeStaged || cfg.CommitMode != commitModeSync || cfg.MsgSourceCmd != "printf msg" || cfg.Watch.Mode != watchModeAuto || cfg.Watch.PollInterval != 2*time.Second {
+	if cfg.Check != "go test ./..." || cfg.IdleSeconds != 15 || cfg.SnapshotMode != snapshotModeStaged || cfg.CommitMode != commitModeSync || cfg.MsgSourceCmd != "printf msg" || cfg.LogMaxBytes != 2048 || cfg.Watch.Mode != watchModeAuto || cfg.Watch.PollInterval != 2*time.Second {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
 }
@@ -1066,6 +1109,7 @@ func TestResolveStartConfigPrefersFlagsOverConfig(t *testing.T) {
 idle_seconds = 15
 snapshot_mode = "staged"
 commit_mode = "direct"
+log_max_bytes = 4096
 
 [watch]
 mode = "poll"
@@ -1088,15 +1132,18 @@ poll_interval = "2s"
 	if err := cmd.Flags().Set("commit-mode", "checkpoint"); err != nil {
 		t.Fatalf("set commit-mode flag failed: %v", err)
 	}
+	if err := cmd.Flags().Set("log-max-bytes", "8192"); err != nil {
+		t.Fatalf("set log-max-bytes flag failed: %v", err)
+	}
 
-	cfg, found, err := resolveStartConfig(repo, cmd, "make test", "", 30, snapshotModeBoth, commitModeCheckpoint, watchModeAuto, defaultPollInterval)
+	cfg, found, err := resolveStartConfig(repo, cmd, "make test", "", 30, snapshotModeBoth, commitModeCheckpoint, watchModeAuto, defaultPollInterval, 8192)
 	if err != nil {
 		t.Fatalf("resolve config failed: %v", err)
 	}
 	if !found {
 		t.Fatalf("expected config to be found")
 	}
-	if cfg.Check != "make test" || cfg.IdleSeconds != 30 || cfg.CommitMode != commitModeCheckpoint || cfg.Watch.Mode != watchModeAuto {
+	if cfg.Check != "make test" || cfg.IdleSeconds != 30 || cfg.CommitMode != commitModeCheckpoint || cfg.Watch.Mode != watchModeAuto || cfg.LogMaxBytes != 8192 {
 		t.Fatalf("expected flags to override config, got %+v", cfg)
 	}
 	if cfg.SnapshotMode != snapshotModeStaged || cfg.Watch.PollInterval != 2*time.Second {
@@ -1114,7 +1161,7 @@ commit_mode = "direct"
 		t.Fatalf("write config failed: %v", err)
 	}
 
-	_, _, err := resolveStartConfig(repo, newStartCommand(), "", "", 60, snapshotModeBoth, commitModeCheckpoint, watchModeRecursive, defaultPollInterval)
+	_, _, err := resolveStartConfig(repo, newStartCommand(), "", "", 60, snapshotModeBoth, commitModeCheckpoint, watchModeRecursive, defaultPollInterval, defaultLogMaxBytes)
 	if err == nil {
 		t.Fatalf("expected unsafe direct snapshot mode to fail")
 	}
@@ -1133,12 +1180,33 @@ commit_mode = "sync"
 		t.Fatalf("write config failed: %v", err)
 	}
 
-	_, _, err := resolveStartConfig(repo, newStartCommand(), "", "", 60, snapshotModeBoth, commitModeCheckpoint, watchModeRecursive, defaultPollInterval)
+	_, _, err := resolveStartConfig(repo, newStartCommand(), "", "", 60, snapshotModeBoth, commitModeCheckpoint, watchModeRecursive, defaultPollInterval, defaultLogMaxBytes)
 	if err == nil {
 		t.Fatalf("expected unsafe sync snapshot mode to fail")
 	}
 	if !strings.Contains(err.Error(), "commit_mode sync requires snapshot_mode both") {
 		t.Fatalf("expected sync snapshot mode error, got %v", err)
+	}
+}
+
+func TestResolveStartConfigRejectsInvalidLogMaxBytes(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.WriteFile(autosnapConfigPath(repo), []byte("check = \"true\"\nlog_max_bytes = 0\n"), 0o644); err != nil {
+		t.Fatalf("write config failed: %v", err)
+	}
+
+	_, _, err := resolveStartConfig(repo, newStartCommand(), "", "", 60, snapshotModeBoth, commitModeCheckpoint, watchModeRecursive, defaultPollInterval, defaultLogMaxBytes)
+	if err == nil || !strings.Contains(err.Error(), "log_max_bytes must be greater than 0") {
+		t.Fatalf("expected invalid config log_max_bytes error, got %v", err)
+	}
+
+	cmd := newStartCommand()
+	if err := cmd.Flags().Set("log-max-bytes", "0"); err != nil {
+		t.Fatalf("set log-max-bytes flag failed: %v", err)
+	}
+	_, _, err = resolveStartConfig(repo, cmd, "", "", 60, snapshotModeBoth, commitModeCheckpoint, watchModeRecursive, defaultPollInterval, 0)
+	if err == nil || !strings.Contains(err.Error(), "--log-max-bytes must be greater than 0") {
+		t.Fatalf("expected invalid flag log-max-bytes error, got %v", err)
 	}
 }
 
@@ -1176,12 +1244,13 @@ poll_interval = "5s"
 		CommitMode:      commitModeDirect,
 		WatchMode:       watchModePoll,
 		PollInterval:    2 * time.Second,
+		LogMaxBytes:     4096,
 	}
-	cfg, err := resolveRestartConfig(repo, newRestartCommand(), runState, true, "", "", 60, snapshotModeBoth, commitModeCheckpoint, watchModeRecursive, defaultPollInterval)
+	cfg, err := resolveRestartConfig(repo, newRestartCommand(), runState, true, "", "", 60, snapshotModeBoth, commitModeCheckpoint, watchModeRecursive, defaultPollInterval, defaultLogMaxBytes)
 	if err != nil {
 		t.Fatalf("resolve restart config failed: %v", err)
 	}
-	if cfg.Check != "make verify" || cfg.MsgSourceCmd != "" || cfg.IdleSeconds != 45 || cfg.SnapshotMode != snapshotModeBoth || cfg.CommitMode != commitModeDirect || cfg.Watch.Mode != watchModePoll || cfg.Watch.PollInterval != 2*time.Second {
+	if cfg.Check != "make verify" || cfg.MsgSourceCmd != "" || cfg.IdleSeconds != 45 || cfg.SnapshotMode != snapshotModeBoth || cfg.CommitMode != commitModeDirect || cfg.Watch.Mode != watchModePoll || cfg.Watch.PollInterval != 2*time.Second || cfg.LogMaxBytes != 4096 {
 		t.Fatalf("expected active run state to win, got %+v", cfg)
 	}
 }
@@ -1197,6 +1266,7 @@ func TestResolveRestartConfigFlagsOverrideActiveRunState(t *testing.T) {
 		CommitMode:      commitModeDirect,
 		WatchMode:       watchModePoll,
 		PollInterval:    2 * time.Second,
+		LogMaxBytes:     4096,
 	}
 	cmd := newRestartCommand()
 	if err := cmd.Flags().Set("check", "npm test"); err != nil {
@@ -1217,12 +1287,15 @@ func TestResolveRestartConfigFlagsOverrideActiveRunState(t *testing.T) {
 	if err := cmd.Flags().Set("poll-interval", "3s"); err != nil {
 		t.Fatalf("set poll-interval flag failed: %v", err)
 	}
+	if err := cmd.Flags().Set("log-max-bytes", "8192"); err != nil {
+		t.Fatalf("set log-max-bytes flag failed: %v", err)
+	}
 
-	cfg, err := resolveRestartConfig(repo, cmd, runState, true, "npm test", "printf new", 30, snapshotModeBoth, commitModeCheckpoint, watchModeAuto, 3*time.Second)
+	cfg, err := resolveRestartConfig(repo, cmd, runState, true, "npm test", "printf new", 30, snapshotModeBoth, commitModeCheckpoint, watchModeAuto, 3*time.Second, 8192)
 	if err != nil {
 		t.Fatalf("resolve restart config failed: %v", err)
 	}
-	if cfg.Check != "npm test" || cfg.MsgSourceCmd != "printf new" || cfg.IdleSeconds != 30 || cfg.CommitMode != commitModeCheckpoint || cfg.Watch.Mode != watchModeAuto || cfg.Watch.PollInterval != 3*time.Second {
+	if cfg.Check != "npm test" || cfg.MsgSourceCmd != "printf new" || cfg.IdleSeconds != 30 || cfg.CommitMode != commitModeCheckpoint || cfg.Watch.Mode != watchModeAuto || cfg.Watch.PollInterval != 3*time.Second || cfg.LogMaxBytes != 8192 {
 		t.Fatalf("expected flags to override active run state, got %+v", cfg)
 	}
 	if cfg.SnapshotMode != snapshotModeStaged {
@@ -1237,6 +1310,7 @@ idle_seconds = 15
 snapshot_mode = "both"
 commit_mode = "direct"
 msg_source_cmd = "printf config"
+log_max_bytes = 4096
 
 [watch]
 mode = "auto"
@@ -1250,14 +1324,14 @@ poll_interval = "4s"
 		CheckCommand: "make verify",
 		IdleSeconds:  45,
 	}
-	cfg, err := resolveRestartConfig(repo, newRestartCommand(), runState, true, "", "", 60, snapshotModeBoth, commitModeCheckpoint, watchModeRecursive, defaultPollInterval)
+	cfg, err := resolveRestartConfig(repo, newRestartCommand(), runState, true, "", "", 60, snapshotModeBoth, commitModeCheckpoint, watchModeRecursive, defaultPollInterval, defaultLogMaxBytes)
 	if err != nil {
 		t.Fatalf("resolve restart config failed: %v", err)
 	}
 	if cfg.Check != "make verify" || cfg.IdleSeconds != 45 {
 		t.Fatalf("expected present legacy run values to win, got %+v", cfg)
 	}
-	if cfg.MsgSourceCmd != "printf config" || cfg.SnapshotMode != snapshotModeBoth || cfg.CommitMode != commitModeDirect || cfg.Watch.Mode != watchModeAuto || cfg.Watch.PollInterval != 4*time.Second {
+	if cfg.MsgSourceCmd != "printf config" || cfg.SnapshotMode != snapshotModeBoth || cfg.CommitMode != commitModeDirect || cfg.Watch.Mode != watchModeAuto || cfg.Watch.PollInterval != 4*time.Second || cfg.LogMaxBytes != 4096 {
 		t.Fatalf("expected missing legacy values from config before defaults, got %+v", cfg)
 	}
 }
@@ -1274,7 +1348,7 @@ mode = "poll"
 		t.Fatalf("write config failed: %v", err)
 	}
 
-	cfg, err := resolveRestartConfig(repo, newRestartCommand(), autosnapRunState{}, false, "", "", 60, snapshotModeBoth, commitModeCheckpoint, watchModeRecursive, defaultPollInterval)
+	cfg, err := resolveRestartConfig(repo, newRestartCommand(), autosnapRunState{}, false, "", "", 60, snapshotModeBoth, commitModeCheckpoint, watchModeRecursive, defaultPollInterval, defaultLogMaxBytes)
 	if err != nil {
 		t.Fatalf("resolve restart config failed: %v", err)
 	}
@@ -1326,6 +1400,7 @@ func TestConfigInitAndShowCommands(t *testing.T) {
 			"exists: true",
 			"check: npm test",
 			"commit_mode: checkpoint",
+			"log_max_bytes: 10485760",
 			"watch.mode: recursive",
 			"watch.poll_interval: 5s",
 		} {
@@ -1354,12 +1429,13 @@ func TestStartCommandAcceptsConfigCheck(t *testing.T) {
 }
 
 func TestStartDetachedArgsForwardWatchOptions(t *testing.T) {
-	args := startDetachedArgs("/bin/autosnap", "make build", "printf msg", 30, snapshotModeBoth, commitModeCheckpoint, watchModeAuto, 2*time.Second, "token")
+	args := startDetachedArgs("/bin/autosnap", "make build", "printf msg", 30, snapshotModeBoth, commitModeCheckpoint, watchModeAuto, 2*time.Second, 4096, "token")
 	joined := strings.Join(args, "\n")
 	for _, want := range []string{
 		"--watch-mode\nauto",
 		"--poll-interval\n2s",
 		"--commit-mode\ncheckpoint",
+		"--log-max-bytes\n4096",
 		"--msg-source-cmd\nprintf msg",
 	} {
 		if !strings.Contains(joined, want) {
@@ -1850,6 +1926,38 @@ func TestRunCheckDirectCommitSkipsMessageSourceWhenTreeMatchesHead(t *testing.T)
 		}
 		if got := runGitOutput(t, repoRoot, "rev-parse", "HEAD"); got != initialHead {
 			t.Fatalf("expected direct mode to leave HEAD unchanged, got %s want %s", got, initialHead)
+		}
+	})
+}
+
+func TestRunCheckCheckpointSkipsMessageSourceWhenTreeMatchesHead(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		ctx := context.Background()
+		repoRoot, _, branchRef, err := detectRepository(ctx)
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		statePath, err := stateFilePath(repoRoot)
+		if err != nil {
+			t.Fatalf("stateFilePath failed: %v", err)
+		}
+		sentinelPath := filepath.Join(repoRoot, "msg-source-ran")
+		msgSourceCmd := "printf ran > msg-source-ran && printf message"
+		runner, err := newSnapshotRunnerWithWatch(ctx, repoRoot, branchRef, "true", msgSourceCmd, snapshotModeBoth, commitModeCheckpoint, watchModePoll, time.Second, time.Second, statePath)
+		if err != nil {
+			t.Fatalf("newSnapshotRunnerWithWatch failed: %v", err)
+		}
+
+		runner.runCheck()
+
+		if _, err := os.Stat(sentinelPath); !os.IsNotExist(err) {
+			t.Fatalf("expected msg-source-cmd not to run, stat err=%v", err)
+		}
+		if runner.state.LastCheckpointRef != "" {
+			t.Fatalf("expected checkpoint mode not to record checkpoint, got %s", runner.state.LastCheckpointRef)
 		}
 	})
 }
