@@ -57,4 +57,3 @@ func (w *timestampWriter) Write(p []byte) (int, error) {
 func withTimestampWriter(w io.Writer) io.Writer {
 	return &timestampWriter{inner: w}
 }
-

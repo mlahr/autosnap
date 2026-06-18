@@ -65,6 +65,11 @@ type snapshotRunner struct {
 	watchIgnoreRules []ignoreRule
 }
 
+type checkpointRunResult struct {
+	CheckFailed bool
+	CheckExit   int
+}
+
 func newSnapshotRunner(ctx context.Context, repoRoot, branchRef, checkCommand, msgSourceCommand, snapshotMode string, idle time.Duration, statePath string) (*snapshotRunner, error) {
 	return newSnapshotRunnerWithWatch(ctx, repoRoot, branchRef, checkCommand, msgSourceCommand, snapshotMode, commitModeCheckpoint, watchModeRecursive, defaultPollInterval, idle, statePath)
 }
@@ -290,10 +295,26 @@ func (r *snapshotRunner) runIdleCheck() {
 }
 
 func (r *snapshotRunner) runCheck() {
+	if _, err := r.runCheckWithLock(0); err != nil {
+		logf("unable to run checkpoint: %v\n", err)
+	}
+}
+
+func (r *snapshotRunner) runCheckWithLock(timeout time.Duration) (checkpointRunResult, error) {
+	lock, err := acquireCheckpointLock(r.ctx, r.repoRoot, timeout)
+	if err != nil {
+		return checkpointRunResult{}, err
+	}
+	defer lock.Close()
+
+	return r.runCheckUnlocked()
+}
+
+func (r *snapshotRunner) runCheckUnlocked() (checkpointRunResult, error) {
 	position, err := currentGitPosition(r.ctx, r.repoRoot)
 	if err != nil {
 		logf("unable to resolve current HEAD: %v\n", err)
-		return
+		return checkpointRunResult{}, err
 	}
 	branchRef := position.BranchRef
 	previousState := r.state
@@ -312,7 +333,7 @@ func (r *snapshotRunner) runCheck() {
 		r.state.LastFailureExitCode = exitCode
 		_ = saveAutosnapState(r.statePath, r.state)
 		logln("check failed; checkpoint not created")
-		return
+		return checkpointRunResult{CheckFailed: true, CheckExit: exitCode}, nil
 	}
 
 	_ = saveAutosnapState(r.statePath, r.state)
@@ -320,19 +341,19 @@ func (r *snapshotRunner) runCheck() {
 	gitDirectory, err := gitDir(r.ctx, r.repoRoot)
 	if err != nil {
 		logf("unable to resolve git directory: %v\n", err)
-		return
+		return checkpointRunResult{}, err
 	}
 	tree, err := computeWorktreeTree(r.ctx, r.repoRoot, gitDirectory, r.snapshotMode)
 	if err != nil {
 		logf("unable to compute working tree tree: %v\n", err)
-		return
+		return checkpointRunResult{}, err
 	}
 
 	previousCheckpointRef, previousCheckpointTree := resolvePreviousCheckpoint(r.ctx, r.repoRoot, branchRef, previousState)
 
 	if r.commitMode == commitModeCheckpoint && previousCheckpointTree != "" && previousCheckpointTree == tree {
 		logln("no meaningful diff; checkpoint skipped")
-		return
+		return checkpointRunResult{}, nil
 	}
 
 	commitMessage := ""
@@ -363,21 +384,21 @@ func (r *snapshotRunner) runCheck() {
 		freshTree, err := computeWorktreeTree(r.ctx, r.repoRoot, gitDirectory, r.snapshotMode)
 		if err != nil {
 			logf("unable to re-check working tree before direct commit: %v\n", err)
-			return
+			return checkpointRunResult{}, err
 		}
 		if freshTree != tree {
 			logln("worktree changed during check; direct commit deferred")
-			return
+			return checkpointRunResult{}, nil
 		}
 
 		commit, created, ts, err := createDirectCommitChecked(r.ctx, r.repoRoot, branchRef, position.Head, r.checkCmd, r.idle, tree, commitMessage)
 		if err != nil {
 			logf("unable to create direct commit: %v\n", err)
-			return
+			return checkpointRunResult{}, err
 		}
 		if !created {
 			logln("no meaningful diff; direct commit skipped")
-			return
+			return checkpointRunResult{}, nil
 		}
 
 		commitShort := commit
@@ -414,16 +435,17 @@ func (r *snapshotRunner) runCheck() {
 		r.state.LastCheckpointTree = tree
 		if err := saveAutosnapState(r.statePath, r.state); err != nil {
 			logf("unable to persist state: %v\n", err)
+			return checkpointRunResult{}, err
 		}
 	default:
 		ref, commit, err := createCheckpointChecked(r.ctx, r.repoRoot, branchRef, position.Head, r.checkCmd, r.idle, tree, commitMessage)
 		if err != nil {
 			logf("unable to create checkpoint: %v\n", err)
-			return
+			return checkpointRunResult{}, err
 		}
 		if ref == "" {
 			logln("no meaningful diff; checkpoint skipped")
-			return
+			return checkpointRunResult{}, nil
 		}
 
 		r.state.LastCheckpointRef = ref
@@ -431,6 +453,7 @@ func (r *snapshotRunner) runCheck() {
 		r.state.LastCheckpointTree = tree
 		if err := saveAutosnapState(r.statePath, r.state); err != nil {
 			logf("unable to persist state: %v\n", err)
+			return checkpointRunResult{}, err
 		}
 
 		commitShort := commit
@@ -439,6 +462,7 @@ func (r *snapshotRunner) runCheck() {
 		}
 		logf("checkpoint saved: %s\n", commitShort)
 	}
+	return checkpointRunResult{}, nil
 }
 
 func resolvePreviousCheckpoint(ctx context.Context, repoRoot, branchRef string, state autosnapState) (string, string) {

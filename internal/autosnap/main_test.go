@@ -96,6 +96,16 @@ func TestCheckpointListSummary(t *testing.T) {
 	}
 }
 
+func TestRootCommandIncludesCheckpointCommand(t *testing.T) {
+	root := NewRootCommand()
+	for _, command := range root.Commands() {
+		if command.Name() == "checkpoint" {
+			return
+		}
+	}
+	t.Fatalf("expected root command to include checkpoint")
+}
+
 func TestStateFilePathUsesAbsoluteGitDir(t *testing.T) {
 	requireIntegration(t)
 	repo := createTestRepo(t)
@@ -4413,6 +4423,119 @@ func gitRefExists(t *testing.T, repoRoot, ref string) bool {
 	cmd := exec.Command("git", "rev-parse", "--verify", ref)
 	cmd.Dir = repoRoot
 	return cmd.Run() == nil
+}
+
+func TestCheckpointCommandCreatesImmediateCheckpoint(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("manual checkpoint"), 0o644); err != nil {
+			t.Fatalf("write file failed: %v", err)
+		}
+
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newCheckpointCommand())
+		root.SetArgs([]string{"checkpoint", "--check", "true"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("checkpoint command failed: %v", err)
+		}
+
+		checkpoints, err := listCheckpointRefsForBranch(context.Background(), repo, branchRef)
+		if err != nil {
+			t.Fatalf("list checkpoints failed: %v", err)
+		}
+		if len(checkpoints) != 1 {
+			t.Fatalf("expected one checkpoint, got %d", len(checkpoints))
+		}
+		if got := runGitOutput(t, repo, "show", checkpoints[0].Commit+":file.txt"); got != "manual checkpoint" {
+			t.Fatalf("expected checkpoint content, got %q", got)
+		}
+	})
+}
+
+func TestCheckpointCommandReturnsErrorWhenCheckFails(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("failed checkpoint"), 0o644); err != nil {
+			t.Fatalf("write file failed: %v", err)
+		}
+
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newCheckpointCommand())
+		root.SetArgs([]string{"checkpoint", "--check", "false"})
+		if err := root.Execute(); err == nil {
+			t.Fatalf("expected checkpoint command to fail")
+		}
+
+		checkpoints, err := listCheckpointRefsForBranch(context.Background(), repo, branchRef)
+		if err != nil {
+			t.Fatalf("list checkpoints failed: %v", err)
+		}
+		if len(checkpoints) != 0 {
+			t.Fatalf("expected no checkpoints, got %d", len(checkpoints))
+		}
+	})
+}
+
+func TestCheckpointCommandAllowsActiveDaemonState(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("daemon active checkpoint"), 0o644); err != nil {
+			t.Fatalf("write file failed: %v", err)
+		}
+
+		runPath, err := runStatePath(repo)
+		if err != nil {
+			t.Fatalf("runStatePath failed: %v", err)
+		}
+		if err := saveAutosnapRunState(runPath, autosnapRunState{PID: os.Getpid(), RepoRoot: repo}); err != nil {
+			t.Fatalf("save run state failed: %v", err)
+		}
+
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newCheckpointCommand())
+		root.SetArgs([]string{"checkpoint", "--check", "true"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("checkpoint command failed with active daemon state: %v", err)
+		}
+	})
+}
+
+func TestCheckpointCommandTimeoutWhenLockHeld(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		lock, err := acquireCheckpointLock(context.Background(), repo, 0)
+		if err != nil {
+			t.Fatalf("acquire checkpoint lock failed: %v", err)
+		}
+		defer lock.Close()
+
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("locked checkpoint"), 0o644); err != nil {
+			t.Fatalf("write file failed: %v", err)
+		}
+
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newCheckpointCommand())
+		root.SetArgs([]string{"checkpoint", "--check", "true", "--timeout", "1ms"})
+		err = root.Execute()
+		if err == nil {
+			t.Fatalf("expected checkpoint command to time out waiting for lock")
+		}
+		if !strings.Contains(err.Error(), "timed out") {
+			t.Fatalf("expected timeout error, got %v", err)
+		}
+	})
 }
 
 func TestCreateCheckpointUsesCustomMessage(t *testing.T) {

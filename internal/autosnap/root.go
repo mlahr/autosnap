@@ -19,6 +19,7 @@ func NewRootCommand() *cobra.Command {
 	}
 
 	root.AddCommand(newStartCommand())
+	root.AddCommand(newCheckpointCommand())
 	root.AddCommand(newStatusCommand())
 	root.AddCommand(newListCommand())
 	root.AddCommand(newPendingCommand())
