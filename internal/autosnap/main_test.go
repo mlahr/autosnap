@@ -1821,6 +1821,39 @@ prev:%s
 	})
 }
 
+func TestRunCheckDirectCommitSkipsMessageSourceWhenTreeMatchesHead(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		ctx := context.Background()
+		repoRoot, _, branchRef, err := detectRepository(ctx)
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		initialHead := runGitOutput(t, repoRoot, "rev-parse", "HEAD")
+
+		statePath, err := stateFilePath(repoRoot)
+		if err != nil {
+			t.Fatalf("stateFilePath failed: %v", err)
+		}
+		sentinelPath := filepath.Join(repoRoot, "msg-source-ran")
+		msgSourceCmd := "printf ran > msg-source-ran && printf message"
+		runner, err := newSnapshotRunnerWithWatch(ctx, repoRoot, branchRef, "true", msgSourceCmd, snapshotModeBoth, commitModeDirect, watchModePoll, time.Second, time.Second, statePath)
+		if err != nil {
+			t.Fatalf("newSnapshotRunnerWithWatch failed: %v", err)
+		}
+
+		runner.runCheck()
+
+		if _, err := os.Stat(sentinelPath); !os.IsNotExist(err) {
+			t.Fatalf("expected msg-source-cmd not to run, stat err=%v", err)
+		}
+		if got := runGitOutput(t, repoRoot, "rev-parse", "HEAD"); got != initialHead {
+			t.Fatalf("expected direct mode to leave HEAD unchanged, got %s want %s", got, initialHead)
+		}
+	})
+}
+
 func TestRunCheckDirectCommitComparesAgainstHeadNotCheckpoint(t *testing.T) {
 	requireIntegration(t)
 	repo := createTestRepo(t)
