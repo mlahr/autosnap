@@ -1912,16 +1912,21 @@ func TestRunCheckDirectCommitSkipsMessageSourceWhenTreeMatchesHead(t *testing.T)
 		if err != nil {
 			t.Fatalf("stateFilePath failed: %v", err)
 		}
-		sentinelPath := filepath.Join(repoRoot, "msg-source-ran")
+		checkSentinelPath := filepath.Join(repoRoot, "check-ran")
+		msgSourceSentinelPath := filepath.Join(repoRoot, "msg-source-ran")
+		checkCmd := "printf ran > check-ran"
 		msgSourceCmd := "printf ran > msg-source-ran && printf message"
-		runner, err := newSnapshotRunnerWithWatch(ctx, repoRoot, branchRef, "true", msgSourceCmd, snapshotModeBoth, commitModeDirect, watchModePoll, time.Second, time.Second, statePath)
+		runner, err := newSnapshotRunnerWithWatch(ctx, repoRoot, branchRef, checkCmd, msgSourceCmd, snapshotModeBoth, commitModeDirect, watchModePoll, time.Second, time.Second, statePath)
 		if err != nil {
 			t.Fatalf("newSnapshotRunnerWithWatch failed: %v", err)
 		}
 
 		runner.runCheck()
 
-		if _, err := os.Stat(sentinelPath); !os.IsNotExist(err) {
+		if _, err := os.Stat(checkSentinelPath); !os.IsNotExist(err) {
+			t.Fatalf("expected check command not to run, stat err=%v", err)
+		}
+		if _, err := os.Stat(msgSourceSentinelPath); !os.IsNotExist(err) {
 			t.Fatalf("expected msg-source-cmd not to run, stat err=%v", err)
 		}
 		if got := runGitOutput(t, repoRoot, "rev-parse", "HEAD"); got != initialHead {
@@ -1944,20 +1949,63 @@ func TestRunCheckCheckpointSkipsMessageSourceWhenTreeMatchesHead(t *testing.T) {
 		if err != nil {
 			t.Fatalf("stateFilePath failed: %v", err)
 		}
-		sentinelPath := filepath.Join(repoRoot, "msg-source-ran")
+		checkSentinelPath := filepath.Join(repoRoot, "check-ran")
+		msgSourceSentinelPath := filepath.Join(repoRoot, "msg-source-ran")
+		checkCmd := "printf ran > check-ran"
 		msgSourceCmd := "printf ran > msg-source-ran && printf message"
-		runner, err := newSnapshotRunnerWithWatch(ctx, repoRoot, branchRef, "true", msgSourceCmd, snapshotModeBoth, commitModeCheckpoint, watchModePoll, time.Second, time.Second, statePath)
+		runner, err := newSnapshotRunnerWithWatch(ctx, repoRoot, branchRef, checkCmd, msgSourceCmd, snapshotModeBoth, commitModeCheckpoint, watchModePoll, time.Second, time.Second, statePath)
 		if err != nil {
 			t.Fatalf("newSnapshotRunnerWithWatch failed: %v", err)
 		}
 
 		runner.runCheck()
 
-		if _, err := os.Stat(sentinelPath); !os.IsNotExist(err) {
+		if _, err := os.Stat(checkSentinelPath); !os.IsNotExist(err) {
+			t.Fatalf("expected check command not to run, stat err=%v", err)
+		}
+		if _, err := os.Stat(msgSourceSentinelPath); !os.IsNotExist(err) {
 			t.Fatalf("expected msg-source-cmd not to run, stat err=%v", err)
 		}
 		if runner.state.LastCheckpointRef != "" {
 			t.Fatalf("expected checkpoint mode not to record checkpoint, got %s", runner.state.LastCheckpointRef)
+		}
+	})
+}
+
+func TestRunCheckCheckpointSkipsCheckWhenTreeMatchesPreviousCheckpoint(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		ctx := context.Background()
+		repoRoot, _, branchRef, err := detectRepository(ctx)
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		statePath, err := stateFilePath(repoRoot)
+		if err != nil {
+			t.Fatalf("stateFilePath failed: %v", err)
+		}
+		runner, err := newSnapshotRunnerWithWatch(ctx, repoRoot, branchRef, "true", "", snapshotModeBoth, commitModeCheckpoint, watchModePoll, time.Second, time.Second, statePath)
+		if err != nil {
+			t.Fatalf("newSnapshotRunnerWithWatch failed: %v", err)
+		}
+
+		if err := os.WriteFile(filepath.Join(repoRoot, "file.txt"), []byte("checkpointed change"), 0o644); err != nil {
+			t.Fatalf("write file failed: %v", err)
+		}
+		runner.runCheck()
+
+		if runner.state.LastCheckpointTree == "" {
+			t.Fatalf("expected initial checkpoint to record tree")
+		}
+
+		checkSentinelPath := filepath.Join(repoRoot, "check-ran")
+		runner.checkCmd = "printf ran > check-ran"
+		runner.runCheck()
+
+		if _, err := os.Stat(checkSentinelPath); !os.IsNotExist(err) {
+			t.Fatalf("expected check command not to run, stat err=%v", err)
 		}
 	})
 }
@@ -3172,6 +3220,26 @@ func TestShowCommandRejectsTimestamp(t *testing.T) {
 			t.Fatalf("expected no successful show output, got: %q", err.Error())
 		}
 	})
+}
+
+func TestShowCommandHelpDocumentsHistorySelectors(t *testing.T) {
+	buf := &bytes.Buffer{}
+	root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+	root.AddCommand(newShowCommand())
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"show", "--help"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("show --help failed: %v", err)
+	}
+
+	output := buf.String()
+	for _, want := range []string{"first+N", "last-N", "autosnap show last-1"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected show help to contain %q, got:\n%s", want, output)
+		}
+	}
 }
 
 func TestShowCommandSupportsFirstAndLastSelectors(t *testing.T) {

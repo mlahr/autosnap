@@ -319,25 +319,6 @@ func (r *snapshotRunner) runCheckUnlocked() (checkpointRunResult, error) {
 	branchRef := position.BranchRef
 	previousState := r.state
 
-	duration, exitCode, err := runShellCheck(r.ctx, r.repoRoot, r.checkCmd)
-	r.state.LastBranch = branchRef
-	r.state.RepoRoot = r.repoRoot
-	r.state.LastCheckAt = time.Now().UTC().Format(time.RFC3339)
-	r.state.LastCheckStatus = "passed"
-	r.state.LastCheckCommand = r.checkCmd
-	r.state.LastCheckDurationMs = int64(duration / time.Millisecond)
-
-	if exitCode != 0 {
-		r.state.LastCheckStatus = "failed"
-		r.state.LastFailureAt = r.state.LastCheckAt
-		r.state.LastFailureExitCode = exitCode
-		_ = saveAutosnapState(r.statePath, r.state)
-		logln("check failed; checkpoint not created")
-		return checkpointRunResult{CheckFailed: true, CheckExit: exitCode}, nil
-	}
-
-	_ = saveAutosnapState(r.statePath, r.state)
-
 	gitDirectory, err := gitDir(r.ctx, r.repoRoot)
 	if err != nil {
 		logf("unable to resolve git directory: %v\n", err)
@@ -377,6 +358,25 @@ func (r *snapshotRunner) runCheckUnlocked() (checkpointRunResult, error) {
 			return checkpointRunResult{}, nil
 		}
 	}
+
+	duration, exitCode, err := runShellCheck(r.ctx, r.repoRoot, r.checkCmd)
+	r.state.LastBranch = branchRef
+	r.state.RepoRoot = r.repoRoot
+	r.state.LastCheckAt = time.Now().UTC().Format(time.RFC3339)
+	r.state.LastCheckStatus = "passed"
+	r.state.LastCheckCommand = r.checkCmd
+	r.state.LastCheckDurationMs = int64(duration / time.Millisecond)
+
+	if exitCode != 0 {
+		r.state.LastCheckStatus = "failed"
+		r.state.LastFailureAt = r.state.LastCheckAt
+		r.state.LastFailureExitCode = exitCode
+		_ = saveAutosnapState(r.statePath, r.state)
+		logln("check failed; checkpoint not created")
+		return checkpointRunResult{CheckFailed: true, CheckExit: exitCode}, nil
+	}
+
+	_ = saveAutosnapState(r.statePath, r.state)
 
 	commitMessage := ""
 	if strings.TrimSpace(r.msgSourceCmd) != "" {
