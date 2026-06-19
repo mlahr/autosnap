@@ -1472,6 +1472,12 @@ func TestSnapshotEventOperations(t *testing.T) {
 	if got := snapshotEventOperations(fsnotify.Event{Op: fsnotify.Create | fsnotify.Write}); got != "CREATE,WRITE" {
 		t.Fatalf("expected CREATE,WRITE, got %q", got)
 	}
+	if got := snapshotEventOperations(fsnotify.Event{Op: fsnotify.Chmod}); got != "" {
+		t.Fatalf("expected CHMOD to be ignored, got %q", got)
+	}
+	if got := snapshotEventOperations(fsnotify.Event{Op: fsnotify.Write | fsnotify.Chmod}); got != "WRITE" {
+		t.Fatalf("expected WRITE with CHMOD ignored, got %q", got)
+	}
 	if got := snapshotEventOperations(fsnotify.Event{Op: 0}); got != "" {
 		t.Fatalf("expected empty operations, got %q", got)
 	}

@@ -549,9 +549,6 @@ func snapshotEventOperations(event fsnotify.Event) string {
 	if event.Has(fsnotify.Rename) {
 		parts = append(parts, "RENAME")
 	}
-	if event.Has(fsnotify.Chmod) {
-		parts = append(parts, "CHMOD")
-	}
 	return strings.Join(parts, ",")
 }
 
