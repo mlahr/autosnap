@@ -62,6 +62,14 @@ func TestParseCheckpointMessage(t *testing.T) {
 	if cmd != "test passing-check output" {
 		t.Fatalf("expected parsed check command, got %q", cmd)
 	}
+
+	status, cmd = parseCheckpointMessage("feat(monitoring): introduce failing state for monitors")
+	if status != "unknown" {
+		t.Fatalf("expected unknown when failing appears in custom subject, got %s", status)
+	}
+	if cmd != "" {
+		t.Fatalf("expected empty check command for custom subject, got %q", cmd)
+	}
 }
 
 func TestCheckpointListSummary(t *testing.T) {
@@ -79,6 +87,11 @@ func TestCheckpointListSummary(t *testing.T) {
 			name:    "custom multiline message",
 			message: "feat(autosnap): add command output logging\n\nbody line",
 			want:    "feat(autosnap): add command output logging",
+		},
+		{
+			name:    "custom subject containing status word",
+			message: "feat(monitoring): introduce failing state for monitors",
+			want:    "feat(monitoring): introduce failing state for monitors",
 		},
 		{
 			name:    "empty message",
@@ -2480,6 +2493,36 @@ func TestListCheckpointsFromRefsIncludesFailedMetadata(t *testing.T) {
 		}
 		if summaries[missingRef] != failedCommitMetadataSummary {
 			t.Fatalf("expected missing ref %s to fail metadata read, got %q", missingRef, summaries[missingRef])
+		}
+	})
+}
+
+func TestListCheckpointsFromRefsUsesFirstContentLine(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		ref := createAutosnapTestCommitRef(t, repo, branchRef, "20260101T000000Z", "feat(logging): implement structured logging\n \nbody line")
+		checkpoints, err := listCheckpointsFromRefs(context.Background(), repo, []checkpointRefInfo{
+			{
+				Ref:       ref,
+				Commit:    "deadbeef",
+				Timestamp: "20260101T000000Z",
+				Branch:    branchRef,
+			},
+		})
+		if err != nil {
+			t.Fatalf("listCheckpointsFromRefs failed: %v", err)
+		}
+		if len(checkpoints) != 1 {
+			t.Fatalf("expected one checkpoint, got %d", len(checkpoints))
+		}
+		if got, want := checkpoints[0].Summary, "feat(logging): implement structured logging"; got != want {
+			t.Fatalf("expected summary %q, got %q", want, got)
 		}
 	})
 }

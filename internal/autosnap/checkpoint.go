@@ -819,7 +819,7 @@ func checkpointListSummary(message string) string {
 	return strings.TrimSpace(status + " " + checkCmd)
 }
 
-var checkpointStatusRegex = regexp.MustCompile(`\b(passing|failing)\b`)
+var checkpointStatusRegex = regexp.MustCompile(`^autosnap:\s+(passing|failing)\s+checkpoint\b`)
 
 func parseCheckpointStatus(line string) (string, bool) {
 	checkIdx := strings.Index(line, "check:")
@@ -934,7 +934,7 @@ func batchCheckpointSubjects(ctx context.Context, repoRoot string, entries []che
 	args := []string{
 		"for-each-ref",
 		"--sort=refname",
-		"--format=%(refname)\x1f%(subject)",
+		"--format=%(refname)\x1f%(contents:lines=1)",
 	}
 	for _, entry := range entries {
 		args = append(args, entry.Ref)
