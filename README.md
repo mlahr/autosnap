@@ -381,6 +381,18 @@ Pass `--force` to skip the clean-state precheck:
 autosnap pick --force <checkpoint>
 ```
 
+Use `--conflict` to choose how conflicting hunks are resolved:
+
+- `--conflict=manual` (default): leave conflict markers and resolve manually
+- `--conflict=checkpoint`: use the selected checkpoint side for conflicting hunks
+- `--conflict=head`: use the current `HEAD` side for conflicting hunks
+
+For example:
+
+```bash
+autosnap pick --conflict=checkpoint <checkpoint>
+```
+
 ### Promote checkpoint to a branch commit
 
 `autosnap promote <checkpoint>`

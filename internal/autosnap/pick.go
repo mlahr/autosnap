@@ -11,7 +11,10 @@ import (
 )
 
 func newPickCommand() *cobra.Command {
-	var force bool
+	var (
+		force          bool
+		conflictPolicy string
+	)
 
 	cmd := &cobra.Command{
 		Use:   "pick <checkpoint>",
@@ -36,6 +39,11 @@ autosnap pick refs/autosnapshots/main/20260605T120000Z`),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			out := cmd.OutOrStdout()
 			ctx := context.Background()
+			normalizedConflictPolicy, err := normalizeConflictPolicy(conflictPolicy)
+			if err != nil {
+				return err
+			}
+
 			repoRoot, _, branchRef, err := detectRepository(ctx)
 			if err != nil {
 				return err
@@ -46,7 +54,7 @@ autosnap pick refs/autosnapshots/main/20260605T120000Z`),
 				return err
 			}
 
-			if err := pickCheckpoint(ctx, repoRoot, branchRef, meta, force); err != nil {
+			if err := pickCheckpoint(ctx, repoRoot, branchRef, meta, force, normalizedConflictPolicy); err != nil {
 				var conflictErr patchConflictError
 				if errors.As(err, &conflictErr) {
 					conflictErr.checkpoint = args[0]
@@ -61,5 +69,6 @@ autosnap pick refs/autosnapshots/main/20260605T120000Z`),
 	}
 
 	cmd.Flags().BoolVar(&force, "force", false, "Skip the clean worktree/index precheck")
+	cmd.Flags().StringVar(&conflictPolicy, "conflict", conflictPolicyManual, "Conflict resolution policy: manual, checkpoint, head")
 	return cmd
 }

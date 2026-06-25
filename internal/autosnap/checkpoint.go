@@ -28,6 +28,12 @@ const (
 	commitModeSync       = "sync"
 )
 
+const (
+	conflictPolicyManual     = "manual"
+	conflictPolicyCheckpoint = "checkpoint"
+	conflictPolicyHead       = "head"
+)
+
 type checkpointInfo struct {
 	Ref       string
 	Timestamp string
@@ -514,10 +520,10 @@ func restoreCheckpoint(ctx context.Context, repoRoot string, meta checkpointRefI
 		return err
 	}
 
-	return applyCheckpointDiff(ctx, repoRoot, "restored", parent, meta.Commit)
+	return applyCheckpointDiff(ctx, repoRoot, "restored", parent, meta.Commit, conflictPolicyManual)
 }
 
-func pickCheckpoint(ctx context.Context, repoRoot, branchRef string, meta checkpointRefInfo, force bool) error {
+func pickCheckpoint(ctx context.Context, repoRoot, branchRef string, meta checkpointRefInfo, force bool, conflictPolicy string) error {
 	if err := ensureCleanWorktree(ctx, repoRoot, "pick", force); err != nil {
 		return err
 	}
@@ -527,10 +533,22 @@ func pickCheckpoint(ctx context.Context, repoRoot, branchRef string, meta checkp
 		return err
 	}
 
-	return applyCheckpointDiff(ctx, repoRoot, "picked", diffBase, meta.Commit)
+	return applyCheckpointDiff(ctx, repoRoot, "picked", diffBase, meta.Commit, conflictPolicy)
 }
 
-func applyCheckpointDiff(ctx context.Context, repoRoot, action, base, target string) error {
+func normalizeConflictPolicy(policy string) (string, error) {
+	if policy == "" {
+		return conflictPolicyManual, nil
+	}
+	switch policy {
+	case conflictPolicyManual, conflictPolicyCheckpoint, conflictPolicyHead:
+		return policy, nil
+	default:
+		return "", fmt.Errorf("invalid --conflict value %q (expected manual, checkpoint, head)", policy)
+	}
+}
+
+func applyCheckpointDiff(ctx context.Context, repoRoot, action, base, target, conflictPolicy string) error {
 	diff, err := runGitCommand(ctx, repoRoot, nil, "diff", "--binary", base, target)
 	if err != nil {
 		return err
@@ -539,7 +557,15 @@ func applyCheckpointDiff(ctx context.Context, repoRoot, action, base, target str
 		return nil
 	}
 
-	applyResult, err := runGitCommandWithInput(ctx, repoRoot, nil, diff.Stdout, "apply", "--binary", "--3way", "--index")
+	applyArgs := []string{"apply", "--binary", "--3way", "--index"}
+	switch conflictPolicy {
+	case conflictPolicyCheckpoint:
+		applyArgs = append(applyArgs, "--theirs")
+	case conflictPolicyHead:
+		applyArgs = append(applyArgs, "--ours")
+	}
+
+	applyResult, err := runGitCommandWithInput(ctx, repoRoot, nil, diff.Stdout, applyArgs...)
 	if err != nil {
 		detail := strings.TrimSpace(applyResult.Stderr)
 		if detail == "" {
