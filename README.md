@@ -77,6 +77,21 @@ Repository documentation:
 - [Troubleshooting](docs/troubleshooting.md)
 - [Command reference](docs/commands/autosnap.md)
 
+## Agent Skill
+
+This repository includes an autosnap forensics agent skill at
+[docs/skills/autosnap-forensics/SKILL.md](docs/skills/autosnap-forensics/SKILL.md).
+The skill helps agents use existing autosnap checkpoints to find when a bug,
+regression, unwanted behavior, or bad implementation decision was introduced
+during a long-running coding session.
+
+To install it for a local Codex-compatible skill loader:
+
+```bash
+mkdir -p ~/.codex/skills/autosnap-forensics
+cp docs/skills/autosnap-forensics/SKILL.md ~/.codex/skills/autosnap-forensics/SKILL.md
+```
+
 ## Build And Test
 
 Requirements:
