@@ -2509,6 +2509,136 @@ func TestListCommandBranchAndAllScopes(t *testing.T) {
 	})
 }
 
+func TestListCommandListsInclusiveCheckpointRange(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		ref1, _, _ := createCheckpointRangeScenario(t, repo)
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newListCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"list", "first+1..last"})
+
+		if err := root.Execute(); err != nil {
+			t.Fatalf("list checkpoint range failed: %v", err)
+		}
+
+		output := buf.String()
+		if strings.Contains(output, "first") || strings.Contains(output, checkpointRefTimestamp(ref1)) {
+			t.Fatalf("expected range list to exclude first checkpoint, got %q", output)
+		}
+		secondIndex := strings.Index(output, "second")
+		thirdIndex := strings.Index(output, "third")
+		if secondIndex < 0 || thirdIndex < 0 {
+			t.Fatalf("expected range list to include second and third checkpoints, got %q", output)
+		}
+		if secondIndex > thirdIndex {
+			t.Fatalf("expected range list to preserve chronological order, got %q", output)
+		}
+	})
+}
+
+func TestListCommandListsSingleCheckpointSelector(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		createCheckpointRangeScenario(t, repo)
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newListCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"list", "last-1"})
+
+		if err := root.Execute(); err != nil {
+			t.Fatalf("list single checkpoint selector failed: %v", err)
+		}
+
+		output := buf.String()
+		if !strings.Contains(output, "second") {
+			t.Fatalf("expected single selector list to include second checkpoint, got %q", output)
+		}
+		if strings.Contains(output, "first") || strings.Contains(output, "third") {
+			t.Fatalf("expected single selector list to include only second checkpoint, got %q", output)
+		}
+	})
+}
+
+func TestListCommandListsRangeForBranchScope(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		createAutosnapTestCommitRef(t, repo, branchRef, "20260101T000000Z", "current branch checkpoint")
+		createAutosnapTestCommitRef(t, repo, "feature/foo", "20260101T000000Z", "feature first")
+		createAutosnapTestCommitRef(t, repo, "feature/foo", "20260101T000001Z", "feature second")
+		createAutosnapTestCommitRef(t, repo, "feature/foo", "20260101T000002Z", "feature third")
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newListCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"list", "--branch", "feature/foo", "first+1..last"})
+
+		if err := root.Execute(); err != nil {
+			t.Fatalf("list branch checkpoint range failed: %v", err)
+		}
+
+		output := buf.String()
+		if strings.Contains(output, "current branch checkpoint") || strings.Contains(output, "feature first") {
+			t.Fatalf("expected branch range list to exclude out-of-range checkpoints, got %q", output)
+		}
+		if !strings.Contains(output, "feature second") || !strings.Contains(output, "feature third") {
+			t.Fatalf("expected branch range list to include selected feature checkpoints, got %q", output)
+		}
+	})
+}
+
+func TestListCommandRejectsAllScopeWithRange(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		createCheckpointRangeScenario(t, repo)
+
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newListCommand())
+		root.SetArgs([]string{"list", "--all", "first..last"})
+
+		err := root.Execute()
+		if err == nil {
+			t.Fatalf("expected list --all with range to fail")
+		}
+		if !strings.Contains(err.Error(), "checkpoint ranges only for current branch or --branch") {
+			t.Fatalf("expected all scope range error, got %v", err)
+		}
+	})
+}
+
+func TestListCommandRejectsMalformedRange(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		root := NewRootCommand()
+		root.SetArgs([]string{"list", "first..last..last"})
+
+		err := root.Execute()
+		if err == nil {
+			t.Fatalf("expected malformed checkpoint range to fail")
+		}
+		if !strings.Contains(err.Error(), "invalid checkpoint range") {
+			t.Fatalf("expected invalid checkpoint range error, got %v", err)
+		}
+	})
+}
+
 func TestListCommandRejectsMultipleScopes(t *testing.T) {
 	requireIntegration(t)
 	repo := createTestRepo(t)
