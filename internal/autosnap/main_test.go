@@ -2753,6 +2753,70 @@ func TestListCommandJSONLNotesUseConfiguredNoteRef(t *testing.T) {
 	})
 }
 
+func TestListCommandJSONOutputIncludesRawNoteString(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		ref := createAutosnapTestCommitRef(t, repo, branchRef, "20260101T000000Z", "raw note checkpoint")
+		addGitNote(t, repo, "refs/notes/diffcog", ref, `{"risk":"low"}`)
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newListCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"list", "--format", "json", "--notes", "--note-ref", "refs/notes/diffcog"})
+
+		if err := root.Execute(); err != nil {
+			t.Fatalf("list json raw notes command failed: %v", err)
+		}
+
+		rows := parseJSONRows(t, buf.String())
+		if len(rows) != 1 {
+			t.Fatalf("expected one JSON row, got %d: %q", len(rows), buf.String())
+		}
+		if rows[0]["note"] != `{"risk":"low"}` {
+			t.Fatalf("expected raw note string, got %#v", rows[0]["note"])
+		}
+	})
+}
+
+func TestListCommandTextOutputIncludesRawNoteString(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		ref := createAutosnapTestCommitRef(t, repo, branchRef, "20260101T000000Z", "text note checkpoint")
+		addGitNote(t, repo, "refs/notes/diffcog", ref, `{"risk":"text"}`)
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newListCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"list", "--notes", "--note-ref", "refs/notes/diffcog"})
+
+		if err := root.Execute(); err != nil {
+			t.Fatalf("list text notes command failed: %v", err)
+		}
+
+		output := buf.String()
+		if strings.Contains(strings.TrimSpace(output), "{") && strings.HasPrefix(strings.TrimSpace(output), "{") {
+			t.Fatalf("expected text output, got JSON-looking output %q", output)
+		}
+		if !strings.Contains(output, "note_ref: refs/notes/diffcog") || !strings.Contains(output, `note: {"risk":"text"}`) {
+			t.Fatalf("expected raw text note output, got %q", output)
+		}
+	})
+}
+
 func TestListCommandJSONLNotesReportMissingAndInvalidNotes(t *testing.T) {
 	requireIntegration(t)
 	repo := createTestRepo(t)
@@ -2802,16 +2866,23 @@ func TestListCommandJSONLNotesValidateFlags(t *testing.T) {
 	withWorkingDir(t, repo, func() {
 		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
 		root.AddCommand(newListCommand())
-		root.SetArgs([]string{"list", "--notes-json", "--note-ref", "refs/notes/diffcog"})
-		if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "--format jsonl") {
-			t.Fatalf("expected --notes-json format error, got %v", err)
+		root.SetArgs([]string{"list", "--format", "text", "--notes-json", "--note-ref", "refs/notes/diffcog"})
+		if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "--format json or jsonl") {
+			t.Fatalf("expected notes-json format error, got %v", err)
 		}
 
 		root = &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
 		root.AddCommand(newListCommand())
-		root.SetArgs([]string{"list", "--format", "jsonl", "--notes-json"})
+		root.SetArgs([]string{"list", "--notes"})
 		if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "--note-ref") {
 			t.Fatalf("expected missing note ref error, got %v", err)
+		}
+
+		root = &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newListCommand())
+		root.SetArgs([]string{"list", "--format", "json", "--notes", "--notes-json", "--note-ref", "refs/notes/diffcog"})
+		if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+			t.Fatalf("expected mutually exclusive notes error, got %v", err)
 		}
 	})
 }
@@ -3024,6 +3095,46 @@ func TestPendingExplainCommandJSONLOutputIncludesClassification(t *testing.T) {
 		note, ok := rows[0]["note"].(map[string]any)
 		if !ok || note["kind"] != "explain" {
 			t.Fatalf("expected decoded explain note, got %#v", rows[0]["note"])
+		}
+	})
+}
+
+func TestPendingExplainJSONLClassificationUsesEarlyStop(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		if err := os.WriteFile(filepath.Join(repo, "older.txt"), []byte("older checkpoint\n"), 0o644); err != nil {
+			t.Fatalf("write older checkpoint file failed: %v", err)
+		}
+		runGit(t, repo, "add", "older.txt")
+		olderRef := createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20200103T000000Z", "older explain jsonl checkpoint")
+		runGit(t, repo, "reset", "--hard", "HEAD")
+
+		exactRef := createAutosnapTestCommitRef(t, repo, branchRef, "20200104T000000Z", "exact explain jsonl checkpoint")
+		refs, err := listCheckpointRefsForBranch(context.Background(), repo, branchRef)
+		if err != nil {
+			t.Fatalf("listCheckpointRefsForBranch failed: %v", err)
+		}
+
+		debug := &bytes.Buffer{}
+		statusByRef, err := classifyPendingCheckpointRefsStreamMap(context.Background(), repo, refs, branchRef, false, newPendingDebugLogger(debug, true))
+		if err != nil {
+			t.Fatalf("stream map classification failed: %v", err)
+		}
+
+		if statusByRef[exactRef] != checkpointStatusExact {
+			t.Fatalf("expected exact checkpoint to be exact, got %q", statusByRef[exactRef])
+		}
+		if statusByRef[olderRef] != checkpointStatusObsolete {
+			t.Fatalf("expected older checkpoint to be obsolete, got %q", statusByRef[olderRef])
+		}
+		if strings.Contains(debug.String(), "merge classification started") {
+			t.Fatalf("expected exact newest checkpoint to avoid merge classification, got debug log: %s", debug.String())
 		}
 	})
 }
@@ -6411,6 +6522,15 @@ func parseJSONLRows(t *testing.T, output string) []map[string]any {
 			t.Fatalf("parse JSONL line %q failed: %v", line, err)
 		}
 		rows = append(rows, row)
+	}
+	return rows
+}
+
+func parseJSONRows(t *testing.T, output string) []map[string]any {
+	t.Helper()
+	var rows []map[string]any
+	if err := json.Unmarshal([]byte(output), &rows); err != nil {
+		t.Fatalf("parse JSON output %q failed: %v", output, err)
 	}
 	return rows
 }

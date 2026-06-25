@@ -31,7 +31,7 @@ List checkpoints after the latest checkpoint matching branch tip
 
 .PP
 \fB--format\fP="text"
-	Output format: text, jsonl
+	Output format: text, json, jsonl
 
 .PP
 \fB-h\fP, \fB--help\fP[=false]
@@ -46,8 +46,12 @@ List checkpoints after the latest checkpoint matching branch tip
 	Git notes ref for checkpoint notes
 
 .PP
+\fB--notes\fP[=false]
+	Include checkpoint git notes as text
+
+.PP
 \fB--notes-json\fP[=false]
-	Include checkpoint git notes decoded as JSON (requires --format jsonl)
+	Include checkpoint git notes decoded as JSON (requires --format json or jsonl)
 
 .PP
 \fB--since\fP=""

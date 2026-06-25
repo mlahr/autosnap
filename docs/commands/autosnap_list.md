@@ -28,10 +28,11 @@ autosnap list [checkpoint-or-range] [flags]
 ```
       --all               List checkpoints for all branches
       --branch string     List checkpoints for a specific branch
-      --format string     Output format: text, jsonl (default "text")
+      --format string     Output format: text, json, jsonl (default "text")
   -h, --help              help for list
       --note-ref string   Git notes ref for checkpoint notes
-      --notes-json        Include checkpoint git notes decoded as JSON (requires --format jsonl)
+      --notes             Include checkpoint git notes as text
+      --notes-json        Include checkpoint git notes decoded as JSON (requires --format json or jsonl)
 ```
 
 ### SEE ALSO

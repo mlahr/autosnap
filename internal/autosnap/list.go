@@ -13,6 +13,7 @@ func newListCommand() *cobra.Command {
 		allBranches bool
 		branch      string
 		format      string
+		notes       bool
 		notesJSON   bool
 		noteRef     string
 	)
@@ -36,11 +37,12 @@ or one of these current-branch history selectors:
 		RunE: func(cmd *cobra.Command, args []string) error {
 			out := cmd.OutOrStdout()
 			ctx := context.Background()
+			includeNotes := notes || notesJSON
 			normalizedFormat, err := normalizeOutputFormat(format)
 			if err != nil {
 				return err
 			}
-			if err := validateJSONLOutputOptions(normalizedFormat, notesJSON); err != nil {
+			if err := validateCheckpointOutputOptions(normalizedFormat, notes, notesJSON); err != nil {
 				return err
 			}
 
@@ -49,7 +51,7 @@ or one of these current-branch history selectors:
 				return err
 			}
 			resolvedNoteRef := ""
-			if notesJSON {
+			if includeNotes {
 				resolvedNoteRef, err = resolveOutputNoteRef(repoRoot, noteRef)
 				if err != nil {
 					return err
@@ -91,12 +93,20 @@ or one of these current-branch history selectors:
 			if err != nil {
 				return err
 			}
+			if normalizedFormat == outputFormatJSON {
+				return writeCheckpointsJSON(ctx, repoRoot, out, checkpoints, checkpointJSONLOptions{
+					IncludeNotes: includeNotes,
+					NotesJSON:    notesJSON,
+					NoteRef:      resolvedNoteRef,
+				})
+			}
 			if normalizedFormat == outputFormatJSONL {
 				if len(checkpoints) == 0 {
 					return nil
 				}
 				return writeCheckpointsJSONL(ctx, repoRoot, out, checkpoints, checkpointJSONLOptions{
-					IncludeNotes: notesJSON,
+					IncludeNotes: includeNotes,
+					NotesJSON:    notesJSON,
 					NoteRef:      resolvedNoteRef,
 				})
 			}
@@ -119,6 +129,11 @@ or one of these current-branch history selectors:
 				} else {
 					fmt.Fprintf(out, "%s %s %s\n", displayTimestamp, cp.Commit, cp.Summary)
 				}
+				if includeNotes {
+					if err := writeCheckpointTextNote(ctx, repoRoot, out, resolvedNoteRef, cp.Ref); err != nil {
+						return err
+					}
+				}
 			}
 
 			return nil
@@ -127,8 +142,9 @@ or one of these current-branch history selectors:
 
 	cmd.Flags().StringVar(&branch, "branch", "", "List checkpoints for a specific branch")
 	cmd.Flags().BoolVar(&allBranches, "all", false, "List checkpoints for all branches")
-	cmd.Flags().StringVar(&format, "format", outputFormatText, "Output format: text, jsonl")
-	cmd.Flags().BoolVar(&notesJSON, "notes-json", false, "Include checkpoint git notes decoded as JSON (requires --format jsonl)")
+	cmd.Flags().StringVar(&format, "format", outputFormatText, "Output format: text, json, jsonl")
+	cmd.Flags().BoolVar(&notes, "notes", false, "Include checkpoint git notes as text")
+	cmd.Flags().BoolVar(&notesJSON, "notes-json", false, "Include checkpoint git notes decoded as JSON (requires --format json or jsonl)")
 	cmd.Flags().StringVar(&noteRef, "note-ref", "", "Git notes ref for checkpoint notes")
 	return cmd
 }

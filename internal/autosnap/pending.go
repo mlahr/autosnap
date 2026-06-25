@@ -21,6 +21,7 @@ func newPendingCommand() *cobra.Command {
 		explain     bool
 		format      string
 		limit       int
+		notes       bool
 		notesJSON   bool
 		noteRef     string
 		since       string
@@ -34,11 +35,12 @@ func newPendingCommand() *cobra.Command {
 			out := cmd.OutOrStdout()
 			debugLog := newPendingDebugLogger(cmd.ErrOrStderr(), debug)
 			ctx := context.Background()
+			includeNotes := notes || notesJSON
 			normalizedFormat, err := normalizeOutputFormat(format)
 			if err != nil {
 				return err
 			}
-			if err := validateJSONLOutputOptions(normalizedFormat, notesJSON); err != nil {
+			if err := validateCheckpointOutputOptions(normalizedFormat, notes, notesJSON); err != nil {
 				return err
 			}
 
@@ -49,7 +51,7 @@ func newPendingCommand() *cobra.Command {
 			}
 			debugLog.Printf("repository detected root=%s current_branch=%s", repoRoot, branchRef)
 			resolvedNoteRef := ""
-			if notesJSON {
+			if includeNotes {
 				resolvedNoteRef, err = resolveOutputNoteRef(repoRoot, noteRef)
 				if err != nil {
 					return err
@@ -95,14 +97,22 @@ func newPendingCommand() *cobra.Command {
 			debugLog.Printf("selected checkpoint refs count=%d branches=%d since=%q limit=%d", len(refs), countCheckpointBranches(refs), strings.TrimSpace(since), limit)
 
 			if explain {
+				if normalizedFormat == outputFormatJSON {
+					return writePendingExplainJSON(ctx, repoRoot, refs, branch, allBranches, out, checkpointJSONLOptions{
+						IncludeNotes: includeNotes,
+						NotesJSON:    notesJSON,
+						NoteRef:      resolvedNoteRef,
+					})
+				}
 				if normalizedFormat == outputFormatJSONL {
 					return writePendingExplainJSONL(ctx, repoRoot, refs, branch, allBranches, out, checkpointJSONLOptions{
-						IncludeNotes: notesJSON,
+						IncludeNotes: includeNotes,
+						NotesJSON:    notesJSON,
 						NoteRef:      resolvedNoteRef,
 					})
 				}
 				debugLog.Printf("streaming explain checkpoints count=%d mode=explain", len(refs))
-				err := streamExplainPendingCheckpointRefs(ctx, repoRoot, refs, branch, allBranches, out, debugLog)
+				err := streamExplainPendingCheckpointRefs(ctx, repoRoot, refs, branch, allBranches, out, debugLog, includeNotes, resolvedNoteRef)
 				if err != nil {
 					return err
 				}
@@ -122,9 +132,17 @@ func newPendingCommand() *cobra.Command {
 			}
 			debugLog.Printf("loaded checkpoint metadata count=%d mode=pending", len(pending))
 
+			if normalizedFormat == outputFormatJSON {
+				return writeCheckpointsJSON(ctx, repoRoot, out, pending, checkpointJSONLOptions{
+					IncludeNotes: includeNotes,
+					NotesJSON:    notesJSON,
+					NoteRef:      resolvedNoteRef,
+				})
+			}
 			if normalizedFormat == outputFormatJSONL {
 				return writeCheckpointsJSONL(ctx, repoRoot, out, pending, checkpointJSONLOptions{
-					IncludeNotes: notesJSON,
+					IncludeNotes: includeNotes,
+					NotesJSON:    notesJSON,
 					NoteRef:      resolvedNoteRef,
 				})
 			}
@@ -146,6 +164,11 @@ func newPendingCommand() *cobra.Command {
 				} else {
 					fmt.Fprintf(out, "%s %s %s %s\n", displayTimestamp, cp.Ref, cp.Commit, cp.Summary)
 				}
+				if includeNotes {
+					if err := writeCheckpointTextNote(ctx, repoRoot, out, resolvedNoteRef, cp.Ref); err != nil {
+						return err
+					}
+				}
 			}
 			return nil
 		},
@@ -155,9 +178,10 @@ func newPendingCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&allBranches, "all", false, "List pending checkpoints for all branches")
 	cmd.Flags().BoolVar(&debug, "debug", false, "Show progress diagnostics on stderr")
 	cmd.Flags().BoolVar(&explain, "explain", false, "Show integration status for all scanned checkpoints")
-	cmd.Flags().StringVar(&format, "format", outputFormatText, "Output format: text, jsonl")
+	cmd.Flags().StringVar(&format, "format", outputFormatText, "Output format: text, json, jsonl")
 	cmd.Flags().IntVar(&limit, "limit", 0, "Maximum number of newest checkpoints to scan (0 means unlimited)")
-	cmd.Flags().BoolVar(&notesJSON, "notes-json", false, "Include checkpoint git notes decoded as JSON (requires --format jsonl)")
+	cmd.Flags().BoolVar(&notes, "notes", false, "Include checkpoint git notes as text")
+	cmd.Flags().BoolVar(&notesJSON, "notes-json", false, "Include checkpoint git notes decoded as JSON (requires --format json or jsonl)")
 	cmd.Flags().StringVar(&noteRef, "note-ref", "", "Git notes ref for checkpoint notes")
 	cmd.Flags().StringVar(&since, "since", "", "Scan checkpoints since a duration or commit ID")
 	return cmd
@@ -439,7 +463,7 @@ type flushWriter interface {
 	Flush()
 }
 
-func streamExplainPendingCheckpointRefs(ctx context.Context, repoRoot string, refs []checkpointRefInfo, branch string, allBranches bool, out io.Writer, debugLog pendingDebugLogger) error {
+func streamExplainPendingCheckpointRefs(ctx context.Context, repoRoot string, refs []checkpointRefInfo, branch string, allBranches bool, out io.Writer, debugLog pendingDebugLogger, includeNotes bool, noteRef string) error {
 	if len(refs) == 0 {
 		if allBranches {
 			fmt.Fprintln(out, "no checkpoints")
@@ -477,13 +501,19 @@ func streamExplainPendingCheckpointRefs(ctx context.Context, repoRoot string, re
 
 	next := 0
 	printed := 0
-	flushReadyRows := func() {
+	flushReadyRows := func() error {
 		for next < len(rows) && rows[next].ready {
 			printPendingExplainRow(out, rows[next].checkpoint, rows[next].status, allBranches)
+			if includeNotes {
+				if err := writeCheckpointTextNote(ctx, repoRoot, out, noteRef, rows[next].checkpoint.Ref); err != nil {
+					return err
+				}
+			}
 			flushPendingOutput(out)
 			next++
 			printed++
 		}
+		return nil
 	}
 
 	for classified := range classifiedCh {
@@ -496,7 +526,9 @@ func streamExplainPendingCheckpointRefs(ctx context.Context, repoRoot string, re
 			rows[index].status = checkpointStatusPending
 		}
 		rows[index].ready = true
-		flushReadyRows()
+		if err := flushReadyRows(); err != nil {
+			return err
+		}
 	}
 
 	if err := <-errCh; err != nil {
@@ -508,6 +540,11 @@ func streamExplainPendingCheckpointRefs(ctx context.Context, repoRoot string, re
 			continue
 		}
 		printPendingExplainRow(out, rows[next].checkpoint, rows[next].status, allBranches)
+		if includeNotes {
+			if err := writeCheckpointTextNote(ctx, repoRoot, out, noteRef, rows[next].checkpoint.Ref); err != nil {
+				return err
+			}
+		}
 		flushPendingOutput(out)
 		next++
 		printed++
@@ -535,29 +572,55 @@ func printPendingExplainRow(out io.Writer, cp checkpointInfo, status checkpointP
 	fmt.Fprintf(out, "%s %s %s %s %s\n", displayTimestamp, status, cp.Ref, cp.Commit, cp.Summary)
 }
 
+func writePendingExplainJSON(ctx context.Context, repoRoot string, refs []checkpointRefInfo, branch string, allBranches bool, out io.Writer, opts checkpointJSONLOptions) error {
+	if len(refs) == 0 {
+		return writeCheckpointsJSON(ctx, repoRoot, out, nil, opts)
+	}
+
+	statusByRef, err := classifyPendingCheckpointRefsStreamMap(ctx, repoRoot, refs, branch, allBranches, pendingDebugLogger{})
+	if err != nil {
+		return err
+	}
+	opts.PendingStatus = statusByRef
+
+	checkpoints, err := listCheckpointsFromRefs(ctx, repoRoot, refs)
+	if err != nil {
+		return err
+	}
+	return writeCheckpointsJSON(ctx, repoRoot, out, checkpoints, opts)
+}
+
 func writePendingExplainJSONL(ctx context.Context, repoRoot string, refs []checkpointRefInfo, branch string, allBranches bool, out io.Writer, opts checkpointJSONLOptions) error {
 	if len(refs) == 0 {
 		return nil
 	}
 
-	classified, err := classifyPendingCheckpointRefs(ctx, repoRoot, refs, branch, allBranches)
+	statusByRef, err := classifyPendingCheckpointRefsStreamMap(ctx, repoRoot, refs, branch, allBranches, pendingDebugLogger{})
 	if err != nil {
 		return err
 	}
-	opts.PendingStatus = map[string]checkpointPendingStatus{}
-	for _, checkpoint := range classified {
-		status := checkpoint.Status
-		if status == "" {
-			status = checkpointStatusPending
-		}
-		opts.PendingStatus[checkpoint.Ref] = status
-	}
+	opts.PendingStatus = statusByRef
 
 	checkpoints, err := listCheckpointsFromRefs(ctx, repoRoot, refs)
 	if err != nil {
 		return err
 	}
 	return writeCheckpointsJSONL(ctx, repoRoot, out, checkpoints, opts)
+}
+
+func classifyPendingCheckpointRefsStreamMap(ctx context.Context, repoRoot string, refs []checkpointRefInfo, branch string, allBranches bool, debugLog pendingDebugLogger) (map[string]checkpointPendingStatus, error) {
+	statusByRef := map[string]checkpointPendingStatus{}
+	err := classifyPendingCheckpointRefsStreamDebug(ctx, repoRoot, refs, branch, allBranches, debugLog, func(classified classifiedCheckpointRef) {
+		status := classified.Status
+		if status == "" {
+			status = checkpointStatusPending
+		}
+		statusByRef[classified.Ref] = status
+	})
+	if err != nil {
+		return nil, err
+	}
+	return statusByRef, nil
 }
 
 func flushPendingOutput(out io.Writer) {
