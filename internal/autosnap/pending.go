@@ -35,6 +35,7 @@ func newPendingCommand() *cobra.Command {
 			out := cmd.OutOrStdout()
 			debugLog := newPendingDebugLogger(cmd.ErrOrStderr(), debug)
 			ctx := context.Background()
+			useColor := isTerminalWriter(out)
 			includeNotes := notes || notesJSON
 			normalizedFormat, err := normalizeOutputFormat(format)
 			if err != nil {
@@ -112,7 +113,7 @@ func newPendingCommand() *cobra.Command {
 					})
 				}
 				debugLog.Printf("streaming explain checkpoints count=%d mode=explain", len(refs))
-				err := streamExplainPendingCheckpointRefs(ctx, repoRoot, refs, branch, allBranches, out, debugLog, includeNotes, resolvedNoteRef)
+				err := streamExplainPendingCheckpointRefs(ctx, repoRoot, refs, branch, allBranches, out, useColor, debugLog, includeNotes, resolvedNoteRef)
 				if err != nil {
 					return err
 				}
@@ -165,11 +166,13 @@ func newPendingCommand() *cobra.Command {
 
 			for _, cp := range pending {
 				displayTimestamp := formatCheckpointTimestampForList(cp.Timestamp)
-				marker := checkpointWorktreeMatchMarker(worktreeMatches[cp.Ref])
+				marker := colorizeWorktreeMatchMarker(useColor, worktreeMatches[cp.Ref])
+				commit := colorizeCheckpointID(useColor, cp.Commit)
+				summary := colorizeCommitMessage(useColor, cp.Summary)
 				if allBranches {
-					fmt.Fprintf(out, "%s %s %s %s %s %s\n", cp.Branch, displayTimestamp, cp.Ref, cp.Commit, marker, cp.Summary)
+					fmt.Fprintf(out, "%s %s %s %s %s %s\n", cp.Branch, displayTimestamp, cp.Ref, commit, marker, summary)
 				} else {
-					fmt.Fprintf(out, "%s %s %s %s %s\n", displayTimestamp, cp.Ref, cp.Commit, marker, cp.Summary)
+					fmt.Fprintf(out, "%s %s %s %s %s\n", displayTimestamp, cp.Ref, commit, marker, summary)
 				}
 				if includeNotes {
 					if err := writeCheckpointTextNote(ctx, repoRoot, out, resolvedNoteRef, cp.Ref); err != nil {
@@ -471,7 +474,7 @@ type flushWriter interface {
 	Flush()
 }
 
-func streamExplainPendingCheckpointRefs(ctx context.Context, repoRoot string, refs []checkpointRefInfo, branch string, allBranches bool, out io.Writer, debugLog pendingDebugLogger, includeNotes bool, noteRef string) error {
+func streamExplainPendingCheckpointRefs(ctx context.Context, repoRoot string, refs []checkpointRefInfo, branch string, allBranches bool, out io.Writer, useColor bool, debugLog pendingDebugLogger, includeNotes bool, noteRef string) error {
 	if len(refs) == 0 {
 		if allBranches {
 			fmt.Fprintln(out, "no checkpoints")
@@ -516,7 +519,7 @@ func streamExplainPendingCheckpointRefs(ctx context.Context, repoRoot string, re
 	printed := 0
 	flushReadyRows := func() error {
 		for next < len(rows) && rows[next].ready {
-			printPendingExplainRow(out, rows[next].checkpoint, rows[next].status, rows[next].worktreeMatch, allBranches)
+			printPendingExplainRow(out, rows[next].checkpoint, rows[next].status, rows[next].worktreeMatch, allBranches, useColor)
 			if includeNotes {
 				if err := writeCheckpointTextNote(ctx, repoRoot, out, noteRef, rows[next].checkpoint.Ref); err != nil {
 					return err
@@ -552,7 +555,7 @@ func streamExplainPendingCheckpointRefs(ctx context.Context, repoRoot string, re
 			next++
 			continue
 		}
-		printPendingExplainRow(out, rows[next].checkpoint, rows[next].status, rows[next].worktreeMatch, allBranches)
+		printPendingExplainRow(out, rows[next].checkpoint, rows[next].status, rows[next].worktreeMatch, allBranches, useColor)
 		if includeNotes {
 			if err := writeCheckpointTextNote(ctx, repoRoot, out, noteRef, rows[next].checkpoint.Ref); err != nil {
 				return err
@@ -576,14 +579,17 @@ func streamExplainPendingCheckpointRefs(ctx context.Context, repoRoot string, re
 	return nil
 }
 
-func printPendingExplainRow(out io.Writer, cp checkpointInfo, status checkpointPendingStatus, match checkpointWorktreeMatch, allBranches bool) {
+func printPendingExplainRow(out io.Writer, cp checkpointInfo, status checkpointPendingStatus, match checkpointWorktreeMatch, allBranches bool, useColor bool) {
 	displayTimestamp := formatCheckpointTimestampForList(cp.Timestamp)
-	marker := checkpointWorktreeMatchMarker(match)
+	marker := colorizeWorktreeMatchMarker(useColor, match)
+	commit := colorizeCheckpointID(useColor, cp.Commit)
+	summary := colorizeCommitMessage(useColor, cp.Summary)
+	statusText := colorizePendingStatusPadded(useColor, status, 8)
 	if allBranches {
-		fmt.Fprintf(out, "%s %s %-8s %s %s %s %s\n", cp.Branch, displayTimestamp, status, cp.Ref, cp.Commit, marker, cp.Summary)
+		fmt.Fprintf(out, "%s %s %s %s %s %s %s\n", cp.Branch, displayTimestamp, statusText, cp.Ref, commit, marker, summary)
 		return
 	}
-	fmt.Fprintf(out, "%s %-8s %s %s %s %s\n", displayTimestamp, status, cp.Ref, cp.Commit, marker, cp.Summary)
+	fmt.Fprintf(out, "%s %s %s %s %s %s\n", displayTimestamp, statusText, cp.Ref, commit, marker, summary)
 }
 
 func writePendingExplainJSON(ctx context.Context, repoRoot string, refs []checkpointRefInfo, branch string, allBranches bool, out io.Writer, opts checkpointJSONLOptions) error {

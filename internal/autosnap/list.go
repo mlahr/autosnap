@@ -39,6 +39,7 @@ or one of these current-branch history selectors:
 		RunE: func(cmd *cobra.Command, args []string) error {
 			out := cmd.OutOrStdout()
 			ctx := context.Background()
+			useColor := isTerminalWriter(out)
 			includeNotes := notes || notesJSON
 			normalizedFormat, err := normalizeOutputFormat(format)
 			if err != nil {
@@ -139,11 +140,13 @@ or one of these current-branch history selectors:
 
 			for _, cp := range checkpoints {
 				displayTimestamp := formatCheckpointTimestampForList(cp.Timestamp)
-				marker := checkpointWorktreeMatchMarker(worktreeMatches[cp.Ref])
+				marker := colorizeWorktreeMatchMarker(useColor, worktreeMatches[cp.Ref])
+				ref := colorizeCheckpointID(useColor, cp.Commit)
+				summary := colorizeCommitMessage(useColor, cp.Summary)
 				if allBranches {
-					fmt.Fprintf(out, "%s %s %s %s %s\n", cp.Branch, displayTimestamp, cp.Commit, marker, cp.Summary)
+					fmt.Fprintf(out, "%s %s %s %s %s\n", cp.Branch, displayTimestamp, ref, marker, summary)
 				} else {
-					fmt.Fprintf(out, "%s %s %s %s\n", displayTimestamp, cp.Commit, marker, cp.Summary)
+					fmt.Fprintf(out, "%s %s %s %s\n", displayTimestamp, ref, marker, summary)
 				}
 				if includeNotes {
 					if err := writeCheckpointTextNote(ctx, repoRoot, out, resolvedNoteRef, cp.Ref); err != nil {
