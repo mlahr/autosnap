@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 
 	autosnap "autosnap/internal/autosnap"
@@ -14,6 +15,7 @@ func main() {
 	root.SetVersionTemplate("autosnap {{.Version}}\n")
 
 	if err := root.Execute(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 }

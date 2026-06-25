@@ -45,6 +45,42 @@ type checkpointRefInfo struct {
 	Branch    string
 }
 
+type patchConflictError struct {
+	action     string
+	checkpoint string
+	paths      []string
+	detail     string
+}
+
+func (e patchConflictError) Error() string {
+	var builder strings.Builder
+	fmt.Fprintf(&builder, "checkpoint %s with conflicts", e.action)
+	if e.checkpoint != "" {
+		fmt.Fprintf(&builder, ": %s", e.checkpoint)
+	}
+	if len(e.paths) > 0 {
+		builder.WriteString("\n\nConflicted paths:")
+		for _, path := range e.paths {
+			fmt.Fprintf(&builder, "\n  %s", path)
+		}
+	}
+	builder.WriteString("\n\nGit applied the checkpoint patch, but conflicts remain in your worktree.")
+	builder.WriteString("\n\nResolve the conflicts manually or with your configured merge tool:")
+	builder.WriteString("\n  git status")
+	builder.WriteString("\n  git mergetool")
+	builder.WriteString("\n  git add <resolved-files>")
+	builder.WriteString("\n  git commit -m \"...\"")
+	builder.WriteString("\n\nTo abandon these conflicted changes:")
+	builder.WriteString("\n  git reset --hard")
+	if e.detail != "" {
+		builder.WriteString("\n\nGit output:")
+		for _, line := range strings.Split(e.detail, "\n") {
+			fmt.Fprintf(&builder, "\n  %s", line)
+		}
+	}
+	return builder.String()
+}
+
 type gitPosition struct {
 	BranchRef string
 	Head      string
@@ -478,7 +514,24 @@ func restoreCheckpoint(ctx context.Context, repoRoot string, meta checkpointRefI
 		return err
 	}
 
-	diff, err := runGitCommand(ctx, repoRoot, nil, "diff", "--binary", parent, meta.Commit)
+	return applyCheckpointDiff(ctx, repoRoot, "restored", parent, meta.Commit)
+}
+
+func pickCheckpoint(ctx context.Context, repoRoot, branchRef string, meta checkpointRefInfo, force bool) error {
+	if err := ensureCleanWorktree(ctx, repoRoot, "pick", force); err != nil {
+		return err
+	}
+
+	diffBase, err := resolveShowDiffBase(ctx, repoRoot, branchRef, meta.Ref, meta.Commit)
+	if err != nil {
+		return err
+	}
+
+	return applyCheckpointDiff(ctx, repoRoot, "picked", diffBase, meta.Commit)
+}
+
+func applyCheckpointDiff(ctx context.Context, repoRoot, action, base, target string) error {
+	diff, err := runGitCommand(ctx, repoRoot, nil, "diff", "--binary", base, target)
 	if err != nil {
 		return err
 	}
@@ -486,12 +539,37 @@ func restoreCheckpoint(ctx context.Context, repoRoot string, meta checkpointRefI
 		return nil
 	}
 
-	applyResult, err := runGitCommandWithInput(ctx, repoRoot, nil, diff.Stdout, "apply", "--binary", "--3way")
+	applyResult, err := runGitCommandWithInput(ctx, repoRoot, nil, diff.Stdout, "apply", "--binary", "--3way", "--index")
 	if err != nil {
+		detail := strings.TrimSpace(applyResult.Stderr)
+		if detail == "" {
+			detail = strings.TrimSpace(applyResult.Stdout)
+		}
+		if paths := parseApplyConflictPaths(detail); len(paths) > 0 || strings.Contains(strings.ToLower(detail), "conflict") {
+			return patchConflictError{action: action, paths: paths, detail: detail}
+		}
 		return gitCommandError(err, applyResult)
 	}
 
 	return nil
+}
+
+func parseApplyConflictPaths(output string) []string {
+	seen := map[string]bool{}
+	var paths []string
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "U ") {
+			continue
+		}
+		path := strings.TrimSpace(strings.TrimPrefix(line, "U "))
+		if path == "" || seen[path] {
+			continue
+		}
+		seen[path] = true
+		paths = append(paths, path)
+	}
+	return paths
 }
 
 func promoteCheckpoint(ctx context.Context, repoRoot string, meta checkpointRefInfo, force bool) (string, bool, error) {

@@ -11,6 +11,7 @@ It is implemented as a minimal Go prototype for the MVP command set:
 - `autosnap list`
 - `autosnap show <checkpoint>`
 - `autosnap restore <checkpoint>`
+- `autosnap pick <checkpoint>`
 - `autosnap promote <checkpoint>`
 - `autosnap prune`
 - `autosnap config`
@@ -353,6 +354,31 @@ Pass `--force` to skip the clean-state precheck and let Git apply the patch norm
 
 ```bash
 autosnap restore --force <checkpoint>
+```
+
+### Pick checkpoint changes
+
+`autosnap pick <checkpoint>`
+
+Applies the same incremental patch displayed by `autosnap show <checkpoint>` into the working tree and index without moving `HEAD`.
+For the first checkpoint on a branch, this is the diff from the checkpoint commit parent to the checkpoint.
+For later checkpoints, this is the diff from the previous autosnap checkpoint on that branch to the selected checkpoint.
+
+Use `pick` when you want to promote one checkpoint and then apply only a later checkpoint's incremental change:
+
+```bash
+autosnap promote first
+autosnap pick first+2
+git commit -m "apply checkpoint 3 changes"
+```
+
+`<checkpoint>` accepts the same selectors as `autosnap show`, including `first`, `first+N`, `last`, `last-N`, an explicit ref, or a checkpoint commit hash.
+By default, pick refuses to run unless the worktree and index are clean.
+
+Pass `--force` to skip the clean-state precheck:
+
+```bash
+autosnap pick --force <checkpoint>
 ```
 
 ### Promote checkpoint to a branch commit

@@ -2,6 +2,7 @@ package autosnap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path"
 
@@ -29,6 +30,11 @@ func newRestoreCommand() *cobra.Command {
 			}
 
 			if err := restoreCheckpoint(ctx, repoRoot, meta, force); err != nil {
+				var conflictErr patchConflictError
+				if errors.As(err, &conflictErr) {
+					conflictErr.checkpoint = args[0]
+					return conflictErr
+				}
 				return fmt.Errorf("failed to restore checkpoint %q: %w", args[0], err)
 			}
 

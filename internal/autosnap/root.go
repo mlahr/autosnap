@@ -11,8 +11,10 @@ import (
 
 func NewRootCommand() *cobra.Command {
 	root := &cobra.Command{
-		Use:   "autosnap",
-		Short: "Local checkpointing for Git worktrees",
+		Use:           "autosnap",
+		Short:         "Local checkpointing for Git worktrees",
+		SilenceErrors: true,
+		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmd.Help()
 		},
@@ -25,6 +27,7 @@ func NewRootCommand() *cobra.Command {
 	root.AddCommand(newPendingCommand())
 	root.AddCommand(newShowCommand())
 	root.AddCommand(newRestoreCommand())
+	root.AddCommand(newPickCommand())
 	root.AddCommand(newPromoteCommand())
 	root.AddCommand(newPruneCommand())
 	root.AddCommand(newStopCommand())
