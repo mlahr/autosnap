@@ -14,6 +14,7 @@ import (
 func newShowCommand() *cobra.Command {
 	var (
 		full      bool
+		gitDiff   bool
 		nameOnly  bool
 		colorMode string
 	)
@@ -51,16 +52,18 @@ autosnap show --name-only refs/autosnapshots/main/20260605T120000Z`),
 				return err
 			}
 
-			fmt.Fprintf(out, "checkpoint: %s\n", meta.Ref)
-			fmt.Fprintf(out, "commit: %s\n", meta.Commit)
-			fmt.Fprintf(out, "timestamp: %s\n", formatCheckpointTimestamp(meta.Timestamp))
+			if !gitDiff {
+				fmt.Fprintf(out, "checkpoint: %s\n", meta.Ref)
+				fmt.Fprintf(out, "commit: %s\n", meta.Commit)
+				fmt.Fprintf(out, "timestamp: %s\n", formatCheckpointTimestamp(meta.Timestamp))
 
-			message, err := getCommitMessage(ctx, repoRoot, meta.Ref)
-			if err == nil && message != "" {
-				status, checkCmd := parseCheckpointMessage(message)
-				fmt.Fprintf(out, "status: %s\n", status)
-				if checkCmd != "" {
-					fmt.Fprintf(out, "check: %s\n", checkCmd)
+				message, err := getCommitMessage(ctx, repoRoot, meta.Ref)
+				if err == nil && message != "" {
+					status, checkCmd := parseCheckpointMessage(message)
+					fmt.Fprintf(out, "status: %s\n", status)
+					if checkCmd != "" {
+						fmt.Fprintf(out, "check: %s\n", checkCmd)
+					}
 				}
 			}
 
@@ -99,6 +102,7 @@ autosnap show --name-only refs/autosnapshots/main/20260605T120000Z`),
 	}
 
 	cmd.Flags().BoolVar(&full, "full", false, "Show full checkpoint diff (default)")
+	cmd.Flags().BoolVar(&gitDiff, "git-diff", false, "Show only Git diff output, without autosnap metadata")
 	cmd.Flags().BoolVar(&nameOnly, "name-only", false, "Show only changed file names")
 	cmd.Flags().StringVar(&colorMode, "color", "auto", "Color output: auto, always, never")
 	return cmd

@@ -3316,7 +3316,7 @@ func TestShowCommandHelpDocumentsHistorySelectors(t *testing.T) {
 	}
 
 	output := buf.String()
-	for _, want := range []string{"first+N", "last-N", "autosnap show last-1"} {
+	for _, want := range []string{"first+N", "last-N", "autosnap show last-1", "--git-diff"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("expected show help to contain %q, got:\n%s", want, output)
 		}
@@ -3813,6 +3813,147 @@ func TestShowCommandNameOnlyShowsChangedFileNames(t *testing.T) {
 		}
 		if strings.Contains(output, "diff --git") {
 			t.Fatalf("expected name-only output without patch body, got: %q", output)
+		}
+	})
+}
+
+func TestShowCommandGitDiffShowsExactGitDiffOutput(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		gitDirectory, err := gitDir(context.Background(), repo)
+		if err != nil {
+			t.Fatalf("gitDir failed: %v", err)
+		}
+
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("checkpoint base\n"), 0o644); err != nil {
+			t.Fatalf("write first checkpoint failed: %v", err)
+		}
+		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
+		if err != nil {
+			t.Fatalf("computeWorktreeTree failed: %v", err)
+		}
+		ref1, _, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree, "")
+		if err != nil {
+			t.Fatalf("create checkpoint failed: %v", err)
+		}
+
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("updated\n"), 0o644); err != nil {
+			t.Fatalf("update file failed: %v", err)
+		}
+
+		tree2, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
+		if err != nil {
+			t.Fatalf("computeWorktreeTree changed failed: %v", err)
+		}
+		ref2, commit2, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree2, "")
+		if err != nil {
+			t.Fatalf("create checkpoint changed failed: %v", err)
+		}
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newShowCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"show", "--git-diff", ref2})
+
+		if err := root.Execute(); err != nil {
+			t.Fatalf("show --git-diff failed: %v", err)
+		}
+
+		output := buf.String()
+		want := runGitOutput(t, repo, "diff", "--no-color", ref1, commit2)
+		if strings.TrimSpace(output) != want {
+			t.Fatalf("expected exact git diff output\nwant:\n%s\n\ngot:\n%s", want, output)
+		}
+		for _, forbidden := range []string{"checkpoint:", "commit:", "timestamp:", "status:", "check:"} {
+			if strings.Contains(output, forbidden) {
+				t.Fatalf("expected --git-diff output without %q metadata, got: %q", forbidden, output)
+			}
+		}
+		if !strings.Contains(output, "diff --git") {
+			t.Fatalf("expected git diff patch output, got: %q", output)
+		}
+		if !strings.Contains(output, "+++ b/file.txt") {
+			t.Fatalf("expected file diff in output, got: %q", output)
+		}
+	})
+}
+
+func TestShowCommandGitDiffNameOnlyShowsExactGitDiffNameOnlyOutput(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		gitDirectory, err := gitDir(context.Background(), repo)
+		if err != nil {
+			t.Fatalf("gitDir failed: %v", err)
+		}
+
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("checkpoint base\n"), 0o644); err != nil {
+			t.Fatalf("write first checkpoint failed: %v", err)
+		}
+		tree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
+		if err != nil {
+			t.Fatalf("computeWorktreeTree failed: %v", err)
+		}
+		ref1, _, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree, "")
+		if err != nil {
+			t.Fatalf("create checkpoint failed: %v", err)
+		}
+
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("updated\n"), 0o644); err != nil {
+			t.Fatalf("update file failed: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, "new.txt"), []byte("new\n"), 0o644); err != nil {
+			t.Fatalf("write new file failed: %v", err)
+		}
+
+		tree2, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
+		if err != nil {
+			t.Fatalf("computeWorktreeTree changed failed: %v", err)
+		}
+		ref2, commit2, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree2, "")
+		if err != nil {
+			t.Fatalf("create checkpoint changed failed: %v", err)
+		}
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newShowCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"show", "--git-diff", "--name-only", ref2})
+
+		if err := root.Execute(); err != nil {
+			t.Fatalf("show --git-diff --name-only failed: %v", err)
+		}
+
+		output := buf.String()
+		want := runGitOutput(t, repo, "diff", "--no-color", "--name-only", ref1, commit2)
+		if strings.TrimSpace(output) != want {
+			t.Fatalf("expected exact git diff --name-only output\nwant:\n%s\n\ngot:\n%s", want, output)
+		}
+		for _, forbidden := range []string{"checkpoint:", "commit:", "timestamp:", "status:", "check:", "diff --git"} {
+			if strings.Contains(output, forbidden) {
+				t.Fatalf("expected --git-diff --name-only output without %q, got: %q", forbidden, output)
+			}
+		}
+		if !strings.Contains(output, "file.txt") {
+			t.Fatalf("expected changed file name in output, got: %q", output)
+		}
+		if !strings.Contains(output, "new.txt") {
+			t.Fatalf("expected new file name in output, got: %q", output)
 		}
 	})
 }

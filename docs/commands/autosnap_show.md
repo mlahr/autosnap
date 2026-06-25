@@ -37,6 +37,7 @@ autosnap show --name-only refs/autosnapshots/main/20260605T120000Z
 ```
       --color string   Color output: auto, always, never (default "auto")
       --full           Show full checkpoint diff (default)
+      --git-diff       Show only Git diff output, without autosnap metadata
   -h, --help           help for show
       --name-only      Show only changed file names
 ```
