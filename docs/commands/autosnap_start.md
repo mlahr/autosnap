@@ -18,6 +18,8 @@ autosnap start [flags]
       --idle int                 Seconds without changes before running the check (default 60)
       --log-max-bytes int        Maximum autosnap daemon log size in bytes (default 10485760)
       --msg-source-cmd string    Shell command that returns the checkpoint commit message (multiline supported)
+      --note-command string      Shell command that returns the checkpoint git note content
+      --note-ref string          Git notes ref for checkpoint notes
       --poll-interval duration   Polling interval for poll or auto watch mode (default 5s)
       --snapshot-mode string     Snapshot source: both, staged, working (default "both")
       --watch-mode string        Watch strategy: recursive, poll, auto (default "recursive")

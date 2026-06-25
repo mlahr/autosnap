@@ -79,6 +79,8 @@ func newConfigShowCommand() *cobra.Command {
 			fmt.Fprintf(out, "snapshot_mode: %s\n", cfg.SnapshotMode)
 			fmt.Fprintf(out, "commit_mode: %s\n", cfg.CommitMode)
 			fmt.Fprintf(out, "msg_source_cmd: %s\n", cfg.MsgSourceCmd)
+			fmt.Fprintf(out, "note_command: %s\n", cfg.NoteCommand)
+			fmt.Fprintf(out, "note_ref: %s\n", cfg.NoteRef)
 			fmt.Fprintf(out, "log_max_bytes: %d\n", cfg.LogMaxBytes)
 			fmt.Fprintf(out, "watch.mode: %s\n", cfg.Watch.Mode)
 			fmt.Fprintf(out, "watch.poll_interval: %s\n", cfg.Watch.PollInterval)

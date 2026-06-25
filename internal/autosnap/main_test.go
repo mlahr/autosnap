@@ -1126,6 +1126,8 @@ idle_seconds = 15
 snapshot_mode = "staged"
 commit_mode = "sync"
 msg_source_cmd = "printf msg"
+note_command = "printf note"
+note_ref = "refs/notes/diffcog"
 log_max_bytes = 2048
 
 [watch]
@@ -1143,7 +1145,7 @@ poll_interval = "2s"
 	if !found {
 		t.Fatalf("expected config to be found")
 	}
-	if cfg.Check != "go test ./..." || cfg.IdleSeconds != 15 || cfg.SnapshotMode != snapshotModeStaged || cfg.CommitMode != commitModeSync || cfg.MsgSourceCmd != "printf msg" || cfg.LogMaxBytes != 2048 || cfg.Watch.Mode != watchModeAuto || cfg.Watch.PollInterval != 2*time.Second {
+	if cfg.Check != "go test ./..." || cfg.IdleSeconds != 15 || cfg.SnapshotMode != snapshotModeStaged || cfg.CommitMode != commitModeSync || cfg.MsgSourceCmd != "printf msg" || cfg.NoteCommand != "printf note" || cfg.NoteRef != "refs/notes/diffcog" || cfg.LogMaxBytes != 2048 || cfg.Watch.Mode != watchModeAuto || cfg.Watch.PollInterval != 2*time.Second {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
 }
@@ -1180,6 +1182,12 @@ poll_interval = "2s"
 	if err := cmd.Flags().Set("log-max-bytes", "8192"); err != nil {
 		t.Fatalf("set log-max-bytes flag failed: %v", err)
 	}
+	if err := cmd.Flags().Set("note-command", "printf note"); err != nil {
+		t.Fatalf("set note-command flag failed: %v", err)
+	}
+	if err := cmd.Flags().Set("note-ref", "refs/notes/diffcog"); err != nil {
+		t.Fatalf("set note-ref flag failed: %v", err)
+	}
 
 	cfg, found, err := resolveStartConfig(repo, cmd, "make test", "", 30, snapshotModeBoth, commitModeCheckpoint, watchModeAuto, defaultPollInterval, 8192)
 	if err != nil {
@@ -1188,11 +1196,31 @@ poll_interval = "2s"
 	if !found {
 		t.Fatalf("expected config to be found")
 	}
-	if cfg.Check != "make test" || cfg.IdleSeconds != 30 || cfg.CommitMode != commitModeCheckpoint || cfg.Watch.Mode != watchModeAuto || cfg.LogMaxBytes != 8192 {
+	if cfg.Check != "make test" || cfg.IdleSeconds != 30 || cfg.CommitMode != commitModeCheckpoint || cfg.Watch.Mode != watchModeAuto || cfg.LogMaxBytes != 8192 || cfg.NoteCommand != "printf note" || cfg.NoteRef != "refs/notes/diffcog" {
 		t.Fatalf("expected flags to override config, got %+v", cfg)
 	}
 	if cfg.SnapshotMode != snapshotModeStaged || cfg.Watch.PollInterval != 2*time.Second {
 		t.Fatalf("expected config values to remain for unset flags, got %+v", cfg)
+	}
+}
+
+func TestResolveStartConfigValidatesNoteConfig(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.WriteFile(autosnapConfigPath(repo), []byte("check = \"true\"\nnote_command = \"printf note\"\n"), 0o644); err != nil {
+		t.Fatalf("write config failed: %v", err)
+	}
+
+	_, _, err := resolveStartConfig(repo, newStartCommand(), "", "", 60, snapshotModeBoth, commitModeCheckpoint, watchModeRecursive, defaultPollInterval, defaultLogMaxBytes)
+	if err == nil || !strings.Contains(err.Error(), "note_ref is required when note_command is set") {
+		t.Fatalf("expected missing note_ref error, got %v", err)
+	}
+
+	if err := os.WriteFile(autosnapConfigPath(repo), []byte("check = \"true\"\nnote_ref = \"refs/notes/diffcog\"\n"), 0o644); err != nil {
+		t.Fatalf("write config failed: %v", err)
+	}
+	_, _, err = resolveStartConfig(repo, newStartCommand(), "", "", 60, snapshotModeBoth, commitModeCheckpoint, watchModeRecursive, defaultPollInterval, defaultLogMaxBytes)
+	if err == nil || !strings.Contains(err.Error(), "note_command is required when note_ref is set") {
+		t.Fatalf("expected missing note_command error, got %v", err)
 	}
 }
 
@@ -1271,6 +1299,8 @@ func TestResolveRestartConfigUsesActiveRunStateByDefault(t *testing.T) {
 idle_seconds = 15
 snapshot_mode = "working"
 msg_source_cmd = "printf config"
+note_command = "printf config-note"
+note_ref = "refs/notes/config"
 
 [watch]
 mode = "recursive"
@@ -1284,6 +1314,8 @@ poll_interval = "5s"
 		CheckCommand:    "make verify",
 		MsgSourceCmd:    "",
 		MsgSourceCmdSet: true,
+		NoteCommand:     "printf run-note",
+		NoteRef:         "refs/notes/run",
 		IdleSeconds:     45,
 		SnapshotMode:    snapshotModeBoth,
 		CommitMode:      commitModeDirect,
@@ -1295,7 +1327,7 @@ poll_interval = "5s"
 	if err != nil {
 		t.Fatalf("resolve restart config failed: %v", err)
 	}
-	if cfg.Check != "make verify" || cfg.MsgSourceCmd != "" || cfg.IdleSeconds != 45 || cfg.SnapshotMode != snapshotModeBoth || cfg.CommitMode != commitModeDirect || cfg.Watch.Mode != watchModePoll || cfg.Watch.PollInterval != 2*time.Second || cfg.LogMaxBytes != 4096 {
+	if cfg.Check != "make verify" || cfg.MsgSourceCmd != "" || cfg.NoteCommand != "printf run-note" || cfg.NoteRef != "refs/notes/run" || cfg.IdleSeconds != 45 || cfg.SnapshotMode != snapshotModeBoth || cfg.CommitMode != commitModeDirect || cfg.Watch.Mode != watchModePoll || cfg.Watch.PollInterval != 2*time.Second || cfg.LogMaxBytes != 4096 {
 		t.Fatalf("expected active run state to win, got %+v", cfg)
 	}
 }
@@ -1306,6 +1338,8 @@ func TestResolveRestartConfigFlagsOverrideActiveRunState(t *testing.T) {
 		CheckCommand:    "make verify",
 		MsgSourceCmd:    "printf old",
 		MsgSourceCmdSet: true,
+		NoteCommand:     "printf old-note",
+		NoteRef:         "refs/notes/old",
 		IdleSeconds:     45,
 		SnapshotMode:    snapshotModeStaged,
 		CommitMode:      commitModeDirect,
@@ -1319,6 +1353,12 @@ func TestResolveRestartConfigFlagsOverrideActiveRunState(t *testing.T) {
 	}
 	if err := cmd.Flags().Set("msg-source-cmd", "printf new"); err != nil {
 		t.Fatalf("set msg-source-cmd flag failed: %v", err)
+	}
+	if err := cmd.Flags().Set("note-command", "printf new-note"); err != nil {
+		t.Fatalf("set note-command flag failed: %v", err)
+	}
+	if err := cmd.Flags().Set("note-ref", "refs/notes/new"); err != nil {
+		t.Fatalf("set note-ref flag failed: %v", err)
 	}
 	if err := cmd.Flags().Set("idle", "30"); err != nil {
 		t.Fatalf("set idle flag failed: %v", err)
@@ -1340,7 +1380,7 @@ func TestResolveRestartConfigFlagsOverrideActiveRunState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve restart config failed: %v", err)
 	}
-	if cfg.Check != "npm test" || cfg.MsgSourceCmd != "printf new" || cfg.IdleSeconds != 30 || cfg.CommitMode != commitModeCheckpoint || cfg.Watch.Mode != watchModeAuto || cfg.Watch.PollInterval != 3*time.Second || cfg.LogMaxBytes != 8192 {
+	if cfg.Check != "npm test" || cfg.MsgSourceCmd != "printf new" || cfg.NoteCommand != "printf new-note" || cfg.NoteRef != "refs/notes/new" || cfg.IdleSeconds != 30 || cfg.CommitMode != commitModeCheckpoint || cfg.Watch.Mode != watchModeAuto || cfg.Watch.PollInterval != 3*time.Second || cfg.LogMaxBytes != 8192 {
 		t.Fatalf("expected flags to override active run state, got %+v", cfg)
 	}
 	if cfg.SnapshotMode != snapshotModeStaged {
@@ -1445,6 +1485,8 @@ func TestConfigInitAndShowCommands(t *testing.T) {
 			"exists: true",
 			"check: make test",
 			"commit_mode: checkpoint",
+			"note_command: ",
+			"note_ref: ",
 			"log_max_bytes: 10485760",
 			"watch.mode: recursive",
 			"watch.poll_interval: 5s",
@@ -1474,7 +1516,7 @@ func TestStartCommandAcceptsConfigCheck(t *testing.T) {
 }
 
 func TestStartDetachedArgsForwardWatchOptions(t *testing.T) {
-	args := startDetachedArgs("/bin/autosnap", "make build", "printf msg", 30, snapshotModeBoth, commitModeCheckpoint, watchModeAuto, 2*time.Second, 4096, "token")
+	args := startDetachedArgs("/bin/autosnap", "make build", "printf msg", "printf note", "refs/notes/diffcog", 30, snapshotModeBoth, commitModeCheckpoint, watchModeAuto, 2*time.Second, 4096, "token")
 	joined := strings.Join(args, "\n")
 	for _, want := range []string{
 		"--watch-mode\nauto",
@@ -1482,6 +1524,8 @@ func TestStartDetachedArgsForwardWatchOptions(t *testing.T) {
 		"--commit-mode\ncheckpoint",
 		"--log-max-bytes\n4096",
 		"--msg-source-cmd\nprintf msg",
+		"--note-command\nprintf note",
+		"--note-ref\nrefs/notes/diffcog",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("expected detached args to contain %q, got %v", want, args)
@@ -3387,6 +3431,89 @@ head:%s
 			if !strings.Contains(message, want) {
 				t.Fatalf("expected checkpoint message to contain %q, got %q", want, message)
 			}
+		}
+	})
+}
+
+func TestRunCheckAttachesGitNoteWithMessageSourceEnv(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		ctx := context.Background()
+		repoRoot, _, branchRef, err := detectRepository(ctx)
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		head := runGitOutput(t, repoRoot, "rev-parse", "HEAD")
+
+		statePath, err := stateFilePath(repoRoot)
+		if err != nil {
+			t.Fatalf("stateFilePath failed: %v", err)
+		}
+		noteCommand := `printf 'base:%s
+prev:%s
+branch:%s
+head:%s
+commit:%s
+' "$AUTOSNAP_DIFF_BASE" "$AUTOSNAP_PREVIOUS_CHECKPOINT_REF" "$AUTOSNAP_BRANCH_REF" "$AUTOSNAP_HEAD" "$AUTOSNAP_CHECKPOINT_COMMIT"`
+		runner, err := newSnapshotRunner(ctx, repoRoot, branchRef, "true", "", snapshotModeBoth, time.Second, statePath)
+		if err != nil {
+			t.Fatalf("newSnapshotRunner failed: %v", err)
+		}
+		runner.noteCommand = noteCommand
+		runner.noteRef = "refs/notes/diffcog"
+
+		if err := os.WriteFile(filepath.Join(repoRoot, "first.txt"), []byte("first"), 0o644); err != nil {
+			t.Fatalf("write first file failed: %v", err)
+		}
+		runner.runCheck()
+
+		if runner.state.LastCheckpointRef == "" {
+			t.Fatalf("expected checkpoint ref in state")
+		}
+		ref := runner.state.LastCheckpointRef
+		commit := runGitOutput(t, repoRoot, "rev-parse", ref)
+		note := runGitOutput(t, repoRoot, "notes", "--ref", "refs/notes/diffcog", "show", commit)
+		for _, want := range []string{
+			"base:" + head,
+			"prev:",
+			"branch:" + branchRef,
+			"head:" + head,
+			"commit:" + commit,
+		} {
+			if !strings.Contains(note, want) {
+				t.Fatalf("expected note to contain %q, got %q", want, note)
+			}
+		}
+	})
+}
+
+func TestCheckpointCommandNoteFailureKeepsCheckpoint(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("note failure"), 0o644); err != nil {
+			t.Fatalf("write file failed: %v", err)
+		}
+
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newCheckpointCommand())
+		root.SetArgs([]string{"checkpoint", "--check", "true", "--note-command", "false", "--note-ref", "refs/notes/diffcog"})
+		err = root.Execute()
+		if err == nil || !strings.Contains(err.Error(), "checkpoint created but note attachment failed") {
+			t.Fatalf("expected note attachment error after checkpoint creation, got %v", err)
+		}
+
+		checkpoints, err := listCheckpointRefsForBranch(context.Background(), repo, branchRef)
+		if err != nil {
+			t.Fatalf("list checkpoints failed: %v", err)
+		}
+		if len(checkpoints) != 1 {
+			t.Fatalf("expected one checkpoint despite note failure, got %d", len(checkpoints))
 		}
 	})
 }

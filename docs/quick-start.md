@@ -25,6 +25,8 @@ idle_seconds = 60
 snapshot_mode = "both"
 commit_mode = "checkpoint"
 msg_source_cmd = ""
+note_command = ""
+note_ref = ""
 log_max_bytes = 10485760
 
 [watch]

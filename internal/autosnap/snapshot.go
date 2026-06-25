@@ -38,17 +38,20 @@ const (
 )
 
 type snapshotRunner struct {
-	ctx          context.Context
-	repoRoot     string
-	branchRef    string
-	checkCmd     string
-	msgSourceCmd string
-	commitMsg    string
-	snapshotMode string
-	commitMode   string
-	watchMode    string
-	pollInterval time.Duration
-	idle         time.Duration
+	ctx             context.Context
+	repoRoot        string
+	branchRef       string
+	checkCmd        string
+	msgSourceCmd    string
+	commitMsg       string
+	noteCommand     string
+	noteRef         string
+	failOnNoteError bool
+	snapshotMode    string
+	commitMode      string
+	watchMode       string
+	pollInterval    time.Duration
+	idle            time.Duration
 
 	statePath string
 	state     autosnapState
@@ -379,19 +382,15 @@ func (r *snapshotRunner) runCheckUnlocked() (checkpointRunResult, error) {
 
 	_ = saveAutosnapState(r.statePath, r.state)
 
+	diffBase := previousCheckpointRef
+	if diffBase == "" {
+		diffBase = position.Head
+	}
+	commandEnv := checkpointCommandEnv(diffBase, previousCheckpointRef, branchRef, position.Head)
+
 	commitMessage := strings.TrimSpace(r.commitMsg)
 	if commitMessage == "" && strings.TrimSpace(r.msgSourceCmd) != "" {
-		diffBase := previousCheckpointRef
-		if diffBase == "" {
-			diffBase = position.Head
-		}
-		env := map[string]string{
-			"AUTOSNAP_DIFF_BASE":               diffBase,
-			"AUTOSNAP_PREVIOUS_CHECKPOINT_REF": previousCheckpointRef,
-			"AUTOSNAP_BRANCH_REF":              branchRef,
-			"AUTOSNAP_HEAD":                    position.Head,
-		}
-		message, sourceExitCode, err := runShellOutputEnv(r.ctx, r.repoRoot, r.msgSourceCmd, env)
+		message, sourceExitCode, err := runShellOutputEnv(r.ctx, r.repoRoot, r.msgSourceCmd, commandEnv)
 		if err != nil || sourceExitCode != 0 {
 			logln("msg-source-cmd failed; using generated checkpoint message")
 		} else {
@@ -460,6 +459,12 @@ func (r *snapshotRunner) runCheckUnlocked() (checkpointRunResult, error) {
 			logf("unable to persist state: %v\n", err)
 			return checkpointRunResult{}, err
 		}
+		if err := r.attachNote(recordedCommit, commandEnv); err != nil {
+			if r.failOnNoteError {
+				return checkpointRunResult{}, fmt.Errorf("checkpoint created but note attachment failed: %w", err)
+			}
+			logf("note attachment failed: %v\n", err)
+		}
 	default:
 		ref, commit, err := createCheckpointChecked(r.ctx, r.repoRoot, branchRef, position.Head, r.checkCmd, r.idle, tree, commitMessage)
 		if err != nil {
@@ -478,6 +483,12 @@ func (r *snapshotRunner) runCheckUnlocked() (checkpointRunResult, error) {
 			logf("unable to persist state: %v\n", err)
 			return checkpointRunResult{}, err
 		}
+		if err := r.attachNote(commit, commandEnv); err != nil {
+			if r.failOnNoteError {
+				return checkpointRunResult{}, fmt.Errorf("checkpoint created but note attachment failed: %w", err)
+			}
+			logf("note attachment failed: %v\n", err)
+		}
 
 		commitShort := commit
 		if len(commitShort) > 7 {
@@ -486,6 +497,40 @@ func (r *snapshotRunner) runCheckUnlocked() (checkpointRunResult, error) {
 		logf("checkpoint saved: %s\n", commitShort)
 	}
 	return checkpointRunResult{}, nil
+}
+
+func checkpointCommandEnv(diffBase, previousCheckpointRef, branchRef, head string) map[string]string {
+	return map[string]string{
+		"AUTOSNAP_DIFF_BASE":               diffBase,
+		"AUTOSNAP_PREVIOUS_CHECKPOINT_REF": previousCheckpointRef,
+		"AUTOSNAP_BRANCH_REF":              branchRef,
+		"AUTOSNAP_HEAD":                    head,
+	}
+}
+
+func (r *snapshotRunner) attachNote(commit string, env map[string]string) error {
+	if strings.TrimSpace(r.noteCommand) == "" {
+		return nil
+	}
+	noteEnv := map[string]string{}
+	for key, value := range env {
+		noteEnv[key] = value
+	}
+	noteEnv["AUTOSNAP_CHECKPOINT_COMMIT"] = commit
+	output, exitCode, err := runShellOutputEnvLabel(r.ctx, r.repoRoot, "note-command", r.noteCommand, noteEnv)
+	if err != nil || exitCode != 0 {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("note-command exited with code %d", exitCode)
+	}
+	if strings.TrimSpace(output) == "" {
+		return fmt.Errorf("note-command produced no output")
+	}
+	if _, err := runGitCommandWithInput(r.ctx, r.repoRoot, nil, output, "notes", "--ref", r.noteRef, "add", "-f", "-F", "-", commit); err != nil {
+		return err
+	}
+	return nil
 }
 
 func resolvePreviousCheckpoint(ctx context.Context, repoRoot, branchRef string, state autosnapState) (string, string) {

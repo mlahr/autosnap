@@ -24,6 +24,8 @@ type autosnapConfig struct {
 	SnapshotMode string              `toml:"snapshot_mode"`
 	CommitMode   string              `toml:"commit_mode"`
 	MsgSourceCmd string              `toml:"msg_source_cmd"`
+	NoteCommand  string              `toml:"note_command"`
+	NoteRef      string              `toml:"note_ref"`
 	LogMaxBytes  int64               `toml:"log_max_bytes"`
 	Watch        autosnapWatchConfig `toml:"watch"`
 
@@ -50,6 +52,16 @@ func defaultAutosnapConfig() autosnapConfig {
 
 func autosnapConfigPath(repoRoot string) string {
 	return filepath.Join(repoRoot, autosnapConfigFileName)
+}
+
+func noteCommandFlag(cmd *cobra.Command) string {
+	value, _ := cmd.Flags().GetString("note-command")
+	return value
+}
+
+func noteRefFlag(cmd *cobra.Command) string {
+	value, _ := cmd.Flags().GetString("note-ref")
+	return value
 }
 
 func loadAutosnapConfig(repoRoot string) (autosnapConfig, bool, error) {
@@ -88,6 +100,12 @@ func resolveStartConfig(repoRoot string, cmd *cobra.Command, checkCommand, msgSo
 	if flags.Changed("msg-source-cmd") {
 		cfg.MsgSourceCmd = msgSourceCmd
 	}
+	if flags.Changed("note-command") {
+		cfg.NoteCommand = noteCommandFlag(cmd)
+	}
+	if flags.Changed("note-ref") {
+		cfg.NoteRef = noteRefFlag(cmd)
+	}
 	if flags.Changed("idle") {
 		cfg.IdleSeconds = idleSeconds
 	}
@@ -109,6 +127,8 @@ func resolveStartConfig(repoRoot string, cmd *cobra.Command, checkCommand, msgSo
 
 	cfg.Check = strings.TrimSpace(cfg.Check)
 	cfg.MsgSourceCmd = strings.TrimSpace(cfg.MsgSourceCmd)
+	cfg.NoteCommand = strings.TrimSpace(cfg.NoteCommand)
+	cfg.NoteRef = strings.TrimSpace(cfg.NoteRef)
 	cfg.SnapshotMode = strings.TrimSpace(cfg.SnapshotMode)
 	cfg.CommitMode = strings.TrimSpace(cfg.CommitMode)
 	cfg.Watch.Mode = strings.TrimSpace(cfg.Watch.Mode)
@@ -166,6 +186,12 @@ func mergeAutosnapConfig(dst *autosnapConfig, src autosnapConfig) {
 	if src.MsgSourceCmd != "" {
 		dst.MsgSourceCmd = src.MsgSourceCmd
 	}
+	if src.NoteCommand != "" {
+		dst.NoteCommand = src.NoteCommand
+	}
+	if src.NoteRef != "" {
+		dst.NoteRef = src.NoteRef
+	}
 	if src.logMaxBytesSet {
 		dst.LogMaxBytes = src.LogMaxBytes
 	}
@@ -199,6 +225,12 @@ func validateStartConfig(cfg autosnapConfig, idleFromFlag bool, pollIntervalFrom
 		}
 		return errors.New("log_max_bytes must be greater than 0")
 	}
+	if cfg.NoteCommand != "" && cfg.NoteRef == "" {
+		return errors.New("note_ref is required when note_command is set")
+	}
+	if cfg.NoteCommand == "" && cfg.NoteRef != "" {
+		return errors.New("note_command is required when note_ref is set")
+	}
 	return nil
 }
 
@@ -217,6 +249,8 @@ idle_seconds = 60
 snapshot_mode = "both"
 commit_mode = "checkpoint"
 msg_source_cmd = ""
+note_command = ""
+note_ref = ""
 log_max_bytes = 10485760
 
 [watch]

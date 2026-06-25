@@ -23,6 +23,9 @@ check = "make test"
 idle_seconds = 60
 snapshot_mode = "both"
 commit_mode = "checkpoint"
+msg_source_cmd = ""
+note_command = ""
+note_ref = ""
 ```
 
 Start the daemon:

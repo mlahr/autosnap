@@ -51,6 +51,8 @@ func newStartCommand() *cobra.Command {
 			watchMode = cfg.Watch.Mode
 			pollInterval = cfg.Watch.PollInterval
 			logMaxBytes = cfg.LogMaxBytes
+			noteCommand := cfg.NoteCommand
+			noteRef := cfg.NoteRef
 
 			if err := ensureNoActiveRunForRepo(repoRoot); err != nil {
 				return err
@@ -63,7 +65,7 @@ func newStartCommand() *cobra.Command {
 						return err
 					}
 				}
-				return startAutosnapDetached(repoRoot, checkCommand, msgSourceCmd, idleSeconds, snapshotMode, commitMode, watchMode, pollInterval, logMaxBytes, runToken)
+				return startAutosnapDetached(repoRoot, checkCommand, msgSourceCmd, noteCommand, noteRef, idleSeconds, snapshotMode, commitMode, watchMode, pollInterval, logMaxBytes, runToken)
 			}
 
 			if runToken == "" {
@@ -85,6 +87,8 @@ func newStartCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			runner.noteCommand = noteCommand
+			runner.noteRef = noteRef
 
 			if daemon {
 				runPath, err := runStatePath(repoRoot)
@@ -100,6 +104,8 @@ func newStartCommand() *cobra.Command {
 					CheckCommand:    checkCommand,
 					MsgSourceCmd:    msgSourceCmd,
 					MsgSourceCmdSet: true,
+					NoteCommand:     noteCommand,
+					NoteRef:         noteRef,
 					IdleSeconds:     idleSeconds,
 					SnapshotMode:    snapshotMode,
 					CommitMode:      commitMode,
@@ -131,6 +137,8 @@ func newStartCommand() *cobra.Command {
 
 	cmd.Flags().StringVar(&checkCommand, "check", "", "Shell command to run after idle")
 	cmd.Flags().StringVar(&msgSourceCmd, "msg-source-cmd", "", "Shell command that returns the checkpoint commit message (multiline supported)")
+	cmd.Flags().String("note-command", "", "Shell command that returns the checkpoint git note content")
+	cmd.Flags().String("note-ref", "", "Git notes ref for checkpoint notes")
 	cmd.Flags().IntVar(&idleSeconds, "idle", 60, "Seconds without changes before running the check")
 	cmd.Flags().StringVar(&snapshotMode, "snapshot-mode", snapshotModeBoth, "Snapshot source: both, staged, working")
 	cmd.Flags().StringVar(&commitMode, "commit-mode", commitModeCheckpoint, "Commit target: checkpoint, direct, sync")
@@ -146,7 +154,7 @@ func newStartCommand() *cobra.Command {
 	return cmd
 }
 
-func startAutosnapDetached(repoRoot, checkCommand, msgSourceCmd string, idleSeconds int, snapshotMode, commitMode, watchMode string, pollInterval time.Duration, logMaxBytes int64, runToken string) error {
+func startAutosnapDetached(repoRoot, checkCommand, msgSourceCmd, noteCommand, noteRef string, idleSeconds int, snapshotMode, commitMode, watchMode string, pollInterval time.Duration, logMaxBytes int64, runToken string) error {
 	logPath, err := backgroundLogPath(repoRoot)
 	if err != nil {
 		return err
@@ -168,7 +176,7 @@ func startAutosnapDetached(repoRoot, checkCommand, msgSourceCmd string, idleSeco
 		return err
 	}
 
-	args := startDetachedArgs(exe, checkCommand, msgSourceCmd, idleSeconds, snapshotMode, commitMode, watchMode, pollInterval, logMaxBytes, runToken)
+	args := startDetachedArgs(exe, checkCommand, msgSourceCmd, noteCommand, noteRef, idleSeconds, snapshotMode, commitMode, watchMode, pollInterval, logMaxBytes, runToken)
 
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Stdin = nil
@@ -187,7 +195,7 @@ func startAutosnapDetached(repoRoot, checkCommand, msgSourceCmd string, idleSeco
 	return nil
 }
 
-func startDetachedArgs(exe, checkCommand, msgSourceCmd string, idleSeconds int, snapshotMode, commitMode, watchMode string, pollInterval time.Duration, logMaxBytes int64, runToken string) []string {
+func startDetachedArgs(exe, checkCommand, msgSourceCmd, noteCommand, noteRef string, idleSeconds int, snapshotMode, commitMode, watchMode string, pollInterval time.Duration, logMaxBytes int64, runToken string) []string {
 	args := []string{
 		exe,
 		"start",
@@ -213,6 +221,12 @@ func startDetachedArgs(exe, checkCommand, msgSourceCmd string, idleSeconds int, 
 
 	if msgSourceCmd != "" {
 		args = append(args, "--msg-source-cmd", msgSourceCmd)
+	}
+	if noteCommand != "" {
+		args = append(args, "--note-command", noteCommand)
+	}
+	if noteRef != "" {
+		args = append(args, "--note-ref", noteRef)
 	}
 	return args
 }

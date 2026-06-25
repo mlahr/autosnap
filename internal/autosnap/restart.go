@@ -54,12 +54,14 @@ func newRestartCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return startAutosnapDetached(repoRoot, cfg.Check, cfg.MsgSourceCmd, cfg.IdleSeconds, cfg.SnapshotMode, cfg.CommitMode, cfg.Watch.Mode, cfg.Watch.PollInterval, cfg.LogMaxBytes, runToken)
+			return startAutosnapDetached(repoRoot, cfg.Check, cfg.MsgSourceCmd, cfg.NoteCommand, cfg.NoteRef, cfg.IdleSeconds, cfg.SnapshotMode, cfg.CommitMode, cfg.Watch.Mode, cfg.Watch.PollInterval, cfg.LogMaxBytes, runToken)
 		},
 	}
 
 	cmd.Flags().StringVar(&checkCommand, "check", "", "Shell command to run after idle")
 	cmd.Flags().StringVar(&msgSourceCmd, "msg-source-cmd", "", "Shell command that returns the checkpoint commit message (multiline supported)")
+	cmd.Flags().String("note-command", "", "Shell command that returns the checkpoint git note content")
+	cmd.Flags().String("note-ref", "", "Git notes ref for checkpoint notes")
 	cmd.Flags().IntVar(&idleSeconds, "idle", 60, "Seconds without changes before running the check")
 	cmd.Flags().StringVar(&snapshotMode, "snapshot-mode", snapshotModeBoth, "Snapshot source: both, staged, working")
 	cmd.Flags().StringVar(&commitMode, "commit-mode", commitModeCheckpoint, "Commit target: checkpoint, direct, sync")
@@ -91,6 +93,12 @@ func resolveRestartConfig(repoRoot string, cmd *cobra.Command, runState autosnap
 	if runState.MsgSourceCmdSet {
 		cfg.MsgSourceCmd = runState.MsgSourceCmd
 	}
+	if strings.TrimSpace(runState.NoteCommand) != "" {
+		cfg.NoteCommand = runState.NoteCommand
+	}
+	if strings.TrimSpace(runState.NoteRef) != "" {
+		cfg.NoteRef = runState.NoteRef
+	}
 	if runState.IdleSeconds != 0 {
 		cfg.IdleSeconds = runState.IdleSeconds
 	}
@@ -117,6 +125,12 @@ func resolveRestartConfig(repoRoot string, cmd *cobra.Command, runState autosnap
 	if flags.Changed("msg-source-cmd") {
 		cfg.MsgSourceCmd = msgSourceCmd
 	}
+	if flags.Changed("note-command") {
+		cfg.NoteCommand = noteCommandFlag(cmd)
+	}
+	if flags.Changed("note-ref") {
+		cfg.NoteRef = noteRefFlag(cmd)
+	}
 	if flags.Changed("idle") {
 		cfg.IdleSeconds = idleSeconds
 	}
@@ -138,6 +152,8 @@ func resolveRestartConfig(repoRoot string, cmd *cobra.Command, runState autosnap
 
 	cfg.Check = strings.TrimSpace(cfg.Check)
 	cfg.MsgSourceCmd = strings.TrimSpace(cfg.MsgSourceCmd)
+	cfg.NoteCommand = strings.TrimSpace(cfg.NoteCommand)
+	cfg.NoteRef = strings.TrimSpace(cfg.NoteRef)
 	cfg.SnapshotMode = strings.TrimSpace(cfg.SnapshotMode)
 	cfg.CommitMode = strings.TrimSpace(cfg.CommitMode)
 	cfg.Watch.Mode = strings.TrimSpace(cfg.Watch.Mode)

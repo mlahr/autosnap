@@ -22,6 +22,8 @@ idle_seconds = 60
 snapshot_mode = "both"
 commit_mode = "checkpoint"
 msg_source_cmd = ""
+note_command = ""
+note_ref = ""
 log_max_bytes = 10485760
 
 [watch]
@@ -53,6 +55,12 @@ changes.
 
 `commit_mode = "checkpoint"` stores passing checkpoints under local autosnap refs
 instead of committing to the active branch.
+
+`note_command` and `note_ref` are empty by default. Set both to attach command
+output as a Git note on each checkpoint commit, for example under
+`refs/notes/diffcog`. `note_command` receives `AUTOSNAP_DIFF_BASE`,
+`AUTOSNAP_PREVIOUS_CHECKPOINT_REF`, `AUTOSNAP_BRANCH_REF`, `AUTOSNAP_HEAD`, and
+the note-only `AUTOSNAP_CHECKPOINT_COMMIT`.
 
 ## Applying Changes
 

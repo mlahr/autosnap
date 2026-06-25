@@ -132,6 +132,10 @@ func runShellOutput(ctx context.Context, dir string, command string) (string, in
 }
 
 func runShellOutputEnv(ctx context.Context, dir string, command string, env map[string]string) (string, int, error) {
+	return runShellOutputEnvLabel(ctx, dir, "msg-source-cmd", command, env)
+}
+
+func runShellOutputEnvLabel(ctx context.Context, dir string, label string, command string, env map[string]string) (string, int, error) {
 	cmd := shellCommand(ctx, dir, command)
 	cmd.Dir = dir
 	cmd.Env = os.Environ()
@@ -161,7 +165,7 @@ func runShellOutputEnv(ctx context.Context, dir string, command string, env map[
 		exitCode = 1
 	}
 
-	logSourceCommandOutput("msg-source-cmd", command, stdout.String(), stderr.String(), exitCode)
+	logSourceCommandOutput(label, command, stdout.String(), stderr.String(), exitCode)
 
 	if err != nil && stderr.Len() > 0 {
 		if stderrText := strings.TrimSpace(stderr.String()); stderrText != "" {

@@ -26,6 +26,8 @@ type autosnapRunState struct {
 	CheckCommand    string        `json:"checkCommand"`
 	MsgSourceCmd    string        `json:"msgSourceCmd"`
 	MsgSourceCmdSet bool          `json:"msgSourceCmdSet,omitempty"`
+	NoteCommand     string        `json:"noteCommand,omitempty"`
+	NoteRef         string        `json:"noteRef,omitempty"`
 	SnapshotMode    string        `json:"snapshotMode"`
 	CommitMode      string        `json:"commitMode"`
 	WatchMode       string        `json:"watchMode"`
