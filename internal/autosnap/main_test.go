@@ -3409,7 +3409,7 @@ func TestPendingCommandCurrentBranch(t *testing.T) {
 		}
 		runGit(t, repo, "add", "file2.txt")
 		runGit(t, repo, "commit", "-m", "regular commit")
-		pendingRef := createAutosnapTestCommitRef(t, repo, branchRef, "20200102T000000Z", "pending checkpoint")
+		_ = createAutosnapTestCommitRef(t, repo, branchRef, "20200102T000000Z", "pending checkpoint")
 		runGit(t, repo, "commit", "--allow-empty", "-m", "regular commit 2")
 
 		initial := runGitOutput(t, repo, "rev-parse", "HEAD~2")
@@ -3426,7 +3426,7 @@ func TestPendingCommandCurrentBranch(t *testing.T) {
 		}
 
 		output := buf.String()
-		if !strings.Contains(output, pendingRef) || !strings.Contains(output, "pending checkpoint") {
+		if !strings.Contains(output, "pending checkpoint") {
 			t.Fatalf("expected pending checkpoint output, got %q", output)
 		}
 	})
@@ -3724,7 +3724,7 @@ func TestPendingCommandDebugWritesProgressToStderr(t *testing.T) {
 		}
 		runGit(t, repo, "add", "debug.txt")
 		runGit(t, repo, "commit", "-m", "debug commit")
-		pendingRef := createAutosnapTestCommitRef(t, repo, branchRef, "20200103T000000Z", "debug pending checkpoint")
+		_ = createAutosnapTestCommitRef(t, repo, branchRef, "20200103T000000Z", "debug pending checkpoint")
 		initial := runGitOutput(t, repo, "rev-parse", "HEAD~1")
 		runGit(t, repo, "reset", "--hard", initial)
 
@@ -3740,7 +3740,7 @@ func TestPendingCommandDebugWritesProgressToStderr(t *testing.T) {
 		}
 
 		out := stdout.String()
-		if !strings.Contains(out, pendingRef) || !strings.Contains(out, "debug pending checkpoint") {
+		if !strings.Contains(out, "debug pending checkpoint") {
 			t.Fatalf("expected pending checkpoint output on stdout, got %q", out)
 		}
 		if strings.Contains(out, "debug: pending:") {
@@ -3778,7 +3778,7 @@ func TestPendingCommandDebugExplainWritesMetadataProgressToStderr(t *testing.T) 
 			t.Fatalf("write checkpoint file failed: %v", err)
 		}
 		runGit(t, repo, "add", "debug-explain.txt")
-		ref := createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20200104T000000Z", "debug explain checkpoint")
+		_ = createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20200104T000000Z", "debug explain checkpoint")
 
 		stdout := &bytes.Buffer{}
 		stderr := &bytes.Buffer{}
@@ -3792,7 +3792,7 @@ func TestPendingCommandDebugExplainWritesMetadataProgressToStderr(t *testing.T) 
 		}
 
 		out := stdout.String()
-		if !strings.Contains(out, ref) || !strings.Contains(out, "debug explain checkpoint") {
+		if !strings.Contains(out, "debug explain checkpoint") {
 			t.Fatalf("expected explain checkpoint output on stdout, got %q", out)
 		}
 		if strings.Contains(out, "debug: pending:") {
@@ -3827,13 +3827,13 @@ func TestPendingCommandLimitAppliesBeforeClassification(t *testing.T) {
 			t.Fatalf("write first checkpoint file failed: %v", err)
 		}
 		runGit(t, repo, "add", "one.txt")
-		oldRef := createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20220101T000000Z", "old limited checkpoint")
+		_ = createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20220101T000000Z", "old limited checkpoint")
 
 		if err := os.WriteFile(filepath.Join(repo, "two.txt"), []byte("two\n"), 0o644); err != nil {
 			t.Fatalf("write second checkpoint file failed: %v", err)
 		}
 		runGit(t, repo, "add", "two.txt")
-		newRef := createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20220102T000000Z", "new limited checkpoint")
+		_ = createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20220102T000000Z", "new limited checkpoint")
 		runGit(t, repo, "reset", "--hard", "HEAD")
 
 		buf := &bytes.Buffer{}
@@ -3847,10 +3847,10 @@ func TestPendingCommandLimitAppliesBeforeClassification(t *testing.T) {
 		}
 
 		output := buf.String()
-		if !strings.Contains(output, newRef) || !strings.Contains(output, "new limited checkpoint") {
+		if !strings.Contains(output, "new limited checkpoint") {
 			t.Fatalf("expected newest checkpoint in limited output, got %q", output)
 		}
-		if strings.Contains(output, oldRef) || strings.Contains(output, "old limited checkpoint") {
+		if strings.Contains(output, "old limited checkpoint") {
 			t.Fatalf("expected older checkpoint to be excluded by limit, got %q", output)
 		}
 	})
@@ -3866,9 +3866,9 @@ func TestPendingExplainCommandLimitPreservesOutputOrder(t *testing.T) {
 			t.Fatalf("detectRepository failed: %v", err)
 		}
 
-		oldRef := createAutosnapTestCommitRef(t, repo, branchRef, "20220101T000000Z", "old explain checkpoint")
-		middleRef := createAutosnapTestCommitRef(t, repo, branchRef, "20220102T000000Z", "middle explain checkpoint")
-		newRef := createAutosnapTestCommitRef(t, repo, branchRef, "20220103T000000Z", "new explain checkpoint")
+		_ = createAutosnapTestCommitRef(t, repo, branchRef, "20220101T000000Z", "old explain checkpoint")
+		_ = createAutosnapTestCommitRef(t, repo, branchRef, "20220102T000000Z", "middle explain checkpoint")
+		_ = createAutosnapTestCommitRef(t, repo, branchRef, "20220103T000000Z", "new explain checkpoint")
 
 		buf := &bytes.Buffer{}
 		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
@@ -3881,11 +3881,11 @@ func TestPendingExplainCommandLimitPreservesOutputOrder(t *testing.T) {
 		}
 
 		output := buf.String()
-		if strings.Contains(output, oldRef) || strings.Contains(output, "old explain checkpoint") {
+		if strings.Contains(output, "old explain checkpoint") {
 			t.Fatalf("expected oldest checkpoint to be excluded by limit, got %q", output)
 		}
-		middleIndex := strings.Index(output, middleRef)
-		newIndex := strings.Index(output, newRef)
+		middleIndex := strings.Index(output, "middle explain checkpoint")
+		newIndex := strings.Index(output, "new explain checkpoint")
 		if middleIndex < 0 || newIndex < 0 {
 			t.Fatalf("expected middle and newest checkpoints in output, got %q", output)
 		}
@@ -3905,10 +3905,10 @@ func TestPendingCommandAllLimitIsGlobal(t *testing.T) {
 			t.Fatalf("detectRepository failed: %v", err)
 		}
 
-		mainOld := createAutosnapTestCommitRef(t, repo, branchRef, "20220101T000000Z", "main old global limit")
-		mainNew := createAutosnapTestCommitRef(t, repo, branchRef, "20220103T000000Z", "main new global limit")
+		_ = createAutosnapTestCommitRef(t, repo, branchRef, "20220101T000000Z", "main old global limit")
+		_ = createAutosnapTestCommitRef(t, repo, branchRef, "20220103T000000Z", "main new global limit")
 		runGit(t, repo, "checkout", "-b", "feature/global-limit")
-		featureNew := createAutosnapTestCommitRef(t, repo, "feature/global-limit", "20220104T000000Z", "feature new global limit")
+		_ = createAutosnapTestCommitRef(t, repo, "feature/global-limit", "20220104T000000Z", "feature new global limit")
 
 		buf := &bytes.Buffer{}
 		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
@@ -3921,10 +3921,10 @@ func TestPendingCommandAllLimitIsGlobal(t *testing.T) {
 		}
 
 		output := buf.String()
-		if strings.Contains(output, mainOld) || strings.Contains(output, "main old global limit") {
+		if strings.Contains(output, "main old global limit") {
 			t.Fatalf("expected global limit to exclude oldest checkpoint, got %q", output)
 		}
-		if !strings.Contains(output, mainNew) || !strings.Contains(output, featureNew) {
+		if !strings.Contains(output, "main new global limit") || !strings.Contains(output, "feature new global limit") {
 			t.Fatalf("expected global limit to include two newest checkpoints, got %q", output)
 		}
 	})
@@ -3942,8 +3942,8 @@ func TestPendingCommandSinceDurationFiltersByCheckpointTimestamp(t *testing.T) {
 
 		oldTimestamp := time.Now().UTC().Add(-10 * 24 * time.Hour).Format("20060102T150405Z")
 		newTimestamp := time.Now().UTC().Add(-1 * time.Hour).Format("20060102T150405Z")
-		oldRef := createAutosnapTestCommitRef(t, repo, branchRef, oldTimestamp, "old since duration")
-		newRef := createAutosnapTestCommitRef(t, repo, branchRef, newTimestamp, "new since duration")
+		_ = createAutosnapTestCommitRef(t, repo, branchRef, oldTimestamp, "old since duration")
+		_ = createAutosnapTestCommitRef(t, repo, branchRef, newTimestamp, "new since duration")
 
 		buf := &bytes.Buffer{}
 		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
@@ -3956,10 +3956,10 @@ func TestPendingCommandSinceDurationFiltersByCheckpointTimestamp(t *testing.T) {
 		}
 
 		output := buf.String()
-		if strings.Contains(output, oldRef) || strings.Contains(output, "old since duration") {
+		if strings.Contains(output, "old since duration") {
 			t.Fatalf("expected old checkpoint to be excluded by since duration, got %q", output)
 		}
-		if !strings.Contains(output, newRef) || !strings.Contains(output, "new since duration") {
+		if !strings.Contains(output, "new since duration") {
 			t.Fatalf("expected new checkpoint in since duration output, got %q", output)
 		}
 	})
@@ -3975,9 +3975,9 @@ func TestPendingCommandSinceCheckpointCommitUsesCheckpointTimestamp(t *testing.T
 			t.Fatalf("detectRepository failed: %v", err)
 		}
 
-		oldRef := createAutosnapTestCommitRef(t, repo, branchRef, "20220101T000000Z", "old since checkpoint")
+		_ = createAutosnapTestCommitRef(t, repo, branchRef, "20220101T000000Z", "old since checkpoint")
 		middleRef := createAutosnapTestCommitRef(t, repo, branchRef, "20220102T000000Z", "middle since checkpoint")
-		newRef := createAutosnapTestCommitRef(t, repo, branchRef, "20220103T000000Z", "new since checkpoint")
+		_ = createAutosnapTestCommitRef(t, repo, branchRef, "20220103T000000Z", "new since checkpoint")
 		middleCommit := runGitOutput(t, repo, "rev-parse", middleRef)
 
 		buf := &bytes.Buffer{}
@@ -3991,10 +3991,10 @@ func TestPendingCommandSinceCheckpointCommitUsesCheckpointTimestamp(t *testing.T
 		}
 
 		output := buf.String()
-		if strings.Contains(output, oldRef) || strings.Contains(output, "old since checkpoint") {
+		if strings.Contains(output, "old since checkpoint") {
 			t.Fatalf("expected older checkpoint to be excluded by checkpoint cutoff, got %q", output)
 		}
-		if !strings.Contains(output, middleRef) || !strings.Contains(output, newRef) {
+		if !strings.Contains(output, "middle since checkpoint") || !strings.Contains(output, "new since checkpoint") {
 			t.Fatalf("expected cutoff checkpoint and newer checkpoint, got %q", output)
 		}
 	})
@@ -4014,7 +4014,7 @@ func TestPendingCommandSinceBranchCommitUsesAncestorOrSelf(t *testing.T) {
 			t.Fatalf("write old checkpoint file failed: %v", err)
 		}
 		runGit(t, repo, "add", "old.txt")
-		oldRef := createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20220101T000000Z", "old since branch commit")
+		_ = createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20220101T000000Z", "old since branch commit")
 		runGit(t, repo, "reset", "--hard", "HEAD")
 
 		if err := os.WriteFile(filepath.Join(repo, "base.txt"), []byte("base\n"), 0o644); err != nil {
@@ -4028,7 +4028,7 @@ func TestPendingCommandSinceBranchCommitUsesAncestorOrSelf(t *testing.T) {
 			t.Fatalf("write new checkpoint file failed: %v", err)
 		}
 		runGit(t, repo, "add", "new.txt")
-		newRef := createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20220102T000000Z", "new since branch commit")
+		_ = createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20220102T000000Z", "new since branch commit")
 		runGit(t, repo, "reset", "--hard", "HEAD")
 
 		buf := &bytes.Buffer{}
@@ -4042,10 +4042,10 @@ func TestPendingCommandSinceBranchCommitUsesAncestorOrSelf(t *testing.T) {
 		}
 
 		output := buf.String()
-		if strings.Contains(output, oldRef) || strings.Contains(output, "old since branch commit") {
+		if strings.Contains(output, "old since branch commit") {
 			t.Fatalf("expected checkpoint before branch commit to be excluded, got %q", output)
 		}
-		if !strings.Contains(output, newRef) || !strings.Contains(output, "new since branch commit") {
+		if !strings.Contains(output, "new since branch commit") {
 			t.Fatalf("expected descendant checkpoint in output, got %q", output)
 		}
 	})
@@ -4096,13 +4096,13 @@ func TestPendingCommandSkipsOlderCheckpointsAfterNewestExact(t *testing.T) {
 		}
 		runGit(t, repo, "add", "conflict.txt")
 		runGit(t, repo, "commit", "-m", "branch conflict commit")
-		exactRef := createAutosnapTestCommitRef(t, repo, branchRef, "20200106T000000Z", "exact checkpoint")
+		_ = createAutosnapTestCommitRef(t, repo, branchRef, "20200106T000000Z", "exact checkpoint")
 
 		if err := os.WriteFile(filepath.Join(repo, "pending.txt"), []byte("pending\n"), 0o644); err != nil {
 			t.Fatalf("write pending checkpoint file failed: %v", err)
 		}
 		runGit(t, repo, "add", "pending.txt")
-		pendingRef := createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20200107T000000Z", "newer pending checkpoint")
+		_ = createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20200107T000000Z", "newer pending checkpoint")
 		runGit(t, repo, "reset", "--hard", "HEAD")
 
 		stdout := &bytes.Buffer{}
@@ -4117,10 +4117,10 @@ func TestPendingCommandSkipsOlderCheckpointsAfterNewestExact(t *testing.T) {
 		}
 
 		out := stdout.String()
-		if !strings.Contains(out, pendingRef) || !strings.Contains(out, "newer pending checkpoint") {
+		if !strings.Contains(out, "newer pending checkpoint") {
 			t.Fatalf("expected newer pending checkpoint output, got %q", out)
 		}
-		if strings.Contains(out, olderRef) || strings.Contains(out, exactRef) {
+		if strings.Contains(out, "older conflict checkpoint") || strings.Contains(out, "exact checkpoint") {
 			t.Fatalf("expected older and exact checkpoints to be hidden, got %q", out)
 		}
 
@@ -4151,7 +4151,7 @@ func TestPendingCommandBranchAndAllScopes(t *testing.T) {
 		}
 		runGit(t, repo, "add", "main.txt")
 		runGit(t, repo, "commit", "-m", "main commit")
-		mainPendingRef := createAutosnapTestCommitRef(t, repo, branchRef, "20210101T000000Z", "main pending")
+		_ = createAutosnapTestCommitRef(t, repo, branchRef, "20210101T000000Z", "main pending")
 		runGit(t, repo, "reset", "--hard", mainInitial)
 
 		runGit(t, repo, "checkout", "-b", "feature/foo")
@@ -4160,7 +4160,7 @@ func TestPendingCommandBranchAndAllScopes(t *testing.T) {
 		}
 		runGit(t, repo, "add", "feature.txt")
 		runGit(t, repo, "commit", "-m", "feature commit")
-		featurePendingRef := createAutosnapTestCommitRef(t, repo, "feature/foo", "20210103T000000Z", "feature pending")
+		_ = createAutosnapTestCommitRef(t, repo, "feature/foo", "20210103T000000Z", "feature pending")
 		runGit(t, repo, "commit", "--allow-empty", "-m", "feature same-tree commit")
 		featureInitial := runGitOutput(t, repo, "rev-parse", "HEAD~2")
 		runGit(t, repo, "reset", "--hard", featureInitial)
@@ -4177,10 +4177,10 @@ func TestPendingCommandBranchAndAllScopes(t *testing.T) {
 		}
 
 		output := buf.String()
-		if !strings.Contains(output, featurePendingRef) || !strings.Contains(output, "feature pending") {
+		if !strings.Contains(output, "feature pending") {
 			t.Fatalf("expected feature pending output, got %q", output)
 		}
-		if strings.Contains(output, mainPendingRef) {
+		if strings.Contains(output, "main pending") {
 			t.Fatalf("expected feature scope to exclude main pending checkpoint, got %q", output)
 		}
 
@@ -4195,7 +4195,7 @@ func TestPendingCommandBranchAndAllScopes(t *testing.T) {
 		}
 
 		output = buf.String()
-		if !strings.Contains(output, mainPendingRef) || !strings.Contains(output, featurePendingRef) {
+		if !strings.Contains(output, "main pending") || !strings.Contains(output, "feature pending") {
 			t.Fatalf("expected all output to include both pending checkpoints, got %q", output)
 		}
 		if !strings.Contains(output, branchRef) || !strings.Contains(output, "feature/foo") || !strings.Contains(output, "main pending") || !strings.Contains(output, "feature pending") {
@@ -4218,14 +4218,14 @@ func TestPendingCommandListsCheckpointsAfterLatestHeadMatch(t *testing.T) {
 			t.Fatalf("write first checkpoint file failed: %v", err)
 		}
 		runGit(t, repo, "add", "file.txt")
-		syncedRef := createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20210104T000000Z", "synced checkpoint")
+		_ = createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20210104T000000Z", "synced checkpoint")
 		runGit(t, repo, "commit", "-m", "manual synced commit")
 
 		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("two\n"), 0o644); err != nil {
 			t.Fatalf("write pending checkpoint file failed: %v", err)
 		}
 		runGit(t, repo, "add", "file.txt")
-		pendingRef := createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20210105T000000Z", "pending checkpoint")
+		_ = createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20210105T000000Z", "pending checkpoint")
 		runGit(t, repo, "reset", "--hard", "HEAD")
 
 		buf := &bytes.Buffer{}
@@ -4239,10 +4239,10 @@ func TestPendingCommandListsCheckpointsAfterLatestHeadMatch(t *testing.T) {
 		}
 
 		output := buf.String()
-		if strings.Contains(output, syncedRef) {
+		if strings.Contains(output, "synced checkpoint") {
 			t.Fatalf("expected synced checkpoint to be excluded, got %q", output)
 		}
-		if !strings.Contains(output, pendingRef) || !strings.Contains(output, "pending checkpoint") {
+		if !strings.Contains(output, "pending checkpoint") {
 			t.Fatalf("expected pending checkpoint output, got %q", output)
 		}
 	})
@@ -4262,7 +4262,7 @@ func TestPendingCommandHidesManuallyIntegratedCheckpoint(t *testing.T) {
 			t.Fatalf("write checkpoint file failed: %v", err)
 		}
 		runGit(t, repo, "add", "database.txt")
-		integratedRef := createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20210108T000000Z", "integrated checkpoint")
+		_ = createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20210108T000000Z", "integrated checkpoint")
 
 		if err := os.WriteFile(filepath.Join(repo, "extra.txt"), []byte("manual cleanup\n"), 0o644); err != nil {
 			t.Fatalf("write extra file failed: %v", err)
@@ -4279,7 +4279,7 @@ func TestPendingCommandHidesManuallyIntegratedCheckpoint(t *testing.T) {
 		if err := root.Execute(); err != nil {
 			t.Fatalf("pending command failed: %v", err)
 		}
-		if output := buf.String(); strings.Contains(output, integratedRef) || !strings.Contains(output, "no pending checkpoints") {
+		if output := buf.String(); strings.Contains(output, "integrated checkpoint") || !strings.Contains(output, "no pending checkpoints") {
 			t.Fatalf("expected integrated checkpoint to be hidden, got %q", output)
 		}
 
@@ -4292,7 +4292,7 @@ func TestPendingCommandHidesManuallyIntegratedCheckpoint(t *testing.T) {
 		if err := explainRoot.Execute(); err != nil {
 			t.Fatalf("pending explain command failed: %v", err)
 		}
-		if output := buf.String(); !strings.Contains(output, integratedRef) || !strings.Contains(output, " integrated ") {
+		if output := buf.String(); !strings.Contains(output, "integrated checkpoint") || !strings.Contains(output, " integrated ") {
 			t.Fatalf("expected explain output to show integrated checkpoint, got %q", output)
 		}
 	})
@@ -4312,13 +4312,13 @@ func TestPendingCommandMarksOlderVariantsObsolete(t *testing.T) {
 			t.Fatalf("write first variant failed: %v", err)
 		}
 		runGit(t, repo, "add", "docker-compose.yml")
-		obsoleteRef := createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20210109T000000Z", "obsolete checkpoint")
+		_ = createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20210109T000000Z", "obsolete checkpoint")
 
 		if err := os.WriteFile(filepath.Join(repo, "docker-compose.yml"), []byte("mysql: 8.4\n"), 0o644); err != nil {
 			t.Fatalf("write final variant failed: %v", err)
 		}
 		runGit(t, repo, "add", "docker-compose.yml")
-		exactRef := createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20210110T000000Z", "exact checkpoint")
+		_ = createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20210110T000000Z", "exact checkpoint")
 		runGit(t, repo, "commit", "-m", "manual final variant")
 
 		buf := &bytes.Buffer{}
@@ -4330,7 +4330,7 @@ func TestPendingCommandMarksOlderVariantsObsolete(t *testing.T) {
 		if err := root.Execute(); err != nil {
 			t.Fatalf("pending command failed: %v", err)
 		}
-		if output := buf.String(); strings.Contains(output, obsoleteRef) || strings.Contains(output, exactRef) || !strings.Contains(output, "no pending checkpoints") {
+		if output := buf.String(); strings.Contains(output, "obsolete checkpoint") || strings.Contains(output, "exact checkpoint") || !strings.Contains(output, "no pending checkpoints") {
 			t.Fatalf("expected obsolete and exact checkpoints to be hidden, got %q", output)
 		}
 
@@ -4344,10 +4344,10 @@ func TestPendingCommandMarksOlderVariantsObsolete(t *testing.T) {
 			t.Fatalf("pending explain command failed: %v", err)
 		}
 		output := buf.String()
-		if !strings.Contains(output, obsoleteRef) || !strings.Contains(output, " obsolete ") {
+		if !strings.Contains(output, "obsolete checkpoint") || !strings.Contains(output, " obsolete ") {
 			t.Fatalf("expected explain output to mark older variant obsolete, got %q", output)
 		}
-		if !strings.Contains(output, exactRef) || !strings.Contains(output, " exact ") {
+		if !strings.Contains(output, "exact checkpoint") || !strings.Contains(output, " exact ") {
 			t.Fatalf("expected explain output to mark final variant exact, got %q", output)
 		}
 	})
@@ -4374,7 +4374,7 @@ func TestPendingCommandShowsConflictAfterIntegratedCheckpoint(t *testing.T) {
 			t.Fatalf("write checkpoint conflict file failed: %v", err)
 		}
 		runGit(t, repo, "add", "conflict.txt")
-		conflictRef := createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20210112T000000Z", "conflict checkpoint")
+		_ = createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20210112T000000Z", "conflict checkpoint")
 
 		runGit(t, repo, "reset", "--hard", "HEAD")
 		if err := os.WriteFile(filepath.Join(repo, "conflict.txt"), []byte("branch\n"), 0o644); err != nil {
@@ -4392,7 +4392,7 @@ func TestPendingCommandShowsConflictAfterIntegratedCheckpoint(t *testing.T) {
 		if err := root.Execute(); err != nil {
 			t.Fatalf("pending command failed: %v", err)
 		}
-		if output := buf.String(); !strings.Contains(output, conflictRef) || !strings.Contains(output, "conflict checkpoint") {
+		if output := buf.String(); !strings.Contains(output, "conflict checkpoint") {
 			t.Fatalf("expected conflict checkpoint to remain pending, got %q", output)
 		}
 
@@ -4405,7 +4405,7 @@ func TestPendingCommandShowsConflictAfterIntegratedCheckpoint(t *testing.T) {
 		if err := explainRoot.Execute(); err != nil {
 			t.Fatalf("pending explain command failed: %v", err)
 		}
-		if output := buf.String(); !strings.Contains(output, conflictRef) || !strings.Contains(output, " conflict ") {
+		if output := buf.String(); !strings.Contains(output, "conflict checkpoint") || !strings.Contains(output, " conflict ") {
 			t.Fatalf("expected explain output to mark conflict checkpoint, got %q", output)
 		}
 	})
@@ -4426,7 +4426,7 @@ func TestPendingCommandAllSkipsDeletedBranches(t *testing.T) {
 		}
 		runGit(t, repo, "add", "main.txt")
 		runGit(t, repo, "commit", "-m", "main commit")
-		mainRef := createAutosnapTestCommitRef(t, repo, branchRef, "20210106T000000Z", "main checkpoint")
+		_ = createAutosnapTestCommitRef(t, repo, branchRef, "20210106T000000Z", "main checkpoint")
 		runGit(t, repo, "reset", "--hard", "HEAD~1")
 
 		runGit(t, repo, "checkout", "-b", "deleted-branch")
@@ -4445,7 +4445,7 @@ func TestPendingCommandAllSkipsDeletedBranches(t *testing.T) {
 		}
 
 		output := buf.String()
-		if !strings.Contains(output, mainRef) {
+		if !strings.Contains(output, "main checkpoint") {
 			t.Fatalf("expected all output to include resolvable branch checkpoint, got %q", output)
 		}
 		if strings.Contains(output, deletedRef) || strings.Contains(output, "deleted branch checkpoint") {

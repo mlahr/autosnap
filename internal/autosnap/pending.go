@@ -179,9 +179,9 @@ func newPendingCommand() *cobra.Command {
 				commit := colorizeCheckpointID(useColor, cp.Commit)
 				summary := checkpointMarkSummary(useColor, marks[cp.Ref], cp.Summary)
 				if allBranches {
-					fmt.Fprintf(out, "%s %s %s %s %s %s\n", cp.Branch, displayTimestamp, cp.Ref, commit, marker, summary)
+					fmt.Fprintf(out, "%s %s %s %s %s\n", cp.Branch, displayTimestamp, commit, marker, summary)
 				} else {
-					fmt.Fprintf(out, "%s %s %s %s %s\n", displayTimestamp, cp.Ref, commit, marker, summary)
+					fmt.Fprintf(out, "%s %s %s %s\n", displayTimestamp, commit, marker, summary)
 				}
 				if includeNotes {
 					if err := writeCheckpointTextNote(ctx, repoRoot, out, resolvedNoteRef, cp.Ref); err != nil {
@@ -601,10 +601,10 @@ func printPendingExplainRow(out io.Writer, cp checkpointInfo, status checkpointP
 	summary := checkpointMarkSummary(useColor, mark, cp.Summary)
 	statusText := colorizePendingStatusPadded(useColor, status, 8)
 	if allBranches {
-		fmt.Fprintf(out, "%s %s %s %s %s %s %s\n", cp.Branch, displayTimestamp, statusText, cp.Ref, commit, marker, summary)
+		fmt.Fprintf(out, "%s %s %s %s %s %s\n", cp.Branch, displayTimestamp, statusText, commit, marker, summary)
 		return
 	}
-	fmt.Fprintf(out, "%s %s %s %s %s %s\n", displayTimestamp, statusText, cp.Ref, commit, marker, summary)
+	fmt.Fprintf(out, "%s %s %s %s %s\n", displayTimestamp, statusText, commit, marker, summary)
 }
 
 func writePendingExplainJSON(ctx context.Context, repoRoot string, refs []checkpointRefInfo, branch string, allBranches bool, out io.Writer, opts checkpointJSONLOptions) error {
