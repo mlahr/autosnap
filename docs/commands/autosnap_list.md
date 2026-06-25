@@ -33,6 +33,7 @@ autosnap list [checkpoint-or-range] [flags]
       --note-ref string   Git notes ref for checkpoint notes
       --notes             Include checkpoint git notes as text
       --notes-json        Include checkpoint git notes decoded as JSON (requires --format json or jsonl)
+      --since string      List checkpoints since a duration or commit ID
 ```
 
 ### SEE ALSO

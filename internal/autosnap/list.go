@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -16,6 +17,7 @@ func newListCommand() *cobra.Command {
 		notes       bool
 		notesJSON   bool
 		noteRef     string
+		since       string
 	)
 
 	cmd := &cobra.Command{
@@ -65,31 +67,38 @@ or one of these current-branch history selectors:
 				return fmt.Errorf("list accepts checkpoint ranges only for current branch or --branch")
 			}
 
-			var checkpoints []checkpointInfo
+			var refs []checkpointRefInfo
 			if len(args) > 0 {
 				scopeBranch := branchRef
 				if strings.TrimSpace(branch) != "" {
 					scopeBranch = strings.TrimSpace(branch)
 				}
-				refs, refsErr := listCheckpointRefsForRange(ctx, repoRoot, scopeBranch, args[0])
+				var refsErr error
+				refs, refsErr = listCheckpointRefsForRange(ctx, repoRoot, scopeBranch, args[0])
 				if refsErr != nil {
 					return refsErr
 				}
-				checkpoints, err = listCheckpointsFromRefs(ctx, repoRoot, refs)
 			} else {
 				switch {
 				case strings.TrimSpace(branch) != "":
-					checkpoints, err = listCheckpointsForBranch(ctx, repoRoot, strings.TrimSpace(branch))
+					refs, err = listCheckpointRefsForBranch(ctx, repoRoot, strings.TrimSpace(branch))
 				case allBranches:
-					refs, refsErr := listCheckpointRefsForAllBranches(ctx, repoRoot)
-					if refsErr != nil {
-						return refsErr
-					}
-					checkpoints, err = listCheckpointsFromRefs(ctx, repoRoot, refs)
+					refs, err = listCheckpointRefsForAllBranches(ctx, repoRoot)
 				default:
-					checkpoints, err = listCheckpointsForBranch(ctx, repoRoot, branchRef)
+					refs, err = listCheckpointRefsForBranch(ctx, repoRoot, branchRef)
 				}
 			}
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(since) != "" {
+				refs, err = filterCheckpointRefsSince(ctx, repoRoot, refs, since, time.Now().UTC())
+				if err != nil {
+					return err
+				}
+			}
+
+			checkpoints, err := listCheckpointsFromRefs(ctx, repoRoot, refs)
 			if err != nil {
 				return err
 			}
@@ -146,6 +155,7 @@ or one of these current-branch history selectors:
 	cmd.Flags().BoolVar(&notes, "notes", false, "Include checkpoint git notes as text")
 	cmd.Flags().BoolVar(&notesJSON, "notes-json", false, "Include checkpoint git notes decoded as JSON (requires --format json or jsonl)")
 	cmd.Flags().StringVar(&noteRef, "note-ref", "", "Git notes ref for checkpoint notes")
+	cmd.Flags().StringVar(&since, "since", "", "List checkpoints since a duration or commit ID")
 	return cmd
 }
 

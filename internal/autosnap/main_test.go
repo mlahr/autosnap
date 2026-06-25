@@ -2603,6 +2603,74 @@ func TestListCommandListsRangeForBranchScope(t *testing.T) {
 	})
 }
 
+func TestListCommandSinceDuration(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		oldTimestamp := time.Now().UTC().Add(-10 * 24 * time.Hour).Format("20060102T150405Z")
+		newTimestamp := time.Now().UTC().Add(-1 * time.Hour).Format("20060102T150405Z")
+		createAutosnapTestCommitRef(t, repo, branchRef, oldTimestamp, "old list since duration")
+		createAutosnapTestCommitRef(t, repo, branchRef, newTimestamp, "new list since duration")
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newListCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"list", "--since", "7d"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("list since duration command failed: %v", err)
+		}
+
+		output := buf.String()
+		if strings.Contains(output, "old list since duration") {
+			t.Fatalf("expected old checkpoint to be excluded by since duration, got %q", output)
+		}
+		if !strings.Contains(output, "new list since duration") {
+			t.Fatalf("expected new checkpoint in since duration output, got %q", output)
+		}
+	})
+}
+
+func TestListCommandSinceCheckpointCommitUsesCheckpointTimestamp(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		createAutosnapTestCommitRef(t, repo, branchRef, "20220101T000000Z", "old list since checkpoint")
+		middleRef := createAutosnapTestCommitRef(t, repo, branchRef, "20220102T000000Z", "middle list since checkpoint")
+		createAutosnapTestCommitRef(t, repo, branchRef, "20220103T000000Z", "new list since checkpoint")
+		middleCommit := runGitOutput(t, repo, "rev-parse", middleRef)
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newListCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"list", "--since", middleCommit})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("list since checkpoint command failed: %v", err)
+		}
+
+		output := buf.String()
+		if strings.Contains(output, "old list since checkpoint") {
+			t.Fatalf("expected older checkpoint to be excluded by checkpoint cutoff, got %q", output)
+		}
+		if !strings.Contains(output, "middle list since checkpoint") || !strings.Contains(output, "new list since checkpoint") {
+			t.Fatalf("expected cutoff checkpoint and newer checkpoint, got %q", output)
+		}
+	})
+}
+
 func TestListCommandRejectsAllScopeWithRange(t *testing.T) {
 	requireIntegration(t)
 	repo := createTestRepo(t)
