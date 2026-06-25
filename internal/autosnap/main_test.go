@@ -4,13 +4,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -26,6 +30,7 @@ func requireIntegration(t *testing.T) {
 }
 
 func TestSnapshotRefNaming(t *testing.T) {
+	t.Parallel()
 	prefix := snapshotRefPrefix("feature/foo")
 	if prefix != path.Join("refs", "autosnapshots", "feature/foo") {
 		t.Fatalf("unexpected prefix: %s", prefix)
@@ -130,6 +135,62 @@ func TestRootCommandIncludesDocsCommand(t *testing.T) {
 	t.Fatalf("expected root command to include docs")
 }
 
+func TestRootCommandIncludesMarkCommand(t *testing.T) {
+	root := NewRootCommand()
+	for _, command := range root.Commands() {
+		if command.Name() == "mark" {
+			return
+		}
+	}
+	t.Fatalf("expected root command to include mark")
+}
+
+func TestMarkCommandValidation(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "missing mode", args: []string{"mark", "last"}, want: "exactly one of --bad, --good, or --unmark"},
+		{name: "multiple modes", args: []string{"mark", "--bad", "--good", "last"}, want: "exactly one of --bad, --good, or --unmark"},
+		{name: "reason with good", args: []string{"mark", "--good", "--reason", "fixed", "last"}, want: "--reason can only be used with --bad"},
+		{name: "reason with unmark", args: []string{"mark", "--unmark", "--reason", "fixed", "last"}, want: "--reason can only be used with --bad"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+			root.AddCommand(newMarkCommand())
+			root.SetArgs(tt.args)
+			err := root.Execute()
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("expected error containing %q, got %v", tt.want, err)
+			}
+		})
+	}
+}
+
+func TestCheckpointMarkSummaryPrefixColor(t *testing.T) {
+	if got := checkpointMarkSummaryPrefix(false, checkpointMark{Mark: checkpointMarkStateBad}); got != "[bad]" {
+		t.Fatalf("expected plain bad prefix, got %q", got)
+	}
+	if got := checkpointMarkSummaryPrefix(false, checkpointMark{Mark: checkpointMarkStateGood}); got != "[good]" {
+		t.Fatalf("expected plain good prefix, got %q", got)
+	}
+	if got := checkpointMarkSummaryPrefix(false, checkpointMark{}); got != "" {
+		t.Fatalf("expected empty unmarked prefix, got %q", got)
+	}
+	if got := checkpointMarkSummaryPrefix(true, checkpointMark{Mark: checkpointMarkStateBad}); !strings.Contains(got, ansiRed) || !strings.Contains(got, "[bad]") {
+		t.Fatalf("expected red bad prefix, got %q", got)
+	}
+	if got := checkpointMarkSummaryPrefix(true, checkpointMark{Mark: checkpointMarkStateGood}); !strings.Contains(got, ansiGreen) || !strings.Contains(got, "[good]") {
+		t.Fatalf("expected green good prefix, got %q", got)
+	}
+	if got := checkpointMarkSummaryPrefix(true, checkpointMark{}); got != "" {
+		t.Fatalf("expected empty colorized unmarked prefix, got %q", got)
+	}
+}
+
 func TestDocsCommandShowsInstalledDocumentationLocations(t *testing.T) {
 	buf := &bytes.Buffer{}
 	root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
@@ -175,6 +236,7 @@ func TestStateFilePathUsesAbsoluteGitDir(t *testing.T) {
 }
 
 func TestStateFilePathForLinkedWorktree(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	worktree := filepath.Join(t.TempDir(), "linked-worktree")
@@ -206,6 +268,7 @@ func TestStateFilePathForLinkedWorktree(t *testing.T) {
 }
 
 func TestBackgroundLogPath(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 
@@ -233,6 +296,7 @@ func TestBackgroundLogPath(t *testing.T) {
 }
 
 func TestStatusIncludesDaemonStatus(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -247,6 +311,7 @@ func TestStatusIncludesDaemonStatus(t *testing.T) {
 }
 
 func TestStatusIncludesStaleDaemonStatus(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	runPath, err := runStatePath(repo)
@@ -315,6 +380,7 @@ func TestStatusIncludesStaleDaemonWhenRunTokenMismatches(t *testing.T) {
 }
 
 func TestStatusReturnsErrorOnCorruptState(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	statePath, err := stateFilePath(repo)
@@ -346,6 +412,7 @@ func TestStatusReturnsErrorOnCorruptState(t *testing.T) {
 }
 
 func TestStatusOutputIncludesDaemonLine(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -367,6 +434,7 @@ func TestStatusOutputIncludesDaemonLine(t *testing.T) {
 }
 
 func TestStatusOutputsFormattedLastCheckpoint(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -413,6 +481,7 @@ func TestStatusOutputsFormattedLastCheckpoint(t *testing.T) {
 }
 
 func TestStopCommandRemovesStalePidState(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	runPath, err := runStatePath(repo)
@@ -440,6 +509,7 @@ func TestStopCommandRemovesStalePidState(t *testing.T) {
 }
 
 func TestStatePersistenceRoundTrip(t *testing.T) {
+	t.Parallel()
 	statePath := filepath.Join(t.TempDir(), "autosnap", "state.json")
 	state := autosnapState{
 		RepoRoot:            "/tmp/repo",
@@ -512,6 +582,7 @@ func TestAutosnapRunStateLifecycle(t *testing.T) {
 }
 
 func TestWriteLogTail(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "autosnap.log")
 	if err := os.WriteFile(logPath, []byte("one\ntwo\nthree\n"), 0o644); err != nil {
@@ -660,6 +731,7 @@ func TestLogsCommandTail(t *testing.T) {
 }
 
 func TestFormatCheckpointTimestampForList(t *testing.T) {
+	t.Parallel()
 	parsed, err := time.Parse("20060102T150405Z", "20210101T000000Z")
 	if err != nil {
 		t.Fatalf("parse timestamp failed: %v", err)
@@ -800,6 +872,7 @@ func TestEnsureNoActiveRunForRepoHonorsRunTokenMismatch(t *testing.T) {
 }
 
 func TestGitIgnoredPathsAreIgnored(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	gitignorePath := filepath.Join(repo, ".gitignore")
@@ -838,6 +911,7 @@ func TestGitIgnoredPathsAreIgnored(t *testing.T) {
 }
 
 func TestAutosnapIgnoreRules(t *testing.T) {
+	t.Parallel()
 	rules := []ignoreRule{
 		{pattern: "tmp", directory: true},
 		{pattern: "fixtures/*.pdf"},
@@ -961,6 +1035,7 @@ func TestAutosnapIgnoreIsWatchOnlyForPolling(t *testing.T) {
 }
 
 func TestPollingDetectsRepeatedWorkingFileContentChanges(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 
@@ -1003,6 +1078,7 @@ func TestPollingDetectsRepeatedWorkingFileContentChanges(t *testing.T) {
 }
 
 func TestPollingDetectsRepeatedUntrackedFileContentChanges(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 
@@ -1046,6 +1122,7 @@ func TestPollingDetectsRepeatedUntrackedFileContentChanges(t *testing.T) {
 }
 
 func TestPollingDetectsRepeatedStagedContentChanges(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 
@@ -1090,23 +1167,35 @@ func TestPollingDetectsRepeatedStagedContentChanges(t *testing.T) {
 }
 
 func TestStartCommandWatchFlagValidation(t *testing.T) {
-	requireIntegration(t)
-	repo := createTestRepo(t)
-	withWorkingDir(t, repo, func() {
-		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
-		root.AddCommand(newStartCommand())
-		root.SetArgs([]string{"start", "--foreground", "--check", "true", "--watch-mode", "bad"})
-		if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "invalid --watch-mode") {
-			t.Fatalf("expected invalid watch mode error, got %v", err)
-		}
+	t.Parallel()
+	repo := t.TempDir()
 
-		root = &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
-		root.AddCommand(newStartCommand())
-		root.SetArgs([]string{"start", "--foreground", "--check", "true", "--watch-mode", "poll", "--poll-interval", "0s"})
-		if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "--poll-interval must be greater than 0") {
-			t.Fatalf("expected invalid poll interval error, got %v", err)
-		}
-	})
+	cmd := newStartCommand()
+	if err := cmd.Flags().Set("check", "true"); err != nil {
+		t.Fatalf("set check flag failed: %v", err)
+	}
+	if err := cmd.Flags().Set("watch-mode", "bad"); err != nil {
+		t.Fatalf("set watch-mode flag failed: %v", err)
+	}
+	_, _, err := resolveStartConfig(repo, cmd, "true", "", 60, snapshotModeBoth, commitModeCheckpoint, "bad", defaultPollInterval, defaultLogMaxBytes)
+	if err == nil || !strings.Contains(err.Error(), "invalid --watch-mode") {
+		t.Fatalf("expected invalid watch mode error, got %v", err)
+	}
+
+	cmd = newStartCommand()
+	if err := cmd.Flags().Set("check", "true"); err != nil {
+		t.Fatalf("set check flag failed: %v", err)
+	}
+	if err := cmd.Flags().Set("watch-mode", "poll"); err != nil {
+		t.Fatalf("set watch-mode flag failed: %v", err)
+	}
+	if err := cmd.Flags().Set("poll-interval", "0s"); err != nil {
+		t.Fatalf("set poll-interval flag failed: %v", err)
+	}
+	_, _, err = resolveStartConfig(repo, cmd, "true", "", 60, snapshotModeBoth, commitModeCheckpoint, watchModePoll, 0, defaultLogMaxBytes)
+	if err == nil || !strings.Contains(err.Error(), "--poll-interval must be greater than 0") {
+		t.Fatalf("expected invalid poll interval error, got %v", err)
+	}
 }
 
 func TestLoadAutosnapConfig(t *testing.T) {
@@ -1444,76 +1533,57 @@ mode = "poll"
 }
 
 func TestConfigInitAndShowCommands(t *testing.T) {
-	requireIntegration(t)
-	repo := createTestRepo(t)
+	repo := t.TempDir()
 
-	withWorkingDir(t, repo, func() {
-		buf := &bytes.Buffer{}
-		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
-		root.AddCommand(newConfigCommand())
-		root.SetOut(buf)
-		root.SetArgs([]string{"config", "init"})
+	buf := &bytes.Buffer{}
+	if err := writeDefaultAutosnapConfig(repo, buf, false); err != nil {
+		t.Fatalf("config init failed: %v", err)
+	}
+	if _, err := os.Stat(autosnapConfigPath(repo)); err != nil {
+		t.Fatalf("expected config file to exist: %v", err)
+	}
 
-		if err := root.Execute(); err != nil {
-			t.Fatalf("config init failed: %v", err)
-		}
-		if _, err := os.Stat(autosnapConfigPath(repo)); err != nil {
-			t.Fatalf("expected config file to exist: %v", err)
-		}
+	if err := writeDefaultAutosnapConfig(repo, io.Discard, false); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("expected init to refuse overwrite, got %v", err)
+	}
 
-		root = &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
-		root.AddCommand(newConfigCommand())
-		root.SetArgs([]string{"config", "init"})
-		if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "already exists") {
-			t.Fatalf("expected init to refuse overwrite, got %v", err)
+	buf.Reset()
+	if err := writeResolvedAutosnapConfig(repo, buf); err != nil {
+		t.Fatalf("config show failed: %v", err)
+	}
+	expectedConfigPath := autosnapConfigPath(repo)
+	out := buf.String()
+	for _, want := range []string{
+		"path: " + expectedConfigPath,
+		"exists: true",
+		"check: make test",
+		"commit_mode: checkpoint",
+		"note_command: ",
+		"note_ref: ",
+		"log_max_bytes: 10485760",
+		"watch.mode: recursive",
+		"watch.poll_interval: 5s",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected config show output to contain %q, got %q", want, out)
 		}
-
-		buf.Reset()
-		root = &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
-		root.AddCommand(newConfigCommand())
-		root.SetOut(buf)
-		root.SetArgs([]string{"config", "show"})
-		if err := root.Execute(); err != nil {
-			t.Fatalf("config show failed: %v", err)
-		}
-		expectedConfigPath, err := filepath.EvalSymlinks(autosnapConfigPath(repo))
-		if err != nil {
-			t.Fatalf("eval expected config path failed: %v", err)
-		}
-		out := buf.String()
-		for _, want := range []string{
-			"path: " + expectedConfigPath,
-			"exists: true",
-			"check: make test",
-			"commit_mode: checkpoint",
-			"note_command: ",
-			"note_ref: ",
-			"log_max_bytes: 10485760",
-			"watch.mode: recursive",
-			"watch.poll_interval: 5s",
-		} {
-			if !strings.Contains(out, want) {
-				t.Fatalf("expected config show output to contain %q, got %q", want, out)
-			}
-		}
-	})
+	}
 }
 
 func TestStartCommandAcceptsConfigCheck(t *testing.T) {
-	requireIntegration(t)
-	repo := createTestRepo(t)
+	repo := t.TempDir()
 	if err := os.WriteFile(autosnapConfigPath(repo), []byte("check = \"true\"\nidle_seconds = 1\n"), 0o644); err != nil {
 		t.Fatalf("write config failed: %v", err)
 	}
 
-	withWorkingDir(t, repo, func() {
-		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
-		root.AddCommand(newStartCommand())
-		root.SetArgs([]string{"start", "--foreground", "--watch-mode", "bad"})
-		if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "invalid --watch-mode") {
-			t.Fatalf("expected invalid watch mode error after config-provided check, got %v", err)
-		}
-	})
+	cmd := newStartCommand()
+	if err := cmd.Flags().Set("watch-mode", "bad"); err != nil {
+		t.Fatalf("set watch-mode flag failed: %v", err)
+	}
+	_, _, err := resolveStartConfig(repo, cmd, "", "", 60, snapshotModeBoth, commitModeCheckpoint, "bad", defaultPollInterval, defaultLogMaxBytes)
+	if err == nil || !strings.Contains(err.Error(), "invalid --watch-mode") {
+		t.Fatalf("expected invalid watch mode error after config-provided check, got %v", err)
+	}
 }
 
 func TestStartDetachedArgsForwardWatchOptions(t *testing.T) {
@@ -1623,6 +1693,7 @@ func TestGitCommandResultCapturesExitCode(t *testing.T) {
 }
 
 func TestDetectRepository(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	withWorkingDir(t, t.TempDir(), func() {
 		_, _, _, err := detectRepository(context.Background())
@@ -1685,6 +1756,15 @@ func TestGetLatestAndListCheckpointForBranch(t *testing.T) {
 		if err != nil {
 			t.Fatalf("gitDir failed: %v", err)
 		}
+		originalNow := currentTimestampFn
+		timestamps := []string{"20260101T120000Z", "20260101T120001Z"}
+		i := 0
+		currentTimestampFn = func() string {
+			value := timestamps[i]
+			i++
+			return value
+		}
+		t.Cleanup(func() { currentTimestampFn = originalNow })
 
 		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("changed 1\n"), 0o644); err != nil {
 			t.Fatalf("write first checkpoint failed: %v", err)
@@ -1702,7 +1782,6 @@ func TestGetLatestAndListCheckpointForBranch(t *testing.T) {
 			t.Fatalf("update file failed: %v", err)
 		}
 
-		time.Sleep(1 * time.Second)
 		tree2, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
 		if err != nil {
 			t.Fatalf("computeWorktreeTree failed: %v", err)
@@ -1822,6 +1901,7 @@ func TestCreateCheckpointAllocatesUniqueRefsForSameTimestamp(t *testing.T) {
 }
 
 func TestListAndParseCheckpointRefsPreserveLegacyTimestampFormat(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -1857,6 +1937,7 @@ func TestListAndParseCheckpointRefsPreserveLegacyTimestampFormat(t *testing.T) {
 }
 
 func TestRunCheckUsesCurrentBranchOnEachRun(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -1926,6 +2007,7 @@ func TestRunCheckUsesCurrentBranchOnEachRun(t *testing.T) {
 }
 
 func TestRunCheckDirectCommitCreatesBranchCommitAndCleansWorktree(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -1994,6 +2076,7 @@ prev:%s
 }
 
 func TestRunCheckDirectCommitSkipsMessageSourceWhenTreeMatchesHead(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -2032,6 +2115,7 @@ func TestRunCheckDirectCommitSkipsMessageSourceWhenTreeMatchesHead(t *testing.T)
 }
 
 func TestRunCheckCheckpointSkipsMessageSourceWhenTreeMatchesHead(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -2069,6 +2153,7 @@ func TestRunCheckCheckpointSkipsMessageSourceWhenTreeMatchesHead(t *testing.T) {
 }
 
 func TestRunCheckCheckpointSkipsCheckWhenTreeMatchesPreviousCheckpoint(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -2107,6 +2192,7 @@ func TestRunCheckCheckpointSkipsCheckWhenTreeMatchesPreviousCheckpoint(t *testin
 }
 
 func TestRunCheckDirectCommitComparesAgainstHeadNotCheckpoint(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -2160,6 +2246,7 @@ func TestRunCheckDirectCommitComparesAgainstHeadNotCheckpoint(t *testing.T) {
 }
 
 func TestRunCheckDirectCommitSkipsFailedCheck(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -2197,6 +2284,7 @@ func TestRunCheckDirectCommitSkipsFailedCheck(t *testing.T) {
 }
 
 func TestRunCheckDirectCommitRejectsDetachedHead(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -2235,6 +2323,7 @@ func TestRunCheckDirectCommitRejectsDetachedHead(t *testing.T) {
 }
 
 func TestRunCheckDirectCommitDefersWhenWorktreeChangesDuringCheck(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -2274,6 +2363,7 @@ func TestRunCheckDirectCommitDefersWhenWorktreeChangesDuringCheck(t *testing.T) 
 }
 
 func TestRunCheckSyncCommitPullsRebasesAndPushes(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	remoteRoot := t.TempDir()
@@ -2341,6 +2431,7 @@ func TestRunCheckSyncCommitPullsRebasesAndPushes(t *testing.T) {
 }
 
 func TestRunCheckSyncCommitAbortsRebaseConflictAndKeepsLocalCommit(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	remoteRoot := t.TempDir()
@@ -2404,6 +2495,7 @@ func TestRunCheckSyncCommitAbortsRebaseConflictAndKeepsLocalCommit(t *testing.T)
 }
 
 func TestRunCheckSyncCommitKeepsLocalCommitWithoutUpstream(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -2446,6 +2538,7 @@ func TestRunCheckSyncCommitKeepsLocalCommitWithoutUpstream(t *testing.T) {
 }
 
 func TestListCommandBranchAndAllScopes(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -2569,7 +2662,165 @@ func TestListCommandListsSingleCheckpointSelector(t *testing.T) {
 	})
 }
 
+func TestMarkCommandLabelsListShowAndJSONOutput(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		createAutosnapTestCommitRef(t, repo, branchRef, "20260101T000000Z", "first checkpoint")
+		createAutosnapTestCommitRef(t, repo, branchRef, "20260101T000001Z", "second checkpoint")
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newMarkCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"mark", "--bad", "--reason", "regression", "last"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("mark bad failed: %v", err)
+		}
+
+		buf.Reset()
+		root = &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newListCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"list"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("list failed: %v", err)
+		}
+		output := buf.String()
+		if !strings.Contains(output, "first checkpoint") || strings.Contains(output, "[unmarked]") || !strings.Contains(output, "[bad] second checkpoint") {
+			t.Fatalf("expected list output to include compact good/bad labels, got %q", output)
+		}
+		if strings.Contains(output, "regression") {
+			t.Fatalf("expected list text output to omit bad reason, got %q", output)
+		}
+
+		buf.Reset()
+		root = &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newListCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"list", "--format", "json"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("json list failed: %v", err)
+		}
+		var rows []map[string]any
+		if err := json.Unmarshal(buf.Bytes(), &rows); err != nil {
+			t.Fatalf("decode json list failed: %v output=%q", err, buf.String())
+		}
+		if len(rows) != 2 {
+			t.Fatalf("expected 2 json rows, got %d", len(rows))
+		}
+		if rows[0]["mark"] != "unmarked" || rows[0]["bad"] != false {
+			t.Fatalf("expected first checkpoint mark=unmarked bad=false, got %+v", rows[0])
+		}
+		if rows[1]["mark"] != "bad" || rows[1]["bad"] != true || rows[1]["badReason"] != "regression" {
+			t.Fatalf("expected second checkpoint bad reason in json, got %+v", rows[1])
+		}
+
+		buf.Reset()
+		root = &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newShowCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"show", "last", "--name-only"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("show failed: %v", err)
+		}
+		output = buf.String()
+		if !strings.Contains(output, "mark: bad") || !strings.Contains(output, "mark reason: regression") {
+			t.Fatalf("expected show output to include bad mark and reason, got %q", output)
+		}
+	})
+}
+
+func TestMarkCommandMarksRangeAndClearsWithGood(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		createCheckpointRangeScenario(t, repo)
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newMarkCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"mark", "--bad", "first+1..last"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("mark range bad failed: %v", err)
+		}
+
+		buf.Reset()
+		root = &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newListCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"list"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("list failed: %v", err)
+		}
+		output := buf.String()
+		if !strings.Contains(output, "first") || strings.Contains(output, "[unmarked]") || !strings.Contains(output, "[bad] second") || !strings.Contains(output, "[bad] third") {
+			t.Fatalf("expected range mark labels in list output, got %q", output)
+		}
+
+		buf.Reset()
+		root = &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newMarkCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"mark", "--good", "last"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("mark good failed: %v", err)
+		}
+
+		buf.Reset()
+		root = &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newListCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"list"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("list after good failed: %v", err)
+		}
+		output = buf.String()
+		if !strings.Contains(output, "[bad] second") || !strings.Contains(output, "[good] third") {
+			t.Fatalf("expected good mark to clear last checkpoint, got %q", output)
+		}
+
+		buf.Reset()
+		root = &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newMarkCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"mark", "--unmark", "last"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("unmark failed: %v", err)
+		}
+
+		buf.Reset()
+		root = &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newListCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"list"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("list after unmark failed: %v", err)
+		}
+		output = buf.String()
+		if !strings.Contains(output, "[bad] second") || !strings.Contains(output, "third") || strings.Contains(output, "[unmarked]") {
+			t.Fatalf("expected unmark to clear last checkpoint, got %q", output)
+		}
+	})
+}
+
 func TestListCommandListsRangeForBranchScope(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -2604,6 +2855,7 @@ func TestListCommandListsRangeForBranchScope(t *testing.T) {
 }
 
 func TestListCommandSinceDuration(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -2638,6 +2890,7 @@ func TestListCommandSinceDuration(t *testing.T) {
 }
 
 func TestListCommandSinceCheckpointCommitUsesCheckpointTimestamp(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -2672,40 +2925,31 @@ func TestListCommandSinceCheckpointCommitUsesCheckpointTimestamp(t *testing.T) {
 }
 
 func TestListCommandRejectsAllScopeWithRange(t *testing.T) {
-	requireIntegration(t)
-	repo := createTestRepo(t)
-	withWorkingDir(t, repo, func() {
-		createCheckpointRangeScenario(t, repo)
+	t.Parallel()
+	root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+	root.AddCommand(newListCommand())
+	root.SetArgs([]string{"list", "--all", "first..last"})
 
-		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
-		root.AddCommand(newListCommand())
-		root.SetArgs([]string{"list", "--all", "first..last"})
-
-		err := root.Execute()
-		if err == nil {
-			t.Fatalf("expected list --all with range to fail")
-		}
-		if !strings.Contains(err.Error(), "checkpoint ranges only for current branch or --branch") {
-			t.Fatalf("expected all scope range error, got %v", err)
-		}
-	})
+	err := root.Execute()
+	if err == nil {
+		t.Fatalf("expected list --all with range to fail")
+	}
+	if !strings.Contains(err.Error(), "checkpoint ranges only for current branch or --branch") {
+		t.Fatalf("expected all scope range error, got %v", err)
+	}
 }
 
 func TestListCommandRejectsMalformedRange(t *testing.T) {
-	requireIntegration(t)
-	repo := createTestRepo(t)
-	withWorkingDir(t, repo, func() {
-		root := NewRootCommand()
-		root.SetArgs([]string{"list", "first..last..last"})
+	root := NewRootCommand()
+	root.SetArgs([]string{"list", "first..last..last"})
 
-		err := root.Execute()
-		if err == nil {
-			t.Fatalf("expected malformed checkpoint range to fail")
-		}
-		if !strings.Contains(err.Error(), "invalid checkpoint range") {
-			t.Fatalf("expected invalid checkpoint range error, got %v", err)
-		}
-	})
+	err := root.Execute()
+	if err == nil {
+		t.Fatalf("expected malformed checkpoint range to fail")
+	}
+	if !strings.Contains(err.Error(), "invalid checkpoint range") {
+		t.Fatalf("expected invalid checkpoint range error, got %v", err)
+	}
 }
 
 func TestListCommandJSONLOutput(t *testing.T) {
@@ -2744,6 +2988,7 @@ func TestListCommandJSONLOutput(t *testing.T) {
 }
 
 func TestListCommandShowsWorktreeMatchMarkers(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -2794,6 +3039,7 @@ func TestListCommandShowsWorktreeMatchMarkers(t *testing.T) {
 }
 
 func TestListCommandJSONLIncludesWorktreeMatch(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -2844,6 +3090,7 @@ func TestListCommandJSONLIncludesWorktreeMatch(t *testing.T) {
 }
 
 func TestListCommandJSONLOutputIncludesDecodedJSONNote(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -2887,6 +3134,7 @@ func TestListCommandJSONLOutputIncludesDecodedJSONNote(t *testing.T) {
 }
 
 func TestListCommandJSONLNotesUseConfiguredNoteRef(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -2922,6 +3170,7 @@ func TestListCommandJSONLNotesUseConfiguredNoteRef(t *testing.T) {
 }
 
 func TestListCommandJSONOutputIncludesRawNoteString(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -2954,6 +3203,7 @@ func TestListCommandJSONOutputIncludesRawNoteString(t *testing.T) {
 }
 
 func TestListCommandTextOutputIncludesRawNoteString(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -2986,6 +3236,7 @@ func TestListCommandTextOutputIncludesRawNoteString(t *testing.T) {
 }
 
 func TestListCommandJSONLNotesReportMissingAndInvalidNotes(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -3029,48 +3280,41 @@ func TestListCommandJSONLNotesReportMissingAndInvalidNotes(t *testing.T) {
 }
 
 func TestListCommandJSONLNotesValidateFlags(t *testing.T) {
-	requireIntegration(t)
-	repo := createTestRepo(t)
-	withWorkingDir(t, repo, func() {
-		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
-		root.AddCommand(newListCommand())
-		root.SetArgs([]string{"list", "--format", "text", "--notes-json", "--note-ref", "refs/notes/diffcog"})
-		if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "--format json or jsonl") {
-			t.Fatalf("expected notes-json format error, got %v", err)
-		}
+	t.Parallel()
+	root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+	root.AddCommand(newListCommand())
+	root.SetArgs([]string{"list", "--format", "text", "--notes-json", "--note-ref", "refs/notes/diffcog"})
+	if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "--format json or jsonl") {
+		t.Fatalf("expected notes-json format error, got %v", err)
+	}
 
-		root = &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
-		root.AddCommand(newListCommand())
-		root.SetArgs([]string{"list", "--notes"})
-		if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "--note-ref") {
-			t.Fatalf("expected missing note ref error, got %v", err)
-		}
+	root = &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+	root.AddCommand(newListCommand())
+	root.SetArgs([]string{"list", "--notes"})
+	if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "--note-ref") {
+		t.Fatalf("expected missing note ref error, got %v", err)
+	}
 
-		root = &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
-		root.AddCommand(newListCommand())
-		root.SetArgs([]string{"list", "--format", "json", "--notes", "--notes-json", "--note-ref", "refs/notes/diffcog"})
-		if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
-			t.Fatalf("expected mutually exclusive notes error, got %v", err)
-		}
-	})
+	root = &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+	root.AddCommand(newListCommand())
+	root.SetArgs([]string{"list", "--format", "json", "--notes", "--notes-json", "--note-ref", "refs/notes/diffcog"})
+	if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("expected mutually exclusive notes error, got %v", err)
+	}
 }
 
 func TestListCommandRejectsMultipleScopes(t *testing.T) {
-	requireIntegration(t)
-	repo := createTestRepo(t)
-	withWorkingDir(t, repo, func() {
-		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
-		root.AddCommand(newListCommand())
-		root.SetArgs([]string{"list", "--branch", "feature/foo", "--all"})
+	root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+	root.AddCommand(newListCommand())
+	root.SetArgs([]string{"list", "--branch", "feature/foo", "--all"})
 
-		err := root.Execute()
-		if err == nil {
-			t.Fatalf("expected list to fail")
-		}
-		if !strings.Contains(err.Error(), "at most one scope") {
-			t.Fatalf("expected scope error, got %v", err)
-		}
-	})
+	err := root.Execute()
+	if err == nil {
+		t.Fatalf("expected list to fail")
+	}
+	if !strings.Contains(err.Error(), "at most one scope") {
+		t.Fatalf("expected scope error, got %v", err)
+	}
 }
 
 func TestListCheckpointsFromRefsIncludesFailedMetadata(t *testing.T) {
@@ -3120,6 +3364,7 @@ func TestListCheckpointsFromRefsIncludesFailedMetadata(t *testing.T) {
 }
 
 func TestListCheckpointsFromRefsUsesFirstContentLine(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -3150,6 +3395,7 @@ func TestListCheckpointsFromRefsUsesFirstContentLine(t *testing.T) {
 }
 
 func TestPendingCommandCurrentBranch(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -3187,6 +3433,7 @@ func TestPendingCommandCurrentBranch(t *testing.T) {
 }
 
 func TestPendingCommandJSONLOutput(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -3228,6 +3475,7 @@ func TestPendingCommandJSONLOutput(t *testing.T) {
 }
 
 func TestPendingCommandShowsWorktreeMatchMarkers(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -3278,6 +3526,7 @@ func TestPendingCommandShowsWorktreeMatchMarkers(t *testing.T) {
 }
 
 func TestPendingExplainCommandShowsWorktreeMatchMarkers(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -3328,6 +3577,7 @@ func TestPendingExplainCommandShowsWorktreeMatchMarkers(t *testing.T) {
 }
 
 func TestPendingCommandJSONLIncludesWorktreeMatch(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -3378,6 +3628,7 @@ func TestPendingCommandJSONLIncludesWorktreeMatch(t *testing.T) {
 }
 
 func TestPendingExplainCommandJSONLOutputIncludesClassification(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -3418,6 +3669,7 @@ func TestPendingExplainCommandJSONLOutputIncludesClassification(t *testing.T) {
 }
 
 func TestPendingExplainJSONLClassificationUsesEarlyStop(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -3458,6 +3710,7 @@ func TestPendingExplainJSONLClassificationUsesEarlyStop(t *testing.T) {
 }
 
 func TestPendingCommandDebugWritesProgressToStderr(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -3512,6 +3765,7 @@ func TestPendingCommandDebugWritesProgressToStderr(t *testing.T) {
 }
 
 func TestPendingCommandDebugExplainWritesMetadataProgressToStderr(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -3560,6 +3814,7 @@ func TestPendingCommandDebugExplainWritesMetadataProgressToStderr(t *testing.T) 
 }
 
 func TestPendingCommandLimitAppliesBeforeClassification(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -3602,6 +3857,7 @@ func TestPendingCommandLimitAppliesBeforeClassification(t *testing.T) {
 }
 
 func TestPendingExplainCommandLimitPreservesOutputOrder(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -3640,6 +3896,7 @@ func TestPendingExplainCommandLimitPreservesOutputOrder(t *testing.T) {
 }
 
 func TestPendingCommandAllLimitIsGlobal(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -3674,6 +3931,7 @@ func TestPendingCommandAllLimitIsGlobal(t *testing.T) {
 }
 
 func TestPendingCommandSinceDurationFiltersByCheckpointTimestamp(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -3708,6 +3966,7 @@ func TestPendingCommandSinceDurationFiltersByCheckpointTimestamp(t *testing.T) {
 }
 
 func TestPendingCommandSinceCheckpointCommitUsesCheckpointTimestamp(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -3742,6 +4001,7 @@ func TestPendingCommandSinceCheckpointCommitUsesCheckpointTimestamp(t *testing.T
 }
 
 func TestPendingCommandSinceBranchCommitUsesAncestorOrSelf(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -3791,18 +4051,21 @@ func TestPendingCommandSinceBranchCommitUsesAncestorOrSelf(t *testing.T) {
 	})
 }
 
-func TestPendingCommandRejectsInvalidLimitAndSince(t *testing.T) {
+func TestPendingCommandRejectsInvalidLimit(t *testing.T) {
+	t.Parallel()
+	root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+	root.AddCommand(newPendingCommand())
+	root.SetArgs([]string{"pending", "--limit", "-1"})
+	if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "--limit") {
+		t.Fatalf("expected invalid limit error, got %v", err)
+	}
+}
+
+func TestPendingCommandRejectsInvalidSince(t *testing.T) {
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
 		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
-		root.AddCommand(newPendingCommand())
-		root.SetArgs([]string{"pending", "--limit", "-1"})
-		if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "--limit") {
-			t.Fatalf("expected invalid limit error, got %v", err)
-		}
-
-		root = &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
 		root.AddCommand(newPendingCommand())
 		root.SetArgs([]string{"pending", "--since", "not-a-commit"})
 		if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "--since") {
@@ -3812,6 +4075,7 @@ func TestPendingCommandRejectsInvalidLimitAndSince(t *testing.T) {
 }
 
 func TestPendingCommandSkipsOlderCheckpointsAfterNewestExact(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -3871,6 +4135,7 @@ func TestPendingCommandSkipsOlderCheckpointsAfterNewestExact(t *testing.T) {
 }
 
 func TestPendingCommandBranchAndAllScopes(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -3940,6 +4205,7 @@ func TestPendingCommandBranchAndAllScopes(t *testing.T) {
 }
 
 func TestPendingCommandListsCheckpointsAfterLatestHeadMatch(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -3983,6 +4249,7 @@ func TestPendingCommandListsCheckpointsAfterLatestHeadMatch(t *testing.T) {
 }
 
 func TestPendingCommandHidesManuallyIntegratedCheckpoint(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -4032,6 +4299,7 @@ func TestPendingCommandHidesManuallyIntegratedCheckpoint(t *testing.T) {
 }
 
 func TestPendingCommandMarksOlderVariantsObsolete(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -4086,6 +4354,7 @@ func TestPendingCommandMarksOlderVariantsObsolete(t *testing.T) {
 }
 
 func TestPendingCommandShowsConflictAfterIntegratedCheckpoint(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -4143,6 +4412,7 @@ func TestPendingCommandShowsConflictAfterIntegratedCheckpoint(t *testing.T) {
 }
 
 func TestPendingCommandAllSkipsDeletedBranches(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -4185,21 +4455,18 @@ func TestPendingCommandAllSkipsDeletedBranches(t *testing.T) {
 }
 
 func TestPendingCommandRejectsMultipleScopes(t *testing.T) {
-	requireIntegration(t)
-	repo := createTestRepo(t)
-	withWorkingDir(t, repo, func() {
-		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
-		root.AddCommand(newPendingCommand())
-		root.SetArgs([]string{"pending", "--branch", "feature/foo", "--all"})
+	t.Parallel()
+	root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+	root.AddCommand(newPendingCommand())
+	root.SetArgs([]string{"pending", "--branch", "feature/foo", "--all"})
 
-		err := root.Execute()
-		if err == nil {
-			t.Fatalf("expected pending to fail")
-		}
-		if !strings.Contains(err.Error(), "at most one scope") {
-			t.Fatalf("expected scope error, got %v", err)
-		}
-	})
+	err := root.Execute()
+	if err == nil {
+		t.Fatalf("expected pending to fail")
+	}
+	if !strings.Contains(err.Error(), "at most one scope") {
+		t.Fatalf("expected scope error, got %v", err)
+	}
 }
 
 func TestRunCheckPassesMessageSourceEnvForFirstCheckpoint(t *testing.T) {
@@ -4253,6 +4520,7 @@ head:%s
 }
 
 func TestRunCheckAttachesGitNoteWithMessageSourceEnv(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -4306,6 +4574,7 @@ commit:%s
 }
 
 func TestCheckpointCommandNoteFailureKeepsCheckpoint(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -4352,6 +4621,15 @@ func TestRunCheckPassesPreviousCheckpointRefToMessageSource(t *testing.T) {
 		msgSourceCmd := `printf 'base:%s
 prev:%s
 ' "$AUTOSNAP_DIFF_BASE" "$AUTOSNAP_PREVIOUS_CHECKPOINT_REF"`
+		originalNow := currentTimestampFn
+		timestamps := []string{"20260101T120000Z", "20260101T120001Z"}
+		i := 0
+		currentTimestampFn = func() string {
+			value := timestamps[i]
+			i++
+			return value
+		}
+		t.Cleanup(func() { currentTimestampFn = originalNow })
 		runner, err := newSnapshotRunner(ctx, repoRoot, branchRef, "true", msgSourceCmd, snapshotModeBoth, time.Second, statePath)
 		if err != nil {
 			t.Fatalf("newSnapshotRunner failed: %v", err)
@@ -4366,7 +4644,6 @@ prev:%s
 			t.Fatalf("expected first checkpoint ref")
 		}
 
-		time.Sleep(1 * time.Second)
 		if err := os.WriteFile(filepath.Join(repoRoot, "second.txt"), []byte("second"), 0o644); err != nil {
 			t.Fatalf("write second file failed: %v", err)
 		}
@@ -4421,12 +4698,20 @@ func TestRunCheckFallsBackToLatestCheckpointForMessageSourceEnv(t *testing.T) {
 		msgSourceCmd := `printf 'base:%s
 prev:%s
 ' "$AUTOSNAP_DIFF_BASE" "$AUTOSNAP_PREVIOUS_CHECKPOINT_REF"`
+		originalNow := currentTimestampFn
+		timestamps := []string{"20260101T120000Z", "20260101T120001Z"}
+		i := 0
+		currentTimestampFn = func() string {
+			value := timestamps[i]
+			i++
+			return value
+		}
+		t.Cleanup(func() { currentTimestampFn = originalNow })
 		runner, err := newSnapshotRunner(ctx, repoRoot, branchRef, "true", msgSourceCmd, snapshotModeBoth, time.Second, statePath)
 		if err != nil {
 			t.Fatalf("newSnapshotRunner failed: %v", err)
 		}
 
-		time.Sleep(1 * time.Second)
 		if err := os.WriteFile(filepath.Join(repoRoot, "after-existing.txt"), []byte("change"), 0o644); err != nil {
 			t.Fatalf("write file failed: %v", err)
 		}
@@ -4452,6 +4737,7 @@ prev:%s
 }
 
 func TestShowCommandRejectsTimestamp(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -4707,6 +4993,7 @@ func TestShowCommandSupportsRelativeSelectors(t *testing.T) {
 }
 
 func TestShowCommandErrorsOnOutOfRangeSelector(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -4749,6 +5036,7 @@ func TestShowCommandErrorsOnOutOfRangeSelector(t *testing.T) {
 }
 
 func TestRestoreCommandRejectsTimestamp(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -4795,6 +5083,7 @@ func TestRestoreCommandRejectsTimestamp(t *testing.T) {
 }
 
 func TestShowCommandResolvesCheckpointByRefAndCommit(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -4855,6 +5144,7 @@ func TestShowCommandResolvesCheckpointByRefAndCommit(t *testing.T) {
 }
 
 func TestShowCommandReturnsNotFoundForUnknownCheckpoint(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -4871,6 +5161,7 @@ func TestShowCommandReturnsNotFoundForUnknownCheckpoint(t *testing.T) {
 }
 
 func TestShowCommandShowsPatchByDefault(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -4948,6 +5239,7 @@ func TestShowCommandShowsPatchByDefault(t *testing.T) {
 }
 
 func TestShowCommandNameOnlyShowsChangedFileNames(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -5014,6 +5306,7 @@ func TestShowCommandNameOnlyShowsChangedFileNames(t *testing.T) {
 }
 
 func TestShowCommandGitDiffShowsExactGitDiffOutput(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -5083,6 +5376,7 @@ func TestShowCommandGitDiffShowsExactGitDiffOutput(t *testing.T) {
 }
 
 func TestShowCommandGitDiffNameOnlyShowsExactGitDiffNameOnlyOutput(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -5225,6 +5519,7 @@ func TestShowCommandGitDiffShowsExactGitDiffOutputForRange(t *testing.T) {
 }
 
 func TestShowCommandRejectsMalformedRange(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -5400,6 +5695,7 @@ func TestShowCommandUsesTargetCheckpointBranchForExplicitRefDiffBase(t *testing.
 }
 
 func TestShowCommandColorModes(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -5467,6 +5763,7 @@ func TestShowCommandColorModes(t *testing.T) {
 }
 
 func TestRestoreCommandAppliesCheckpointToWorktreeAndIndex(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -5519,6 +5816,7 @@ func TestRestoreCommandAppliesCheckpointToWorktreeAndIndex(t *testing.T) {
 }
 
 func TestRestoreCommandRefusesDirtyStateByDefault(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -5562,6 +5860,7 @@ func TestRestoreCommandRefusesDirtyStateByDefault(t *testing.T) {
 }
 
 func TestRestoreCommandLeavesConflictMarkers(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -5765,6 +6064,7 @@ func TestPickCommandAppliesInclusiveCheckpointRange(t *testing.T) {
 }
 
 func TestPickCommandFirstCheckpointMatchesRestoreBase(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -5809,6 +6109,7 @@ func TestPickCommandFirstCheckpointMatchesRestoreBase(t *testing.T) {
 }
 
 func TestPickCommandRejectsTimestamp(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -5849,6 +6150,7 @@ func TestPickCommandRejectsTimestamp(t *testing.T) {
 }
 
 func TestPickCommandRefusesDirtyStateByDefault(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -6039,6 +6341,7 @@ func TestPickCommandConflictHeadPolicyUsesHeadSide(t *testing.T) {
 }
 
 func TestPickCommandRejectsInvalidConflictPolicy(t *testing.T) {
+	t.Parallel()
 	root := NewRootCommand()
 	root.SetArgs([]string{"pick", "--conflict=invalid", "last"})
 
@@ -6156,6 +6459,7 @@ func TestUnpickCommandRemovesInclusiveCheckpointRange(t *testing.T) {
 }
 
 func TestUnpickCommandRejectsInvalidConflictPolicy(t *testing.T) {
+	t.Parallel()
 	root := NewRootCommand()
 	root.SetArgs([]string{"unpick", "--conflict=checkpoint", "last"})
 
@@ -6188,6 +6492,7 @@ func TestUnpickCommandRejectsReversedRange(t *testing.T) {
 }
 
 func TestPromoteCommandRejectsTimestamp(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -6234,6 +6539,7 @@ func TestPromoteCommandRejectsTimestamp(t *testing.T) {
 }
 
 func TestPromoteCommandCreatesBranchCommitFromCheckpoint(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -6296,6 +6602,7 @@ func TestPromoteCommandCreatesBranchCommitFromCheckpoint(t *testing.T) {
 }
 
 func TestPromoteCommandNoOpsWhenCheckpointMatchesHead(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -6328,6 +6635,7 @@ func TestPromoteCommandNoOpsWhenCheckpointMatchesHead(t *testing.T) {
 }
 
 func TestParsePruneDuration(t *testing.T) {
+	t.Parallel()
 	duration, err := parsePruneDuration("7d")
 	if err != nil {
 		t.Fatalf("parsePruneDuration day shorthand failed: %v", err)
@@ -6350,52 +6658,48 @@ func TestParsePruneDuration(t *testing.T) {
 }
 
 func TestPruneCommandRejectsInvalidScopeAndPolicy(t *testing.T) {
-	requireIntegration(t)
-	repo := createTestRepo(t)
-	withWorkingDir(t, repo, func() {
-		tests := []struct {
-			name string
-			args []string
-			want string
-		}{
-			{
-				name: "multiple scopes",
-				args: []string{"prune", "--current-branch", "--all-branches", "--keep", "1"},
-				want: "at most one scope",
-			},
-			{
-				name: "missing policy",
-				args: []string{"prune", "--current-branch"},
-				want: "exactly one retention policy",
-			},
-			{
-				name: "multiple policies",
-				args: []string{"prune", "--current-branch", "--keep", "1", "--older-than", "7d"},
-				want: "exactly one retention policy",
-			},
-			{
-				name: "negative keep",
-				args: []string{"prune", "--current-branch", "--keep", "-1"},
-				want: "--keep must be non-negative",
-			},
-		}
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "multiple scopes",
+			args: []string{"prune", "--current-branch", "--all-branches", "--keep", "1"},
+			want: "at most one scope",
+		},
+		{
+			name: "missing policy",
+			args: []string{"prune", "--current-branch"},
+			want: "exactly one retention policy",
+		},
+		{
+			name: "multiple policies",
+			args: []string{"prune", "--current-branch", "--keep", "1", "--older-than", "7d"},
+			want: "exactly one retention policy",
+		},
+		{
+			name: "negative keep",
+			args: []string{"prune", "--current-branch", "--keep", "-1"},
+			want: "--keep must be non-negative",
+		},
+	}
 
-		for _, tc := range tests {
-			t.Run(tc.name, func(t *testing.T) {
-				root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
-				root.AddCommand(newPruneCommand())
-				root.SetArgs(tc.args)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+			root.AddCommand(newPruneCommand())
+			root.SetArgs(tc.args)
 
-				err := root.Execute()
-				if err == nil {
-					t.Fatalf("expected prune to fail")
-				}
-				if !strings.Contains(err.Error(), tc.want) {
-					t.Fatalf("expected error containing %q, got %v", tc.want, err)
-				}
-			})
-		}
-	})
+			err := root.Execute()
+			if err == nil {
+				t.Fatalf("expected prune to fail")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("expected error containing %q, got %v", tc.want, err)
+			}
+		})
+	}
 }
 
 func TestPruneCommandDryRunKeepsRefs(t *testing.T) {
@@ -6455,6 +6759,7 @@ func TestPruneCommandDryRunKeepsRefs(t *testing.T) {
 }
 
 func TestPruneCommandApplyDeletesKeptOverflow(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -6493,6 +6798,7 @@ func TestPruneCommandApplyDeletesKeptOverflow(t *testing.T) {
 }
 
 func TestPruneCommandOlderThanSupportsDayScope(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -6521,6 +6827,7 @@ func TestPruneCommandOlderThanSupportsDayScope(t *testing.T) {
 }
 
 func TestPruneCommandBranchAndAllBranchScopes(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -6560,6 +6867,7 @@ func TestPruneCommandBranchAndAllBranchScopes(t *testing.T) {
 }
 
 func TestComputeWorktreeTreeSnapshotModes(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -6603,22 +6911,102 @@ func TestComputeWorktreeTreeSnapshotModes(t *testing.T) {
 	})
 }
 
+var testRepoTemplate struct {
+	once sync.Once
+	dir  string
+	err  error
+}
+
 func createTestRepo(t *testing.T) string {
 	t.Helper()
+	testRepoTemplate.once.Do(func() {
+		testRepoTemplate.dir, testRepoTemplate.err = createTestRepoTemplate()
+	})
+	if testRepoTemplate.err != nil {
+		t.Fatalf("create test repo template failed: %v", testRepoTemplate.err)
+	}
+
 	dir := t.TempDir()
+	if err := copyDir(testRepoTemplate.dir, dir); err != nil {
+		t.Fatalf("copy test repo template failed: %v", err)
+	}
+	return dir
+}
+
+func createTestRepoTemplate() (string, error) {
+	dir, err := os.MkdirTemp("", "autosnap-test-repo-template-")
+	if err != nil {
+		return "", err
+	}
 	sub := filepath.Join(dir, "subdir")
 	if err := os.MkdirAll(sub, 0o755); err != nil {
-		t.Fatalf("mkdir failed: %v", err)
+		return "", err
 	}
-	runGit(t, dir, "init", "-q")
-	runGit(t, dir, "config", "user.name", "Autosnap Test")
-	runGit(t, dir, "config", "user.email", "test@autosnap.local")
+	cmds := [][]string{
+		{"init", "-q"},
+		{"config", "user.name", "Autosnap Test"},
+		{"config", "user.email", "test@autosnap.local"},
+	}
+	for _, args := range cmds {
+		if err := runGitTemplate(dir, args...); err != nil {
+			return "", err
+		}
+	}
 	if err := os.WriteFile(filepath.Join(dir, "file.txt"), []byte("initial"), 0o644); err != nil {
-		t.Fatalf("write file failed: %v", err)
+		return "", err
 	}
-	runGit(t, dir, "add", "file.txt")
-	runGit(t, dir, "commit", "-m", "initial commit")
-	return dir
+	if err := runGitTemplate(dir, "add", "file.txt"); err != nil {
+		return "", err
+	}
+	if err := runGitTemplate(dir, "commit", "-m", "initial commit"); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
+func runGitTemplate(dir string, args ...string) error {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git %s failed: %w: %s", strings.Join(args, " "), err, out)
+	}
+	return nil
+}
+
+func copyDir(src, dst string) error {
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		srcPath := filepath.Join(src, entry.Name())
+		dstPath := filepath.Join(dst, entry.Name())
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if err := os.MkdirAll(dstPath, info.Mode().Perm()); err != nil {
+				return err
+			}
+			if err := copyDir(srcPath, dstPath); err != nil {
+				return err
+			}
+			continue
+		}
+		data, err := os.ReadFile(srcPath)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(dstPath, data, info.Mode().Perm()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func runGit(t *testing.T, dir string, args ...string) {
@@ -6642,21 +7030,34 @@ func runGitOutput(t *testing.T, dir string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
+var testWorkingDirs sync.Map
+
+func init() {
+	detectRepositoryStartDir = func() string {
+		if dir, ok := testWorkingDirs.Load(currentGoroutineID()); ok {
+			return dir.(string)
+		}
+		return "."
+	}
+}
+
 func withWorkingDir(t *testing.T, dir string, fn func()) {
 	t.Helper()
-	prev, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd failed: %v", err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatalf("chdir to %s failed: %v", dir, err)
-	}
-	t.Cleanup(func() {
-		if err := os.Chdir(prev); err != nil {
-			t.Fatalf("restore chdir failed: %v", err)
-		}
-	})
+	gid := currentGoroutineID()
+	testWorkingDirs.Store(gid, dir)
+	defer testWorkingDirs.Delete(gid)
 	fn()
+}
+
+func currentGoroutineID() uint64 {
+	var buf [64]byte
+	n := runtime.Stack(buf[:], false)
+	fields := strings.Fields(string(buf[:n]))
+	id, err := strconv.ParseUint(fields[1], 10, 64)
+	if err != nil {
+		panic(fmt.Sprintf("parse goroutine id: %v", err))
+	}
+	return id
 }
 
 func createPickConflictScenario(t *testing.T, repo string) string {
@@ -6875,6 +7276,7 @@ func gitRefExists(t *testing.T, repoRoot, ref string) bool {
 }
 
 func TestCheckpointCommandCreatesImmediateCheckpoint(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -6907,6 +7309,7 @@ func TestCheckpointCommandCreatesImmediateCheckpoint(t *testing.T) {
 }
 
 func TestCheckpointCommandUsesCommitMessageArgument(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -6939,72 +7342,33 @@ func TestCheckpointCommandUsesCommitMessageArgument(t *testing.T) {
 }
 
 func TestCheckpointCommandRejectsCommitMessageArgumentWithMsgSourceCmd(t *testing.T) {
-	requireIntegration(t)
-	repo := createTestRepo(t)
-	withWorkingDir(t, repo, func() {
-		_, _, branchRef, err := detectRepository(context.Background())
-		if err != nil {
-			t.Fatalf("detectRepository failed: %v", err)
-		}
-		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("conflicting message source"), 0o644); err != nil {
-			t.Fatalf("write file failed: %v", err)
-		}
-
-		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
-		root.AddCommand(newCheckpointCommand())
-		root.SetArgs([]string{"checkpoint", "manual checkpoint message", "--check", "true", "--msg-source-cmd", "printf sourced"})
-		err = root.Execute()
-		if err == nil {
-			t.Fatalf("expected checkpoint command to reject conflicting message sources")
-		}
-		if !strings.Contains(err.Error(), "COMMIT_MSG cannot be used with --msg-source-cmd") {
-			t.Fatalf("expected COMMIT_MSG conflict error, got %v", err)
-		}
-
-		checkpoints, err := listCheckpointRefsForBranch(context.Background(), repo, branchRef)
-		if err != nil {
-			t.Fatalf("list checkpoints failed: %v", err)
-		}
-		if len(checkpoints) != 0 {
-			t.Fatalf("expected no checkpoints, got %d", len(checkpoints))
-		}
-	})
+	t.Parallel()
+	err := validateCheckpointCommitMessageSources("manual checkpoint message", "printf sourced")
+	if err == nil {
+		t.Fatalf("expected checkpoint command to reject conflicting message sources")
+	}
+	if !strings.Contains(err.Error(), "COMMIT_MSG cannot be used with --msg-source-cmd") {
+		t.Fatalf("expected COMMIT_MSG conflict error, got %v", err)
+	}
 }
 
 func TestCheckpointCommandRejectsCommitMessageArgumentWithConfiguredMsgSourceCmd(t *testing.T) {
-	requireIntegration(t)
-	repo := createTestRepo(t)
-	withWorkingDir(t, repo, func() {
-		_, _, branchRef, err := detectRepository(context.Background())
-		if err != nil {
-			t.Fatalf("detectRepository failed: %v", err)
-		}
-		if err := os.WriteFile(filepath.Join(repo, ".autosnap.toml"), []byte("check = \"true\"\nmsg_source_cmd = \"printf sourced\"\n"), 0o644); err != nil {
-			t.Fatalf("write config failed: %v", err)
-		}
-		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("configured conflicting message source"), 0o644); err != nil {
-			t.Fatalf("write file failed: %v", err)
-		}
+	repo := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repo, ".autosnap.toml"), []byte("check = \"true\"\nmsg_source_cmd = \"printf sourced\"\n"), 0o644); err != nil {
+		t.Fatalf("write config failed: %v", err)
+	}
 
-		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
-		root.AddCommand(newCheckpointCommand())
-		root.SetArgs([]string{"checkpoint", "manual checkpoint message"})
-		err = root.Execute()
-		if err == nil {
-			t.Fatalf("expected checkpoint command to reject configured conflicting message source")
-		}
-		if !strings.Contains(err.Error(), "COMMIT_MSG cannot be used with --msg-source-cmd") {
-			t.Fatalf("expected COMMIT_MSG conflict error, got %v", err)
-		}
-
-		checkpoints, err := listCheckpointRefsForBranch(context.Background(), repo, branchRef)
-		if err != nil {
-			t.Fatalf("list checkpoints failed: %v", err)
-		}
-		if len(checkpoints) != 0 {
-			t.Fatalf("expected no checkpoints, got %d", len(checkpoints))
-		}
-	})
+	cfg, _, err := resolveStartConfig(repo, newCheckpointCommand(), "", "", defaultAutosnapConfig().IdleSeconds, snapshotModeBoth, commitModeCheckpoint, watchModeRecursive, defaultPollInterval, defaultLogMaxBytes)
+	if err != nil {
+		t.Fatalf("resolve config failed: %v", err)
+	}
+	err = validateCheckpointCommitMessageSources("manual checkpoint message", cfg.MsgSourceCmd)
+	if err == nil {
+		t.Fatalf("expected checkpoint command to reject configured conflicting message source")
+	}
+	if !strings.Contains(err.Error(), "COMMIT_MSG cannot be used with --msg-source-cmd") {
+		t.Fatalf("expected COMMIT_MSG conflict error, got %v", err)
+	}
 }
 
 func TestCheckpointCommandAllowsCommitMessageArgumentWithClearedConfiguredMsgSourceCmd(t *testing.T) {
@@ -7043,6 +7407,7 @@ func TestCheckpointCommandAllowsCommitMessageArgumentWithClearedConfiguredMsgSou
 }
 
 func TestCheckpointCommandReturnsErrorWhenCheckFails(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -7072,6 +7437,7 @@ func TestCheckpointCommandReturnsErrorWhenCheckFails(t *testing.T) {
 }
 
 func TestCheckpointCommandAllowsActiveDaemonState(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -7097,6 +7463,7 @@ func TestCheckpointCommandAllowsActiveDaemonState(t *testing.T) {
 }
 
 func TestCheckpointCommandTimeoutWhenLockHeld(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -7124,6 +7491,7 @@ func TestCheckpointCommandTimeoutWhenLockHeld(t *testing.T) {
 }
 
 func TestCreateCheckpointUsesCustomMessage(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -7170,6 +7538,7 @@ func TestCreateCheckpointUsesCustomMessage(t *testing.T) {
 }
 
 func TestCreateCheckpointCheckedUsesExpectedHeadAsParent(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -7203,6 +7572,7 @@ func TestCreateCheckpointCheckedUsesExpectedHeadAsParent(t *testing.T) {
 }
 
 func TestCreateCheckpointCheckedRejectsChangedHead(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -7245,6 +7615,7 @@ func TestCreateCheckpointCheckedRejectsChangedHead(t *testing.T) {
 }
 
 func TestCreateCheckpointFallsBackToGeneratedMessageForEmptyMessage(t *testing.T) {
+	t.Parallel()
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {

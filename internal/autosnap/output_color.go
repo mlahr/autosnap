@@ -6,6 +6,7 @@ import (
 
 const (
 	ansiReset      = "\x1b[0m"
+	ansiRed        = "\x1b[31m"
 	ansiGreen      = "\x1b[32m"
 	ansiYellow     = "\x1b[33m"
 	ansiBlue       = "\x1b[34m"
@@ -41,6 +42,17 @@ func colorizeCheckpointID(enabled bool, value string) string {
 
 func colorizeCommitMessage(enabled bool, value string) string {
 	return colorize(enabled, ansiGhostWhite, value)
+}
+
+func colorizeCheckpointMark(enabled bool, value, state string) string {
+	switch state {
+	case checkpointMarkStateBad:
+		return colorize(enabled, ansiRed, value)
+	case checkpointMarkStateGood:
+		return colorize(enabled, ansiGreen, value)
+	default:
+		return colorize(enabled, ansiYellow, value)
+	}
 }
 
 func colorizePendingStatus(enabled bool, status checkpointPendingStatus) string {

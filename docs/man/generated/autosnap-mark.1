@@ -1,0 +1,52 @@
+.nh
+.TH "AUTOSNAP" "1" "Jun 2026" "autosnap" "autosnap manual"
+
+.SH NAME
+autosnap-mark - Mark checkpoints unmarked, good, or bad
+
+
+.SH SYNOPSIS
+\fBautosnap mark (--bad|--good|--unmark)  [flags]\fP
+
+
+.SH DESCRIPTION
+Mark one checkpoint or an inclusive checkpoint range unmarked, good, or bad.
+
+.PP
+A range A..B marks checkpoints from A through B, inclusive. Ranges are
+inclusive autosnap checkpoint intervals, not general Git revision ranges.
+
+.PP
+The checkpoint argument can be an explicit autosnap ref, a checkpoint commit hash,
+or one of these current-branch history selectors:
+
+.PP
+first
+  first+N
+  last
+  last-N
+
+
+.SH OPTIONS
+\fB--bad\fP[=false]
+	Mark selected checkpoints bad
+
+.PP
+\fB--good\fP[=false]
+	Mark selected checkpoints good
+
+.PP
+\fB-h\fP, \fB--help\fP[=false]
+	help for mark
+
+.PP
+\fB--reason\fP=""
+	Human-readable reason for a bad mark
+
+.PP
+\fB--unmark\fP[=false]
+	Remove explicit good or bad marks from selected checkpoints
+
+
+.SH SEE ALSO
+\fBautosnap(1)\fP

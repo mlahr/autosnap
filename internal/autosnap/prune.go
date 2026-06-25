@@ -29,10 +29,6 @@ func newPruneCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			out := cmd.OutOrStdout()
 			ctx := context.Background()
-			repoRoot, _, branchRef, err := detectRepository(ctx)
-			if err != nil {
-				return err
-			}
 
 			currentBranchChanged := cmd.Flags().Changed("current-branch")
 			scopeCount := 0
@@ -60,6 +56,19 @@ func newPruneCommand() *cobra.Command {
 			}
 			if policyCount != 1 {
 				return fmt.Errorf("prune requires exactly one retention policy: --keep or --older-than")
+			}
+			if keepChanged && keep < 0 {
+				return fmt.Errorf("--keep must be non-negative")
+			}
+			if olderThanChanged && strings.TrimSpace(olderThan) != "" {
+				if _, err := parsePruneDuration(olderThan); err != nil {
+					return err
+				}
+			}
+
+			repoRoot, _, branchRef, err := detectRepository(ctx)
+			if err != nil {
+				return err
 			}
 
 			var refs []checkpointRefInfo

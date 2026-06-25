@@ -88,6 +88,25 @@ autosnap show --name-only refs/autosnapshots/main/20260605T120000Z`),
 						fmt.Fprintf(out, "%s: %s\n", checkLabel, checkCmd)
 					}
 				}
+				mark, err := readCheckpointMark(ctx, repoRoot, meta.Ref)
+				if err != nil {
+					return err
+				}
+				markLabel := "mark"
+				if ranged {
+					markLabel = "end mark"
+				}
+				switch mark.Mark {
+				case checkpointMarkStateBad:
+					fmt.Fprintf(out, "%s: bad\n", markLabel)
+					if strings.TrimSpace(mark.Reason) != "" {
+						fmt.Fprintf(out, "%s reason: %s\n", markLabel, strings.TrimSpace(mark.Reason))
+					}
+				case checkpointMarkStateGood:
+					fmt.Fprintf(out, "%s: good\n", markLabel)
+				default:
+					fmt.Fprintf(out, "%s: unmarked\n", markLabel)
+				}
 			}
 
 			colorArg, err := normalizeShowColorArg(colorMode, out)

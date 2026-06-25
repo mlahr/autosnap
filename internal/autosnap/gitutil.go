@@ -210,8 +210,10 @@ func streamPrefix(stream string) string {
 	}
 }
 
+var detectRepositoryStartDir = func() string { return "." }
+
 func detectRepository(ctx context.Context) (string, string, string, error) {
-	result, err := runGitCommand(ctx, ".", nil, "rev-parse", "--show-toplevel")
+	result, err := runGitCommand(ctx, detectRepositoryStartDir(), nil, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return "", "", "", fmt.Errorf("not in a git repository")
 	}

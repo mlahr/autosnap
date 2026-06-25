@@ -49,6 +49,18 @@ or one of these current-branch history selectors:
 				return err
 			}
 
+			if strings.TrimSpace(branch) != "" && allBranches {
+				return fmt.Errorf("list accepts at most one scope flag: --branch or --all")
+			}
+			if len(args) > 0 && allBranches {
+				return fmt.Errorf("list accepts checkpoint ranges only for current branch or --branch")
+			}
+			if len(args) > 0 {
+				if _, _, _, err := splitCheckpointRangeArg(args[0]); err != nil {
+					return err
+				}
+			}
+
 			repoRoot, _, branchRef, err := detectRepository(ctx)
 			if err != nil {
 				return err
@@ -59,13 +71,6 @@ or one of these current-branch history selectors:
 				if err != nil {
 					return err
 				}
-			}
-
-			if strings.TrimSpace(branch) != "" && allBranches {
-				return fmt.Errorf("list accepts at most one scope flag: --branch or --all")
-			}
-			if len(args) > 0 && allBranches {
-				return fmt.Errorf("list accepts checkpoint ranges only for current branch or --branch")
 			}
 
 			var refs []checkpointRefInfo
@@ -107,12 +112,17 @@ or one of these current-branch history selectors:
 			if err != nil {
 				return err
 			}
+			marks, err := checkpointMarks(ctx, repoRoot, checkpoints)
+			if err != nil {
+				return err
+			}
 			if normalizedFormat == outputFormatJSON {
 				return writeCheckpointsJSON(ctx, repoRoot, out, checkpoints, checkpointJSONLOptions{
 					IncludeNotes:    includeNotes,
 					NotesJSON:       notesJSON,
 					NoteRef:         resolvedNoteRef,
 					WorktreeMatches: worktreeMatches,
+					Marks:           marks,
 				})
 			}
 			if normalizedFormat == outputFormatJSONL {
@@ -124,6 +134,7 @@ or one of these current-branch history selectors:
 					NotesJSON:       notesJSON,
 					NoteRef:         resolvedNoteRef,
 					WorktreeMatches: worktreeMatches,
+					Marks:           marks,
 				})
 			}
 			if len(checkpoints) == 0 {
@@ -142,7 +153,7 @@ or one of these current-branch history selectors:
 				displayTimestamp := formatCheckpointTimestampForList(cp.Timestamp)
 				marker := colorizeWorktreeMatchMarker(useColor, worktreeMatches[cp.Ref])
 				ref := colorizeCheckpointID(useColor, cp.Commit)
-				summary := colorizeCommitMessage(useColor, cp.Summary)
+				summary := checkpointMarkSummary(useColor, marks[cp.Ref], cp.Summary)
 				if allBranches {
 					fmt.Fprintf(out, "%s %s %s %s %s\n", cp.Branch, displayTimestamp, ref, marker, summary)
 				} else {

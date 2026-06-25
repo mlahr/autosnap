@@ -41,8 +41,8 @@ func newCheckpointCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if commitMsg != "" && strings.TrimSpace(cfg.MsgSourceCmd) != "" {
-				return fmt.Errorf("COMMIT_MSG cannot be used with --msg-source-cmd")
+			if err := validateCheckpointCommitMessageSources(commitMsg, cfg.MsgSourceCmd); err != nil {
+				return err
 			}
 
 			statePath, err := stateFilePath(repoRoot)
@@ -79,4 +79,11 @@ func newCheckpointCommand() *cobra.Command {
 	cmd.Flags().DurationVar(&timeout, "timeout", 0, "Maximum time to wait for another checkpoint operation to finish (0 waits indefinitely)")
 
 	return cmd
+}
+
+func validateCheckpointCommitMessageSources(commitMsg, msgSourceCmd string) error {
+	if strings.TrimSpace(commitMsg) != "" && strings.TrimSpace(msgSourceCmd) != "" {
+		return fmt.Errorf("COMMIT_MSG cannot be used with --msg-source-cmd")
+	}
+	return nil
 }

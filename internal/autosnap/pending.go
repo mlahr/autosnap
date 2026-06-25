@@ -45,6 +45,20 @@ func newPendingCommand() *cobra.Command {
 				return err
 			}
 
+			scopeCount := 0
+			if strings.TrimSpace(branch) != "" {
+				scopeCount++
+			}
+			if allBranches {
+				scopeCount++
+			}
+			if scopeCount > 1 {
+				return fmt.Errorf("%s accepts at most one scope flag: --branch or --all", cmd.CalledAs())
+			}
+			if limit < 0 {
+				return fmt.Errorf("--limit must be non-negative")
+			}
+
 			debugLog.Printf("detecting repository")
 			repoRoot, _, branchRef, err := detectRepository(ctx)
 			if err != nil {
@@ -57,17 +71,6 @@ func newPendingCommand() *cobra.Command {
 				if err != nil {
 					return err
 				}
-			}
-
-			scopeCount := 0
-			if strings.TrimSpace(branch) != "" {
-				scopeCount++
-			}
-			if allBranches {
-				scopeCount++
-			}
-			if scopeCount > 1 {
-				return fmt.Errorf("%s accepts at most one scope flag: --branch or --all", cmd.CalledAs())
 			}
 
 			scope := "current branch " + branchRef
@@ -136,6 +139,10 @@ func newPendingCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			marks, err := checkpointMarks(ctx, repoRoot, pending)
+			if err != nil {
+				return err
+			}
 
 			if normalizedFormat == outputFormatJSON {
 				return writeCheckpointsJSON(ctx, repoRoot, out, pending, checkpointJSONLOptions{
@@ -143,6 +150,7 @@ func newPendingCommand() *cobra.Command {
 					NotesJSON:       notesJSON,
 					NoteRef:         resolvedNoteRef,
 					WorktreeMatches: worktreeMatches,
+					Marks:           marks,
 				})
 			}
 			if normalizedFormat == outputFormatJSONL {
@@ -151,6 +159,7 @@ func newPendingCommand() *cobra.Command {
 					NotesJSON:       notesJSON,
 					NoteRef:         resolvedNoteRef,
 					WorktreeMatches: worktreeMatches,
+					Marks:           marks,
 				})
 			}
 			if len(pending) == 0 {
@@ -168,7 +177,7 @@ func newPendingCommand() *cobra.Command {
 				displayTimestamp := formatCheckpointTimestampForList(cp.Timestamp)
 				marker := colorizeWorktreeMatchMarker(useColor, worktreeMatches[cp.Ref])
 				commit := colorizeCheckpointID(useColor, cp.Commit)
-				summary := colorizeCommitMessage(useColor, cp.Summary)
+				summary := checkpointMarkSummary(useColor, marks[cp.Ref], cp.Summary)
 				if allBranches {
 					fmt.Fprintf(out, "%s %s %s %s %s %s\n", cp.Branch, displayTimestamp, cp.Ref, commit, marker, summary)
 				} else {
@@ -467,6 +476,7 @@ type pendingExplainRow struct {
 	checkpoint    checkpointInfo
 	status        checkpointPendingStatus
 	worktreeMatch checkpointWorktreeMatch
+	mark          checkpointMark
 	ready         bool
 }
 
@@ -497,6 +507,10 @@ func streamExplainPendingCheckpointRefs(ctx context.Context, repoRoot string, re
 	if err != nil {
 		return err
 	}
+	marks, err := checkpointMarks(ctx, repoRoot, checkpoints)
+	if err != nil {
+		return err
+	}
 
 	rowByRef := map[string]int{}
 	rows := make([]pendingExplainRow, len(checkpoints))
@@ -504,6 +518,7 @@ func streamExplainPendingCheckpointRefs(ctx context.Context, repoRoot string, re
 		rowByRef[cp.Ref] = i
 		rows[i].checkpoint = cp
 		rows[i].worktreeMatch = worktreeMatches[cp.Ref]
+		rows[i].mark = marks[cp.Ref]
 	}
 
 	classifiedCh := make(chan classifiedCheckpointRef)
@@ -519,7 +534,7 @@ func streamExplainPendingCheckpointRefs(ctx context.Context, repoRoot string, re
 	printed := 0
 	flushReadyRows := func() error {
 		for next < len(rows) && rows[next].ready {
-			printPendingExplainRow(out, rows[next].checkpoint, rows[next].status, rows[next].worktreeMatch, allBranches, useColor)
+			printPendingExplainRow(out, rows[next].checkpoint, rows[next].status, rows[next].worktreeMatch, rows[next].mark, allBranches, useColor)
 			if includeNotes {
 				if err := writeCheckpointTextNote(ctx, repoRoot, out, noteRef, rows[next].checkpoint.Ref); err != nil {
 					return err
@@ -555,7 +570,7 @@ func streamExplainPendingCheckpointRefs(ctx context.Context, repoRoot string, re
 			next++
 			continue
 		}
-		printPendingExplainRow(out, rows[next].checkpoint, rows[next].status, rows[next].worktreeMatch, allBranches, useColor)
+		printPendingExplainRow(out, rows[next].checkpoint, rows[next].status, rows[next].worktreeMatch, rows[next].mark, allBranches, useColor)
 		if includeNotes {
 			if err := writeCheckpointTextNote(ctx, repoRoot, out, noteRef, rows[next].checkpoint.Ref); err != nil {
 				return err
@@ -579,11 +594,11 @@ func streamExplainPendingCheckpointRefs(ctx context.Context, repoRoot string, re
 	return nil
 }
 
-func printPendingExplainRow(out io.Writer, cp checkpointInfo, status checkpointPendingStatus, match checkpointWorktreeMatch, allBranches bool, useColor bool) {
+func printPendingExplainRow(out io.Writer, cp checkpointInfo, status checkpointPendingStatus, match checkpointWorktreeMatch, mark checkpointMark, allBranches bool, useColor bool) {
 	displayTimestamp := formatCheckpointTimestampForList(cp.Timestamp)
 	marker := colorizeWorktreeMatchMarker(useColor, match)
 	commit := colorizeCheckpointID(useColor, cp.Commit)
-	summary := colorizeCommitMessage(useColor, cp.Summary)
+	summary := checkpointMarkSummary(useColor, mark, cp.Summary)
 	statusText := colorizePendingStatusPadded(useColor, status, 8)
 	if allBranches {
 		fmt.Fprintf(out, "%s %s %s %s %s %s %s\n", cp.Branch, displayTimestamp, statusText, cp.Ref, commit, marker, summary)
@@ -611,6 +626,10 @@ func writePendingExplainJSON(ctx context.Context, repoRoot string, refs []checkp
 	if err != nil {
 		return err
 	}
+	opts.Marks, err = checkpointMarks(ctx, repoRoot, checkpoints)
+	if err != nil {
+		return err
+	}
 	return writeCheckpointsJSON(ctx, repoRoot, out, checkpoints, opts)
 }
 
@@ -630,6 +649,10 @@ func writePendingExplainJSONL(ctx context.Context, repoRoot string, refs []check
 		return err
 	}
 	opts.WorktreeMatches, err = checkpointWorktreeMatches(ctx, repoRoot, checkpoints)
+	if err != nil {
+		return err
+	}
+	opts.Marks, err = checkpointMarks(ctx, repoRoot, checkpoints)
 	if err != nil {
 		return err
 	}
