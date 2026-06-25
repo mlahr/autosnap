@@ -40,6 +40,24 @@ autosnap restart
 
 See [docs/quick-start.md](docs/quick-start.md) for the full first-run flow.
 
+## Installation
+
+On Debian-based Linux amd64 or arm64 systems, install the latest released
+Debian package:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mlahr/autosnap/main/install.sh | bash
+```
+
+The installer downloads the latest GitHub Release `.deb`, verifies it against
+the release `checksums.txt`, and installs it with `apt-get`.
+
+Install from source:
+
+```bash
+make install
+```
+
 ## Documentation
 
 Packaged Linux installs include manual pages and Markdown documentation:
@@ -70,12 +88,6 @@ Build:
 
 ```bash
 make build
-```
-
-Install from source:
-
-```bash
-make install
 ```
 
 Install source-built documentation:
