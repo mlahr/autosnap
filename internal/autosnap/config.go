@@ -212,7 +212,7 @@ func encodeAutosnapConfig(cfg autosnapConfig) ([]byte, error) {
 }
 
 func defaultAutosnapConfigTemplate() []byte {
-	return []byte(`check = "npm test"
+	return []byte(`check = "make test"
 idle_seconds = 60
 snapshot_mode = "both"
 commit_mode = "checkpoint"

@@ -13,7 +13,7 @@ import (
 func newStopCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "stop",
-		Short: "Stop a background autosnap watcher",
+		Short: "Stop the autosnap daemon",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
 			repoRoot, _, _, err := detectRepository(ctx)

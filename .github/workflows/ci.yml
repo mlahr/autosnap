@@ -21,3 +21,6 @@ jobs:
 
       - name: Run tests
         run: make test-all
+
+      - name: Verify generated docs
+        run: make test-docs

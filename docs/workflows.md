@@ -1,0 +1,91 @@
+# Workflows
+
+## Normal Manual Commit Workflow
+
+The usual workflow is:
+
+```bash
+autosnap start
+# work normally
+git status
+git add ...
+git commit
+autosnap pending --explain
+```
+
+You continue to decide what belongs in normal Git commits. autosnap preserves
+passing checkpoints along the way.
+
+After you manually commit work, use:
+
+```bash
+autosnap pending --explain
+```
+
+The status `exact` means the checkpoint tree matches the current branch tip
+exactly. In the normal flow, the latest relevant checkpoint showing as `exact`
+means your manual commit has integrated that checkpoint's tree.
+
+Other statuses can indicate checkpoints that still contain unapplied, conflicting,
+or older variant changes.
+
+## Inspect Checkpoints
+
+```bash
+autosnap list
+autosnap show last
+autosnap show --name-only last
+```
+
+Use `list` to see checkpoints and `show` to inspect one checkpoint's metadata and
+patch.
+
+Checkpoint selectors include:
+
+- `last`
+- `last-N`
+- `first`
+- `first+N`
+- an explicit `refs/autosnapshots/...` ref
+- a checkpoint commit hash
+
+Timestamp-only selectors are not accepted.
+
+## Salvage Selected Changes
+
+Sometimes a checkpoint passed the configured check but still contains a change
+you later decide you do not want. In that case, first get your current worktree
+clean, then inspect the checkpoint range:
+
+```bash
+git status
+autosnap list
+autosnap show last-1
+```
+
+To apply one checkpoint's incremental patch:
+
+```bash
+autosnap pick last-1
+```
+
+To turn a useful checkpoint into a normal branch commit:
+
+```bash
+autosnap promote last-1
+```
+
+`pick` and `promote` are secondary recovery tools. The primary path is still to
+make normal Git commits yourself as work becomes ready.
+
+## Restore A Checkpoint
+
+```bash
+autosnap restore last
+```
+
+`restore` applies checkpoint changes into the worktree and index without moving
+`HEAD`. It is useful for recovery, but it is not the normal way to integrate
+routine work.
+
+By default, `restore` refuses to run unless the worktree and index are clean.

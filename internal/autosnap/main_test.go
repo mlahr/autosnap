@@ -119,6 +119,38 @@ func TestRootCommandIncludesCheckpointCommand(t *testing.T) {
 	t.Fatalf("expected root command to include checkpoint")
 }
 
+func TestRootCommandIncludesDocsCommand(t *testing.T) {
+	root := NewRootCommand()
+	for _, command := range root.Commands() {
+		if command.Name() == "docs" {
+			return
+		}
+	}
+	t.Fatalf("expected root command to include docs")
+}
+
+func TestDocsCommandShowsInstalledDocumentationLocations(t *testing.T) {
+	buf := &bytes.Buffer{}
+	root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+	root.AddCommand(newDocsCommand())
+	root.SetOut(buf)
+	root.SetArgs([]string{"docs"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("docs command failed: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{
+		"man autosnap",
+		"man autosnap-<command>",
+		"/usr/share/doc/autosnap/",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected docs output to contain %q, got %q", want, out)
+		}
+	}
+}
+
 func TestStateFilePathUsesAbsoluteGitDir(t *testing.T) {
 	requireIntegration(t)
 	repo := createTestRepo(t)
@@ -1411,7 +1443,7 @@ func TestConfigInitAndShowCommands(t *testing.T) {
 		for _, want := range []string{
 			"path: " + expectedConfigPath,
 			"exists: true",
-			"check: npm test",
+			"check: make test",
 			"commit_mode: checkpoint",
 			"log_max_bytes: 10485760",
 			"watch.mode: recursive",

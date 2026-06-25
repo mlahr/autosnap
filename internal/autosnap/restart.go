@@ -23,7 +23,7 @@ func newRestartCommand() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "restart",
-		Short: "Restart the background autosnap watcher",
+		Short: "Restart the autosnap daemon",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
 			repoRoot, _, _, err := detectRepository(ctx)

@@ -1,0 +1,42 @@
+.nh
+.TH "AUTOSNAP" "1" "Jun 2026" "autosnap" "autosnap manual"
+
+.SH NAME
+autosnap-checkpoint - Create a checkpoint immediately
+
+
+.SH SYNOPSIS
+\fBautosnap checkpoint [flags]\fP
+
+
+.SH DESCRIPTION
+Create a checkpoint immediately
+
+
+.SH OPTIONS
+\fB--check\fP=""
+	Shell command to run before checkpointing
+
+.PP
+\fB--commit-mode\fP="checkpoint"
+	Commit target: checkpoint, direct, sync
+
+.PP
+\fB-h\fP, \fB--help\fP[=false]
+	help for checkpoint
+
+.PP
+\fB--msg-source-cmd\fP=""
+	Shell command that returns the checkpoint commit message (multiline supported)
+
+.PP
+\fB--snapshot-mode\fP="both"
+	Snapshot source: both, staged, working
+
+.PP
+\fB--timeout\fP=0s
+	Maximum time to wait for another checkpoint operation to finish (0 waits indefinitely)
+
+
+.SH SEE ALSO
+\fBautosnap(1)\fP

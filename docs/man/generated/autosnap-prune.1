@@ -1,0 +1,46 @@
+.nh
+.TH "AUTOSNAP" "1" "Jun 2026" "autosnap" "autosnap manual"
+
+.SH NAME
+autosnap-prune - Prune old autosnap checkpoints
+
+
+.SH SYNOPSIS
+\fBautosnap prune [flags]\fP
+
+
+.SH DESCRIPTION
+Prune old autosnap checkpoints
+
+
+.SH OPTIONS
+\fB--all-branches\fP[=false]
+	Prune checkpoints for all branches
+
+.PP
+\fB--apply\fP[=false]
+	Delete matching checkpoint refs
+
+.PP
+\fB--branch\fP=""
+	Prune checkpoints for a specific branch
+
+.PP
+\fB--current-branch\fP[=false]
+	Prune checkpoints for the current branch
+
+.PP
+\fB-h\fP, \fB--help\fP[=false]
+	help for prune
+
+.PP
+\fB--keep\fP=-1
+	Keep the newest N checkpoints per branch
+
+.PP
+\fB--older-than\fP=""
+	Prune checkpoints older than a duration such as 24h or 7d
+
+
+.SH SEE ALSO
+\fBautosnap(1)\fP

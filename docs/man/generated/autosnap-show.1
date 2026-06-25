@@ -1,0 +1,57 @@
+.nh
+.TH "AUTOSNAP" "1" "Jun 2026" "autosnap" "autosnap manual"
+
+.SH NAME
+autosnap-show - Show checkpoint details
+
+
+.SH SYNOPSIS
+\fBautosnap show  [flags]\fP
+
+
+.SH DESCRIPTION
+Show checkpoint metadata and the diff for a checkpoint.
+
+.PP
+The checkpoint argument can be an explicit autosnap ref, a checkpoint commit hash,
+or one of these current-branch history selectors:
+
+.PP
+first
+  first+N
+  last
+  last-N
+
+.PP
+Examples: first+1 selects the second checkpoint. last-1 selects the checkpoint
+immediately before the latest checkpoint.
+
+
+.SH OPTIONS
+\fB--color\fP="auto"
+	Color output: auto, always, never
+
+.PP
+\fB--full\fP[=false]
+	Show full checkpoint diff (default)
+
+.PP
+\fB-h\fP, \fB--help\fP[=false]
+	help for show
+
+.PP
+\fB--name-only\fP[=false]
+	Show only changed file names
+
+
+.SH EXAMPLE
+.EX
+autosnap show last
+autosnap show last-1
+autosnap show first+1
+autosnap show --name-only refs/autosnapshots/main/20260605T120000Z
+.EE
+
+
+.SH SEE ALSO
+\fBautosnap(1)\fP

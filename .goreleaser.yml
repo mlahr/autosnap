@@ -39,6 +39,13 @@ nfpms:
     description: "Local checkpointing for Git worktrees."
     homepage: "https://github.com/mlahr/autosnap"
     bindir: /usr/bin
+    contents:
+      - src: packaging/deb/usr/share/man/man1
+        dst: /usr/share/man/man1
+        type: tree
+      - src: packaging/deb/usr/share/doc/autosnap
+        dst: /usr/share/doc/autosnap
+        type: tree
 
 release:
   github:

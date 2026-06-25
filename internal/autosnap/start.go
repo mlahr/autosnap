@@ -32,7 +32,7 @@ func newStartCommand() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "start",
-		Short: "Start autosnap watcher and checkpoint on idle passing checks",
+		Short: "Start the autosnap daemon and checkpoint on idle passing checks",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			repoRoot, branchDisplay, branchRef, err := detectRepository(context.Background())
 			if err != nil {

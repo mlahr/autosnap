@@ -1,0 +1,54 @@
+.nh
+.TH "AUTOSNAP" "1" "Jun 2026" "autosnap" "autosnap manual"
+
+.SH NAME
+autosnap-restart - Restart the autosnap daemon
+
+
+.SH SYNOPSIS
+\fBautosnap restart [flags]\fP
+
+
+.SH DESCRIPTION
+Restart the autosnap daemon
+
+
+.SH OPTIONS
+\fB--check\fP=""
+	Shell command to run after idle
+
+.PP
+\fB--commit-mode\fP="checkpoint"
+	Commit target: checkpoint, direct, sync
+
+.PP
+\fB-h\fP, \fB--help\fP[=false]
+	help for restart
+
+.PP
+\fB--idle\fP=60
+	Seconds without changes before running the check
+
+.PP
+\fB--log-max-bytes\fP=10485760
+	Maximum autosnap daemon log size in bytes
+
+.PP
+\fB--msg-source-cmd\fP=""
+	Shell command that returns the checkpoint commit message (multiline supported)
+
+.PP
+\fB--poll-interval\fP=5s
+	Polling interval for poll or auto watch mode
+
+.PP
+\fB--snapshot-mode\fP="both"
+	Snapshot source: both, staged, working
+
+.PP
+\fB--watch-mode\fP="recursive"
+	Watch strategy: recursive, poll, auto
+
+
+.SH SEE ALSO
+\fBautosnap(1)\fP

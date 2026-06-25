@@ -1,0 +1,111 @@
+.TH AUTOSNAP 1 "2026-06-25" "autosnap" "autosnap manual"
+.SH NAME
+autosnap \- local checkpointing for Git worktrees
+.SH SYNOPSIS
+.B autosnap
+.RI <command>
+.RI [flags]
+.SH DESCRIPTION
+.B autosnap
+creates local, check-gated Git checkpoints while you work. It is a safety net
+between intentional Git commits, not a replacement for normal commits.
+.PP
+By default, autosnap stores passing checkpoints as local Git refs under
+.BR refs/autosnapshots/ .
+It does not commit to the active branch, does not push, and does not overwrite
+work during normal daemon operation.
+.SH QUICK START
+Run autosnap inside the Git worktree you want to protect:
+.PP
+.nf
+autosnap config init
+.fi
+.PP
+Edit
+.B .autosnap.toml
+and set the check command for your project:
+.PP
+.nf
+check = "make test"
+idle_seconds = 60
+snapshot_mode = "both"
+commit_mode = "checkpoint"
+.fi
+.PP
+Then start the daemon:
+.PP
+.nf
+autosnap start
+autosnap status
+.fi
+.PP
+After editing
+.BR .autosnap.toml ,
+restart the daemon:
+.PP
+.nf
+autosnap restart
+.fi
+.SH NORMAL WORKFLOW
+Leave autosnap running while you work. Make normal Git commits yourself when
+the work is ready. Use:
+.PP
+.nf
+autosnap pending --explain
+.fi
+.PP
+to see whether checkpoints have been integrated by your manual commits. The
+status
+.B exact
+means the checkpoint tree matches the current branch tip exactly.
+.SH SAFETY MODEL
+In default checkpoint mode, autosnap does not commit to the active branch and
+does not push. Checkpoints are local refs in:
+.PP
+.nf
+refs/autosnapshots/<branch>/<timestamp>
+.fi
+.PP
+Commands such as
+.BR pick ,
+.BR restore ,
+and
+.B promote
+are explicit recovery commands. They may modify the worktree or branch and
+refuse to run on a dirty worktree and index unless
+.B --force
+is passed.
+.SH DOCUMENTATION
+Installed Markdown documentation is available under:
+.PP
+.nf
+/usr/share/doc/autosnap/
+.fi
+.PP
+To locate installed documentation, run:
+.PP
+.nf
+autosnap docs
+.fi
+.SH COMMANDS
+Common commands:
+.PP
+.nf
+autosnap config init
+autosnap start
+autosnap status
+autosnap logs
+autosnap pending
+autosnap list
+autosnap show <checkpoint>
+autosnap pick <checkpoint>
+autosnap restore <checkpoint>
+autosnap promote <checkpoint>
+autosnap prune
+.fi
+.PP
+See
+.BR autosnap-<command> (1)
+for generated subcommand reference pages.
+.SH SEE ALSO
+.BR git (1)
