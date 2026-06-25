@@ -6,11 +6,25 @@ autosnap-list - List checkpoints
 
 
 .SH SYNOPSIS
-\fBautosnap list [flags]\fP
+\fBautosnap list [checkpoint-or-range] [flags]\fP
 
 
 .SH DESCRIPTION
-List checkpoints
+List checkpoints.
+
+.PP
+A range A..B lists checkpoints from A through B, inclusive. Ranges are
+inclusive autosnap checkpoint intervals, not general Git revision ranges.
+
+.PP
+The checkpoint argument can be an explicit autosnap ref, a checkpoint commit hash,
+or one of these current-branch history selectors:
+
+.PP
+first
+  first+N
+  last
+  last-N
 
 
 .SH OPTIONS
@@ -22,8 +36,20 @@ List checkpoints
 	List checkpoints for a specific branch
 
 .PP
+\fB--format\fP="text"
+	Output format: text, jsonl
+
+.PP
 \fB-h\fP, \fB--help\fP[=false]
 	help for list
+
+.PP
+\fB--note-ref\fP=""
+	Git notes ref for checkpoint notes
+
+.PP
+\fB--notes-json\fP[=false]
+	Include checkpoint git notes decoded as JSON (requires --format jsonl)
 
 
 .SH SEE ALSO

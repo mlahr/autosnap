@@ -3,6 +3,7 @@ package autosnap
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path"
@@ -2639,6 +2640,182 @@ func TestListCommandRejectsMalformedRange(t *testing.T) {
 	})
 }
 
+func TestListCommandJSONLOutput(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		ref := createAutosnapTestCommitRef(t, repo, branchRef, "20260101T000000Z", "jsonl checkpoint")
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newListCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"list", "--format", "jsonl"})
+
+		if err := root.Execute(); err != nil {
+			t.Fatalf("list jsonl command failed: %v", err)
+		}
+
+		rows := parseJSONLRows(t, buf.String())
+		if len(rows) != 1 {
+			t.Fatalf("expected one JSONL row, got %d: %q", len(rows), buf.String())
+		}
+		row := rows[0]
+		if row["ref"] != ref || row["branch"] != branchRef || row["summary"] != "jsonl checkpoint" {
+			t.Fatalf("unexpected JSONL row: %#v", row)
+		}
+		if row["timestamp"] != formatCheckpointTimestampForList("20260101T000000Z") {
+			t.Fatalf("expected formatted timestamp, got %#v", row["timestamp"])
+		}
+	})
+}
+
+func TestListCommandJSONLOutputIncludesDecodedJSONNote(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		ref := createAutosnapTestCommitRef(t, repo, branchRef, "20260101T000000Z", "noted checkpoint")
+		addGitNote(t, repo, "refs/notes/diffcog", ref, `{"risk":"low","files":["a.go"]}`)
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newListCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"list", "--format", "jsonl", "--notes-json", "--note-ref", "refs/notes/diffcog"})
+
+		if err := root.Execute(); err != nil {
+			t.Fatalf("list jsonl notes command failed: %v", err)
+		}
+
+		rows := parseJSONLRows(t, buf.String())
+		if len(rows) != 1 {
+			t.Fatalf("expected one JSONL row, got %d: %q", len(rows), buf.String())
+		}
+		note, ok := rows[0]["note"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected decoded note object, got %#v", rows[0]["note"])
+		}
+		if note["risk"] != "low" {
+			t.Fatalf("expected decoded note risk, got %#v", note)
+		}
+		files, ok := note["files"].([]any)
+		if !ok || len(files) != 1 || files[0] != "a.go" {
+			t.Fatalf("expected decoded note files, got %#v", note["files"])
+		}
+		if rows[0]["noteRef"] != "refs/notes/diffcog" {
+			t.Fatalf("expected noteRef in row, got %#v", rows[0])
+		}
+	})
+}
+
+func TestListCommandJSONLNotesUseConfiguredNoteRef(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		if err := os.WriteFile(autosnapConfigPath(repo), []byte("note_ref = \"refs/notes/configured\"\n"), 0o644); err != nil {
+			t.Fatalf("write config failed: %v", err)
+		}
+		ref := createAutosnapTestCommitRef(t, repo, branchRef, "20260101T000000Z", "configured note checkpoint")
+		addGitNote(t, repo, "refs/notes/configured", ref, `{"source":"config"}`)
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newListCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"list", "--format", "jsonl", "--notes-json"})
+
+		if err := root.Execute(); err != nil {
+			t.Fatalf("list configured note ref failed: %v", err)
+		}
+
+		rows := parseJSONLRows(t, buf.String())
+		if len(rows) != 1 {
+			t.Fatalf("expected one JSONL row, got %d: %q", len(rows), buf.String())
+		}
+		if rows[0]["noteRef"] != "refs/notes/configured" {
+			t.Fatalf("expected configured noteRef, got %#v", rows[0])
+		}
+	})
+}
+
+func TestListCommandJSONLNotesReportMissingAndInvalidNotes(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		missingRef := createAutosnapTestCommitRef(t, repo, branchRef, "20260101T000000Z", "missing note checkpoint")
+		invalidRef := createAutosnapTestCommitRef(t, repo, branchRef, "20260101T000001Z", "invalid note checkpoint")
+		addGitNote(t, repo, "refs/notes/diffcog", invalidRef, `{not json`)
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newListCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"list", "--format", "jsonl", "--notes-json", "--note-ref", "refs/notes/diffcog"})
+
+		if err := root.Execute(); err != nil {
+			t.Fatalf("list missing/invalid notes failed: %v", err)
+		}
+
+		rows := parseJSONLRows(t, buf.String())
+		if len(rows) != 2 {
+			t.Fatalf("expected two JSONL rows, got %d: %q", len(rows), buf.String())
+		}
+		byRef := jsonRowsByRef(rows)
+		if byRef[missingRef]["note"] != nil {
+			t.Fatalf("expected missing note to be null, got %#v", byRef[missingRef])
+		}
+		if _, ok := byRef[missingRef]["noteError"]; ok {
+			t.Fatalf("expected missing note not to set noteError, got %#v", byRef[missingRef])
+		}
+		if byRef[invalidRef]["note"] != nil {
+			t.Fatalf("expected invalid note to be null, got %#v", byRef[invalidRef])
+		}
+		if noteError, ok := byRef[invalidRef]["noteError"].(string); !ok || !strings.Contains(noteError, "invalid JSON note") {
+			t.Fatalf("expected invalid noteError, got %#v", byRef[invalidRef])
+		}
+	})
+}
+
+func TestListCommandJSONLNotesValidateFlags(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newListCommand())
+		root.SetArgs([]string{"list", "--notes-json", "--note-ref", "refs/notes/diffcog"})
+		if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "--format jsonl") {
+			t.Fatalf("expected --notes-json format error, got %v", err)
+		}
+
+		root = &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newListCommand())
+		root.SetArgs([]string{"list", "--format", "jsonl", "--notes-json"})
+		if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "--note-ref") {
+			t.Fatalf("expected missing note ref error, got %v", err)
+		}
+	})
+}
+
 func TestListCommandRejectsMultipleScopes(t *testing.T) {
 	requireIntegration(t)
 	repo := createTestRepo(t)
@@ -2766,6 +2943,87 @@ func TestPendingCommandCurrentBranch(t *testing.T) {
 		output := buf.String()
 		if !strings.Contains(output, pendingRef) || !strings.Contains(output, "pending checkpoint") {
 			t.Fatalf("expected pending checkpoint output, got %q", output)
+		}
+	})
+}
+
+func TestPendingCommandJSONLOutput(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		if _, err := os.Create(filepath.Join(repo, "jsonl-pending.txt")); err != nil {
+			t.Fatalf("write file failed: %v", err)
+		}
+		runGit(t, repo, "add", "jsonl-pending.txt")
+		runGit(t, repo, "commit", "-m", "jsonl pending base")
+		pendingRef := createAutosnapTestCommitRef(t, repo, branchRef, "20200102T000000Z", "jsonl pending checkpoint")
+		initial := runGitOutput(t, repo, "rev-parse", "HEAD~1")
+		runGit(t, repo, "reset", "--hard", initial)
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newPendingCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"pending", "--format", "jsonl"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("pending jsonl command failed: %v", err)
+		}
+
+		rows := parseJSONLRows(t, buf.String())
+		if len(rows) != 1 {
+			t.Fatalf("expected one JSONL row, got %d: %q", len(rows), buf.String())
+		}
+		if rows[0]["ref"] != pendingRef || rows[0]["summary"] != "jsonl pending checkpoint" {
+			t.Fatalf("unexpected pending JSONL row: %#v", rows[0])
+		}
+		if _, ok := rows[0]["pendingStatus"]; ok {
+			t.Fatalf("expected normal pending JSONL not to include pendingStatus, got %#v", rows[0])
+		}
+	})
+}
+
+func TestPendingExplainCommandJSONLOutputIncludesClassification(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		if err := os.WriteFile(filepath.Join(repo, "jsonl-explain.txt"), []byte("one\n"), 0o644); err != nil {
+			t.Fatalf("write checkpoint file failed: %v", err)
+		}
+		runGit(t, repo, "add", "jsonl-explain.txt")
+		ref := createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20200104T000000Z", "jsonl explain checkpoint")
+		addGitNote(t, repo, "refs/notes/diffcog", ref, `{"kind":"explain"}`)
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newPendingCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"pending", "--explain", "--format", "jsonl", "--notes-json", "--note-ref", "refs/notes/diffcog"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("pending explain jsonl command failed: %v", err)
+		}
+
+		rows := parseJSONLRows(t, buf.String())
+		if len(rows) != 1 {
+			t.Fatalf("expected one JSONL row, got %d: %q", len(rows), buf.String())
+		}
+		if rows[0]["ref"] != ref || rows[0]["pendingStatus"] == "" {
+			t.Fatalf("expected explain JSONL classification, got %#v", rows[0])
+		}
+		note, ok := rows[0]["note"].(map[string]any)
+		if !ok || note["kind"] != "explain" {
+			t.Fatalf("expected decoded explain note, got %#v", rows[0]["note"])
 		}
 	})
 }
@@ -6129,6 +6387,41 @@ func createAutosnapTestCommitRefFromIndex(t *testing.T, repoRoot, branchRef, tim
 	ref := snapshotRef(branchRef, timestamp)
 	runGit(t, repoRoot, "update-ref", ref, commit)
 	return ref
+}
+
+func addGitNote(t *testing.T, repoRoot, noteRef, object, note string) {
+	t.Helper()
+	if _, err := runGitCommandWithInput(context.Background(), repoRoot, nil, note, "notes", "--ref", noteRef, "add", "-f", "-F", "-", object); err != nil {
+		t.Fatalf("add git note failed: %v", err)
+	}
+}
+
+func parseJSONLRows(t *testing.T, output string) []map[string]any {
+	t.Helper()
+	trimmed := strings.TrimSpace(output)
+	if trimmed == "" {
+		return nil
+	}
+
+	lines := strings.Split(trimmed, "\n")
+	rows := make([]map[string]any, 0, len(lines))
+	for _, line := range lines {
+		var row map[string]any
+		if err := json.Unmarshal([]byte(line), &row); err != nil {
+			t.Fatalf("parse JSONL line %q failed: %v", line, err)
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+func jsonRowsByRef(rows []map[string]any) map[string]map[string]any {
+	byRef := map[string]map[string]any{}
+	for _, row := range rows {
+		ref, _ := row["ref"].(string)
+		byRef[ref] = row
+	}
+	return byRef
 }
 
 func gitRefExists(t *testing.T, repoRoot, ref string) bool {

@@ -30,12 +30,24 @@ List checkpoints after the latest checkpoint matching branch tip
 	Show integration status for all scanned checkpoints
 
 .PP
+\fB--format\fP="text"
+	Output format: text, jsonl
+
+.PP
 \fB-h\fP, \fB--help\fP[=false]
 	help for pending
 
 .PP
 \fB--limit\fP=0
 	Maximum number of newest checkpoints to scan (0 means unlimited)
+
+.PP
+\fB--note-ref\fP=""
+	Git notes ref for checkpoint notes
+
+.PP
+\fB--notes-json\fP[=false]
+	Include checkpoint git notes decoded as JSON (requires --format jsonl)
 
 .PP
 \fB--since\fP=""

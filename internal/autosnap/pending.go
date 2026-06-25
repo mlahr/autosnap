@@ -19,7 +19,10 @@ func newPendingCommand() *cobra.Command {
 		branch      string
 		debug       bool
 		explain     bool
+		format      string
 		limit       int
+		notesJSON   bool
+		noteRef     string
 		since       string
 	)
 
@@ -31,12 +34,27 @@ func newPendingCommand() *cobra.Command {
 			out := cmd.OutOrStdout()
 			debugLog := newPendingDebugLogger(cmd.ErrOrStderr(), debug)
 			ctx := context.Background()
+			normalizedFormat, err := normalizeOutputFormat(format)
+			if err != nil {
+				return err
+			}
+			if err := validateJSONLOutputOptions(normalizedFormat, notesJSON); err != nil {
+				return err
+			}
+
 			debugLog.Printf("detecting repository")
 			repoRoot, _, branchRef, err := detectRepository(ctx)
 			if err != nil {
 				return err
 			}
 			debugLog.Printf("repository detected root=%s current_branch=%s", repoRoot, branchRef)
+			resolvedNoteRef := ""
+			if notesJSON {
+				resolvedNoteRef, err = resolveOutputNoteRef(repoRoot, noteRef)
+				if err != nil {
+					return err
+				}
+			}
 
 			scopeCount := 0
 			if strings.TrimSpace(branch) != "" {
@@ -77,6 +95,12 @@ func newPendingCommand() *cobra.Command {
 			debugLog.Printf("selected checkpoint refs count=%d branches=%d since=%q limit=%d", len(refs), countCheckpointBranches(refs), strings.TrimSpace(since), limit)
 
 			if explain {
+				if normalizedFormat == outputFormatJSONL {
+					return writePendingExplainJSONL(ctx, repoRoot, refs, branch, allBranches, out, checkpointJSONLOptions{
+						IncludeNotes: notesJSON,
+						NoteRef:      resolvedNoteRef,
+					})
+				}
 				debugLog.Printf("streaming explain checkpoints count=%d mode=explain", len(refs))
 				err := streamExplainPendingCheckpointRefs(ctx, repoRoot, refs, branch, allBranches, out, debugLog)
 				if err != nil {
@@ -98,6 +122,12 @@ func newPendingCommand() *cobra.Command {
 			}
 			debugLog.Printf("loaded checkpoint metadata count=%d mode=pending", len(pending))
 
+			if normalizedFormat == outputFormatJSONL {
+				return writeCheckpointsJSONL(ctx, repoRoot, out, pending, checkpointJSONLOptions{
+					IncludeNotes: notesJSON,
+					NoteRef:      resolvedNoteRef,
+				})
+			}
 			if len(pending) == 0 {
 				if allBranches {
 					fmt.Fprintln(out, "no pending checkpoints")
@@ -125,7 +155,10 @@ func newPendingCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&allBranches, "all", false, "List pending checkpoints for all branches")
 	cmd.Flags().BoolVar(&debug, "debug", false, "Show progress diagnostics on stderr")
 	cmd.Flags().BoolVar(&explain, "explain", false, "Show integration status for all scanned checkpoints")
+	cmd.Flags().StringVar(&format, "format", outputFormatText, "Output format: text, jsonl")
 	cmd.Flags().IntVar(&limit, "limit", 0, "Maximum number of newest checkpoints to scan (0 means unlimited)")
+	cmd.Flags().BoolVar(&notesJSON, "notes-json", false, "Include checkpoint git notes decoded as JSON (requires --format jsonl)")
+	cmd.Flags().StringVar(&noteRef, "note-ref", "", "Git notes ref for checkpoint notes")
 	cmd.Flags().StringVar(&since, "since", "", "Scan checkpoints since a duration or commit ID")
 	return cmd
 }
@@ -500,6 +533,31 @@ func printPendingExplainRow(out io.Writer, cp checkpointInfo, status checkpointP
 		return
 	}
 	fmt.Fprintf(out, "%s %s %s %s %s\n", displayTimestamp, status, cp.Ref, cp.Commit, cp.Summary)
+}
+
+func writePendingExplainJSONL(ctx context.Context, repoRoot string, refs []checkpointRefInfo, branch string, allBranches bool, out io.Writer, opts checkpointJSONLOptions) error {
+	if len(refs) == 0 {
+		return nil
+	}
+
+	classified, err := classifyPendingCheckpointRefs(ctx, repoRoot, refs, branch, allBranches)
+	if err != nil {
+		return err
+	}
+	opts.PendingStatus = map[string]checkpointPendingStatus{}
+	for _, checkpoint := range classified {
+		status := checkpoint.Status
+		if status == "" {
+			status = checkpointStatusPending
+		}
+		opts.PendingStatus[checkpoint.Ref] = status
+	}
+
+	checkpoints, err := listCheckpointsFromRefs(ctx, repoRoot, refs)
+	if err != nil {
+		return err
+	}
+	return writeCheckpointsJSONL(ctx, repoRoot, out, checkpoints, opts)
 }
 
 func flushPendingOutput(out io.Writer) {

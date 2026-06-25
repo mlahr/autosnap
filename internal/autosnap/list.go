@@ -12,6 +12,9 @@ func newListCommand() *cobra.Command {
 	var (
 		allBranches bool
 		branch      string
+		format      string
+		notesJSON   bool
+		noteRef     string
 	)
 
 	cmd := &cobra.Command{
@@ -33,9 +36,24 @@ or one of these current-branch history selectors:
 		RunE: func(cmd *cobra.Command, args []string) error {
 			out := cmd.OutOrStdout()
 			ctx := context.Background()
+			normalizedFormat, err := normalizeOutputFormat(format)
+			if err != nil {
+				return err
+			}
+			if err := validateJSONLOutputOptions(normalizedFormat, notesJSON); err != nil {
+				return err
+			}
+
 			repoRoot, _, branchRef, err := detectRepository(ctx)
 			if err != nil {
 				return err
+			}
+			resolvedNoteRef := ""
+			if notesJSON {
+				resolvedNoteRef, err = resolveOutputNoteRef(repoRoot, noteRef)
+				if err != nil {
+					return err
+				}
 			}
 
 			if strings.TrimSpace(branch) != "" && allBranches {
@@ -73,6 +91,15 @@ or one of these current-branch history selectors:
 			if err != nil {
 				return err
 			}
+			if normalizedFormat == outputFormatJSONL {
+				if len(checkpoints) == 0 {
+					return nil
+				}
+				return writeCheckpointsJSONL(ctx, repoRoot, out, checkpoints, checkpointJSONLOptions{
+					IncludeNotes: notesJSON,
+					NoteRef:      resolvedNoteRef,
+				})
+			}
 			if len(checkpoints) == 0 {
 				switch {
 				case strings.TrimSpace(branch) != "":
@@ -100,6 +127,9 @@ or one of these current-branch history selectors:
 
 	cmd.Flags().StringVar(&branch, "branch", "", "List checkpoints for a specific branch")
 	cmd.Flags().BoolVar(&allBranches, "all", false, "List checkpoints for all branches")
+	cmd.Flags().StringVar(&format, "format", outputFormatText, "Output format: text, jsonl")
+	cmd.Flags().BoolVar(&notesJSON, "notes-json", false, "Include checkpoint git notes decoded as JSON (requires --format jsonl)")
+	cmd.Flags().StringVar(&noteRef, "note-ref", "", "Git notes ref for checkpoint notes")
 	return cmd
 }
 
