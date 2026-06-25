@@ -20,9 +20,12 @@ func newShowCommand() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "show <checkpoint>",
+		Use:   "show <checkpoint-or-range>",
 		Short: "Show checkpoint details",
 		Long: strings.TrimSpace(`Show checkpoint metadata and the diff for a checkpoint.
+
+A range A..B shows the net patch from the diff base of A through B. Ranges are
+inclusive autosnap checkpoint intervals, not general Git revision ranges.
 
 The checkpoint argument can be an explicit autosnap ref, a checkpoint commit hash,
 or one of these current-branch history selectors:
@@ -37,6 +40,7 @@ immediately before the latest checkpoint.`),
 		Example: strings.TrimSpace(`autosnap show last
 autosnap show last-1
 autosnap show first+1
+autosnap show first+1..last
 autosnap show --name-only refs/autosnapshots/main/20260605T120000Z`),
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -47,22 +51,41 @@ autosnap show --name-only refs/autosnapshots/main/20260605T120000Z`),
 				return err
 			}
 
-			meta, err := resolveShowCheckpointRefMetadata(ctx, repoRoot, branchRef, args[0])
+			_, _, ranged, err := splitCheckpointRangeArg(args[0])
 			if err != nil {
 				return err
 			}
+			patchRange, err := resolveCheckpointPatchRange(ctx, repoRoot, branchRef, args[0])
+			if err != nil {
+				return err
+			}
+			meta := patchRange.End
 
 			if !gitDiff {
-				fmt.Fprintf(out, "checkpoint: %s\n", meta.Ref)
-				fmt.Fprintf(out, "commit: %s\n", meta.Commit)
-				fmt.Fprintf(out, "timestamp: %s\n", formatCheckpointTimestamp(meta.Timestamp))
+				if ranged {
+					fmt.Fprintf(out, "checkpoint range: %s..%s\n", patchRange.Start.Ref, patchRange.End.Ref)
+					fmt.Fprintf(out, "start checkpoint: %s\n", patchRange.Start.Ref)
+					fmt.Fprintf(out, "end checkpoint: %s\n", patchRange.End.Ref)
+					fmt.Fprintf(out, "end commit: %s\n", meta.Commit)
+					fmt.Fprintf(out, "end timestamp: %s\n", formatCheckpointTimestamp(meta.Timestamp))
+				} else {
+					fmt.Fprintf(out, "checkpoint: %s\n", meta.Ref)
+					fmt.Fprintf(out, "commit: %s\n", meta.Commit)
+					fmt.Fprintf(out, "timestamp: %s\n", formatCheckpointTimestamp(meta.Timestamp))
+				}
 
 				message, err := getCommitMessage(ctx, repoRoot, meta.Ref)
 				if err == nil && message != "" {
 					status, checkCmd := parseCheckpointMessage(message)
-					fmt.Fprintf(out, "status: %s\n", status)
+					statusLabel := "status"
+					checkLabel := "check"
+					if ranged {
+						statusLabel = "end status"
+						checkLabel = "end check"
+					}
+					fmt.Fprintf(out, "%s: %s\n", statusLabel, status)
 					if checkCmd != "" {
-						fmt.Fprintf(out, "check: %s\n", checkCmd)
+						fmt.Fprintf(out, "%s: %s\n", checkLabel, checkCmd)
 					}
 				}
 			}
@@ -72,16 +95,11 @@ autosnap show --name-only refs/autosnapshots/main/20260605T120000Z`),
 				return err
 			}
 
-			diffBase, err := resolveShowDiffBase(ctx, repoRoot, branchRef, meta.Ref, meta.Commit)
-			if err != nil {
-				return fmt.Errorf("failed to resolve show diff base for checkpoint %q: %w", meta.Ref, err)
-			}
-
 			showArgs := []string{colorArg}
 			if nameOnly {
 				showArgs = append(showArgs, "--name-only")
 			}
-			showArgs = append(showArgs, diffBase, meta.Commit)
+			showArgs = append(showArgs, patchRange.Base, meta.Commit)
 
 			showResult, err := runGitCommand(ctx, repoRoot, nil, append([]string{"diff"}, showArgs...)...)
 			if err != nil {

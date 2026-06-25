@@ -6,7 +6,7 @@ Remove a checkpoint's incremental patch
 
 ### Synopsis
 
-Remove the same patch displayed by autosnap show <checkpoint>.
+Remove the same patch displayed by autosnap show <checkpoint-or-range>.
 
 A range A..B removes the net patch from the diff base of A through B. Ranges
 are inclusive autosnap checkpoint intervals, not general Git revision ranges.

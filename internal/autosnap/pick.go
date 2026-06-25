@@ -19,7 +19,7 @@ func newPickCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "pick <checkpoint-or-range>",
 		Short: "Apply a checkpoint's incremental patch",
-		Long: strings.TrimSpace(`Apply the same patch displayed by autosnap show <checkpoint>.
+		Long: strings.TrimSpace(`Apply the same patch displayed by autosnap show <checkpoint-or-range>.
 
 A range A..B applies the net patch from the diff base of A through B. Ranges
 are inclusive autosnap checkpoint intervals, not general Git revision ranges.

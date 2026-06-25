@@ -6,7 +6,7 @@ Apply a checkpoint's incremental patch
 
 ### Synopsis
 
-Apply the same patch displayed by autosnap show <checkpoint>.
+Apply the same patch displayed by autosnap show <checkpoint-or-range>.
 
 A range A..B applies the net patch from the diff base of A through B. Ranges
 are inclusive autosnap checkpoint intervals, not general Git revision ranges.

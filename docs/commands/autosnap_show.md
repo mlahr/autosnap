@@ -8,6 +8,9 @@ Show checkpoint details
 
 Show checkpoint metadata and the diff for a checkpoint.
 
+A range A..B shows the net patch from the diff base of A through B. Ranges are
+inclusive autosnap checkpoint intervals, not general Git revision ranges.
+
 The checkpoint argument can be an explicit autosnap ref, a checkpoint commit hash,
 or one of these current-branch history selectors:
 
@@ -20,7 +23,7 @@ Examples: first+1 selects the second checkpoint. last-1 selects the checkpoint
 immediately before the latest checkpoint.
 
 ```
-autosnap show <checkpoint> [flags]
+autosnap show <checkpoint-or-range> [flags]
 ```
 
 ### Examples
@@ -29,6 +32,7 @@ autosnap show <checkpoint> [flags]
 autosnap show last
 autosnap show last-1
 autosnap show first+1
+autosnap show first+1..last
 autosnap show --name-only refs/autosnapshots/main/20260605T120000Z
 ```
 

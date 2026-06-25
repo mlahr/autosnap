@@ -4210,6 +4210,93 @@ func TestShowCommandGitDiffNameOnlyShowsExactGitDiffNameOnlyOutput(t *testing.T)
 	})
 }
 
+func TestShowCommandShowsInclusiveCheckpointRange(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		ref1, ref2, ref3 := createCheckpointRangeScenario(t, repo)
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newShowCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"show", "first+1..last"})
+
+		if err := root.Execute(); err != nil {
+			t.Fatalf("show checkpoint range failed: %v", err)
+		}
+
+		output := buf.String()
+		for _, want := range []string{
+			"checkpoint range: " + ref2 + ".." + ref3,
+			"start checkpoint: " + ref2,
+			"end checkpoint: " + ref3,
+			"end commit:",
+			"end status:",
+			"+good checkpoint 3",
+		} {
+			if !strings.Contains(output, want) {
+				t.Fatalf("expected range show output to contain %q, got: %q", want, output)
+			}
+		}
+		if strings.Contains(output, "bad checkpoint 2") {
+			t.Fatalf("expected range show to display net patch from %s through %s, got canceled intermediate content: %q", ref1, ref3, output)
+		}
+	})
+}
+
+func TestShowCommandGitDiffShowsExactGitDiffOutputForRange(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		ref1, _, ref3 := createCheckpointRangeScenario(t, repo)
+		commit3, err := resolveAutosnapRefToCommit(context.Background(), repo, ref3)
+		if err != nil {
+			t.Fatalf("resolve third checkpoint commit failed: %v", err)
+		}
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newShowCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"show", "--git-diff", "first+1..last"})
+
+		if err := root.Execute(); err != nil {
+			t.Fatalf("show --git-diff checkpoint range failed: %v", err)
+		}
+
+		output := buf.String()
+		want := runGitOutput(t, repo, "diff", "--no-color", ref1, commit3)
+		if strings.TrimSpace(output) != want {
+			t.Fatalf("expected exact git diff output for range\nwant:\n%s\n\ngot:\n%s", want, output)
+		}
+		for _, forbidden := range []string{"checkpoint range:", "start checkpoint:", "end checkpoint:", "end commit:", "end timestamp:", "end status:", "end check:"} {
+			if strings.Contains(output, forbidden) {
+				t.Fatalf("expected --git-diff range output without %q metadata, got: %q", forbidden, output)
+			}
+		}
+	})
+}
+
+func TestShowCommandRejectsMalformedRange(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		root := NewRootCommand()
+		root.SetArgs([]string{"show", "first..last..last"})
+
+		err := root.Execute()
+		if err == nil {
+			t.Fatalf("expected malformed checkpoint range to fail")
+		}
+		if !strings.Contains(err.Error(), "invalid checkpoint range") {
+			t.Fatalf("expected invalid checkpoint range error, got %v", err)
+		}
+	})
+}
+
 func TestShowCommandUsesPreviousCheckpointForDiffBase(t *testing.T) {
 	requireIntegration(t)
 	repo := createTestRepo(t)
