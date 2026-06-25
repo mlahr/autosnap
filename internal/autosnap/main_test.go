@@ -2698,6 +2698,258 @@ func TestPendingCommandDebugExplainWritesMetadataProgressToStderr(t *testing.T) 
 	})
 }
 
+func TestPendingCommandLimitAppliesBeforeClassification(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		if err := os.WriteFile(filepath.Join(repo, "one.txt"), []byte("one\n"), 0o644); err != nil {
+			t.Fatalf("write first checkpoint file failed: %v", err)
+		}
+		runGit(t, repo, "add", "one.txt")
+		oldRef := createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20220101T000000Z", "old limited checkpoint")
+
+		if err := os.WriteFile(filepath.Join(repo, "two.txt"), []byte("two\n"), 0o644); err != nil {
+			t.Fatalf("write second checkpoint file failed: %v", err)
+		}
+		runGit(t, repo, "add", "two.txt")
+		newRef := createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20220102T000000Z", "new limited checkpoint")
+		runGit(t, repo, "reset", "--hard", "HEAD")
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newPendingCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"pending", "--limit", "1"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("pending limit command failed: %v", err)
+		}
+
+		output := buf.String()
+		if !strings.Contains(output, newRef) || !strings.Contains(output, "new limited checkpoint") {
+			t.Fatalf("expected newest checkpoint in limited output, got %q", output)
+		}
+		if strings.Contains(output, oldRef) || strings.Contains(output, "old limited checkpoint") {
+			t.Fatalf("expected older checkpoint to be excluded by limit, got %q", output)
+		}
+	})
+}
+
+func TestPendingExplainCommandLimitPreservesOutputOrder(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		oldRef := createAutosnapTestCommitRef(t, repo, branchRef, "20220101T000000Z", "old explain checkpoint")
+		middleRef := createAutosnapTestCommitRef(t, repo, branchRef, "20220102T000000Z", "middle explain checkpoint")
+		newRef := createAutosnapTestCommitRef(t, repo, branchRef, "20220103T000000Z", "new explain checkpoint")
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newPendingCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"pending", "--explain", "--limit", "2"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("pending explain limit command failed: %v", err)
+		}
+
+		output := buf.String()
+		if strings.Contains(output, oldRef) || strings.Contains(output, "old explain checkpoint") {
+			t.Fatalf("expected oldest checkpoint to be excluded by limit, got %q", output)
+		}
+		middleIndex := strings.Index(output, middleRef)
+		newIndex := strings.Index(output, newRef)
+		if middleIndex < 0 || newIndex < 0 {
+			t.Fatalf("expected middle and newest checkpoints in output, got %q", output)
+		}
+		if middleIndex > newIndex {
+			t.Fatalf("expected limited explain output to remain oldest-to-newest, got %q", output)
+		}
+	})
+}
+
+func TestPendingCommandAllLimitIsGlobal(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		mainOld := createAutosnapTestCommitRef(t, repo, branchRef, "20220101T000000Z", "main old global limit")
+		mainNew := createAutosnapTestCommitRef(t, repo, branchRef, "20220103T000000Z", "main new global limit")
+		runGit(t, repo, "checkout", "-b", "feature/global-limit")
+		featureNew := createAutosnapTestCommitRef(t, repo, "feature/global-limit", "20220104T000000Z", "feature new global limit")
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newPendingCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"pending", "--all", "--explain", "--limit", "2"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("pending all explain limit command failed: %v", err)
+		}
+
+		output := buf.String()
+		if strings.Contains(output, mainOld) || strings.Contains(output, "main old global limit") {
+			t.Fatalf("expected global limit to exclude oldest checkpoint, got %q", output)
+		}
+		if !strings.Contains(output, mainNew) || !strings.Contains(output, featureNew) {
+			t.Fatalf("expected global limit to include two newest checkpoints, got %q", output)
+		}
+	})
+}
+
+func TestPendingCommandSinceDurationFiltersByCheckpointTimestamp(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		oldTimestamp := time.Now().UTC().Add(-10 * 24 * time.Hour).Format("20060102T150405Z")
+		newTimestamp := time.Now().UTC().Add(-1 * time.Hour).Format("20060102T150405Z")
+		oldRef := createAutosnapTestCommitRef(t, repo, branchRef, oldTimestamp, "old since duration")
+		newRef := createAutosnapTestCommitRef(t, repo, branchRef, newTimestamp, "new since duration")
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newPendingCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"pending", "--explain", "--since", "7d"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("pending since duration command failed: %v", err)
+		}
+
+		output := buf.String()
+		if strings.Contains(output, oldRef) || strings.Contains(output, "old since duration") {
+			t.Fatalf("expected old checkpoint to be excluded by since duration, got %q", output)
+		}
+		if !strings.Contains(output, newRef) || !strings.Contains(output, "new since duration") {
+			t.Fatalf("expected new checkpoint in since duration output, got %q", output)
+		}
+	})
+}
+
+func TestPendingCommandSinceCheckpointCommitUsesCheckpointTimestamp(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		oldRef := createAutosnapTestCommitRef(t, repo, branchRef, "20220101T000000Z", "old since checkpoint")
+		middleRef := createAutosnapTestCommitRef(t, repo, branchRef, "20220102T000000Z", "middle since checkpoint")
+		newRef := createAutosnapTestCommitRef(t, repo, branchRef, "20220103T000000Z", "new since checkpoint")
+		middleCommit := runGitOutput(t, repo, "rev-parse", middleRef)
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newPendingCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"pending", "--explain", "--since", middleCommit})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("pending since checkpoint command failed: %v", err)
+		}
+
+		output := buf.String()
+		if strings.Contains(output, oldRef) || strings.Contains(output, "old since checkpoint") {
+			t.Fatalf("expected older checkpoint to be excluded by checkpoint cutoff, got %q", output)
+		}
+		if !strings.Contains(output, middleRef) || !strings.Contains(output, newRef) {
+			t.Fatalf("expected cutoff checkpoint and newer checkpoint, got %q", output)
+		}
+	})
+}
+
+func TestPendingCommandSinceBranchCommitUsesAncestorOrSelf(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		if err := os.WriteFile(filepath.Join(repo, "old.txt"), []byte("old\n"), 0o644); err != nil {
+			t.Fatalf("write old checkpoint file failed: %v", err)
+		}
+		runGit(t, repo, "add", "old.txt")
+		oldRef := createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20220101T000000Z", "old since branch commit")
+		runGit(t, repo, "reset", "--hard", "HEAD")
+
+		if err := os.WriteFile(filepath.Join(repo, "base.txt"), []byte("base\n"), 0o644); err != nil {
+			t.Fatalf("write branch base file failed: %v", err)
+		}
+		runGit(t, repo, "add", "base.txt")
+		runGit(t, repo, "commit", "-m", "branch since base")
+		baseCommit := runGitOutput(t, repo, "rev-parse", "HEAD")
+
+		if err := os.WriteFile(filepath.Join(repo, "new.txt"), []byte("new\n"), 0o644); err != nil {
+			t.Fatalf("write new checkpoint file failed: %v", err)
+		}
+		runGit(t, repo, "add", "new.txt")
+		newRef := createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20220102T000000Z", "new since branch commit")
+		runGit(t, repo, "reset", "--hard", "HEAD")
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newPendingCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"pending", "--explain", "--since", baseCommit})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("pending since branch commit command failed: %v", err)
+		}
+
+		output := buf.String()
+		if strings.Contains(output, oldRef) || strings.Contains(output, "old since branch commit") {
+			t.Fatalf("expected checkpoint before branch commit to be excluded, got %q", output)
+		}
+		if !strings.Contains(output, newRef) || !strings.Contains(output, "new since branch commit") {
+			t.Fatalf("expected descendant checkpoint in output, got %q", output)
+		}
+	})
+}
+
+func TestPendingCommandRejectsInvalidLimitAndSince(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newPendingCommand())
+		root.SetArgs([]string{"pending", "--limit", "-1"})
+		if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "--limit") {
+			t.Fatalf("expected invalid limit error, got %v", err)
+		}
+
+		root = &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newPendingCommand())
+		root.SetArgs([]string{"pending", "--since", "not-a-commit"})
+		if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "--since") {
+			t.Fatalf("expected invalid since error, got %v", err)
+		}
+	})
+}
+
 func TestPendingCommandSkipsOlderCheckpointsAfterNewestExact(t *testing.T) {
 	requireIntegration(t)
 	repo := createTestRepo(t)

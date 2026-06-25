@@ -46,10 +46,11 @@ type checkpointInfo struct {
 }
 
 type checkpointRefInfo struct {
-	Ref       string
-	Commit    string
-	Timestamp string
-	Branch    string
+	Ref        string
+	Commit     string
+	FullCommit string
+	Timestamp  string
+	Branch     string
 }
 
 type checkpointPatchRange struct {
@@ -843,7 +844,7 @@ func listCheckpointRefsUnderPrefix(ctx context.Context, repoRoot, refPrefix, bra
 		nil,
 		"for-each-ref",
 		"--sort=refname",
-		"--format=%(refname) %(objectname:short)",
+		"--format=%(refname) %(objectname:short) %(objectname)",
 		refPattern,
 	)
 	if err != nil {
@@ -864,16 +865,21 @@ func listCheckpointRefsUnderPrefix(ctx context.Context, repoRoot, refPrefix, bra
 
 		refName := parts[0]
 		sha := parts[1]
+		fullSHA := sha
+		if len(parts) >= 3 {
+			fullSHA = parts[2]
+		}
 		timestamp := checkpointRefTimestamp(refName)
 		branch := branchRef
 		if branch == "" {
 			branch = branchFromCheckpointRef(refName)
 		}
 		refs = append(refs, checkpointRefInfo{
-			Ref:       refName,
-			Commit:    sha,
-			Timestamp: timestamp,
-			Branch:    branch,
+			Ref:        refName,
+			Commit:     sha,
+			FullCommit: fullSHA,
+			Timestamp:  timestamp,
+			Branch:     branch,
 		})
 	}
 
@@ -970,9 +976,10 @@ func resolveCheckpointRefMetadata(ctx context.Context, repoRoot, branchRef, arg 
 		}
 
 		return checkpointRefInfo{
-			Ref:       ref,
-			Commit:    commit,
-			Timestamp: checkpointRefTimestamp(ref),
+			Ref:        ref,
+			Commit:     shortObjectID(commit),
+			FullCommit: commit,
+			Timestamp:  checkpointRefTimestamp(ref),
 		}, nil
 	}
 
@@ -993,9 +1000,10 @@ func resolveCheckpointRefMetadata(ctx context.Context, repoRoot, branchRef, arg 
 	}
 
 	return checkpointRefInfo{
-		Ref:       ref,
-		Commit:    commit,
-		Timestamp: checkpointRefTimestamp(ref),
+		Ref:        ref,
+		Commit:     shortObjectID(commit),
+		FullCommit: commit,
+		Timestamp:  checkpointRefTimestamp(ref),
 	}, nil
 }
 
@@ -1018,7 +1026,7 @@ func filterCheckpointRefsByCommit(entries []checkpointRefInfo, commit string, pr
 	normalized := strings.ToLower(commit)
 	var matches []checkpointRefInfo
 	for _, entry := range entries {
-		cand := strings.ToLower(entry.Commit)
+		cand := strings.ToLower(checkpointRefCommit(entry))
 		if cand == normalized {
 			matches = append(matches, entry)
 			if prefix {
@@ -1030,6 +1038,13 @@ func filterCheckpointRefsByCommit(entries []checkpointRefInfo, commit string, pr
 		}
 	}
 	return matches
+}
+
+func checkpointRefCommit(entry checkpointRefInfo) string {
+	if strings.TrimSpace(entry.FullCommit) != "" {
+		return strings.TrimSpace(entry.FullCommit)
+	}
+	return strings.TrimSpace(entry.Commit)
 }
 
 func parseCheckpointMessage(message string) (string, string) {

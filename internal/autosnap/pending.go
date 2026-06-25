@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +19,8 @@ func newPendingCommand() *cobra.Command {
 		branch      string
 		debug       bool
 		explain     bool
+		limit       int
+		since       string
 	)
 
 	cmd := &cobra.Command{
@@ -66,43 +70,17 @@ func newPendingCommand() *cobra.Command {
 				return err
 			}
 			debugLog.Printf("listed checkpoint refs count=%d branches=%d", len(refs), countCheckpointBranches(refs))
+			refs, err = filterCheckpointRefsForPending(ctx, repoRoot, refs, since, limit, time.Now().UTC())
+			if err != nil {
+				return err
+			}
+			debugLog.Printf("selected checkpoint refs count=%d branches=%d since=%q limit=%d", len(refs), countCheckpointBranches(refs), strings.TrimSpace(since), limit)
 
 			if explain {
-				debugLog.Printf("classifying checkpoints count=%d mode=explain", len(refs))
-				classifiedRefs, err := classifyPendingCheckpointRefsDebug(ctx, repoRoot, refs, branch, allBranches, debugLog)
+				debugLog.Printf("streaming explain checkpoints count=%d mode=explain", len(refs))
+				err := streamExplainPendingCheckpointRefs(ctx, repoRoot, refs, branch, allBranches, out, debugLog)
 				if err != nil {
 					return err
-				}
-				debugLog.Printf("classified checkpoints count=%d actionable=%d mode=explain", len(classifiedRefs), len(actionableCheckpointRefs(classifiedRefs)))
-				explainRefs := classifiedCheckpointRefs(classifiedRefs)
-				debugLog.Printf("loading checkpoint metadata count=%d mode=explain", len(explainRefs))
-				checkpoints, err := listCheckpointsFromRefs(ctx, repoRoot, explainRefs)
-				if err != nil {
-					return err
-				}
-				debugLog.Printf("loaded checkpoint metadata count=%d mode=explain", len(checkpoints))
-				statusByRef := checkpointStatusByRef(classifiedRefs)
-				if len(checkpoints) == 0 {
-					if allBranches {
-						fmt.Fprintln(out, "no checkpoints")
-					} else if strings.TrimSpace(branch) != "" {
-						fmt.Fprintf(out, "no checkpoints for branch %s\n", strings.TrimSpace(branch))
-					} else {
-						fmt.Fprintln(out, "no checkpoints for current branch")
-					}
-					return nil
-				}
-				for _, cp := range checkpoints {
-					displayTimestamp := formatCheckpointTimestampForList(cp.Timestamp)
-					status := string(statusByRef[cp.Ref])
-					if status == "" {
-						status = string(checkpointStatusPending)
-					}
-					if allBranches {
-						fmt.Fprintf(out, "%s %s %s %s %s %s\n", cp.Branch, displayTimestamp, status, cp.Ref, cp.Commit, cp.Summary)
-					} else {
-						fmt.Fprintf(out, "%s %s %s %s %s\n", displayTimestamp, status, cp.Ref, cp.Commit, cp.Summary)
-					}
 				}
 				return nil
 			}
@@ -147,6 +125,8 @@ func newPendingCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&allBranches, "all", false, "List pending checkpoints for all branches")
 	cmd.Flags().BoolVar(&debug, "debug", false, "Show progress diagnostics on stderr")
 	cmd.Flags().BoolVar(&explain, "explain", false, "Show integration status for all scanned checkpoints")
+	cmd.Flags().IntVar(&limit, "limit", 0, "Maximum number of newest checkpoints to scan (0 means unlimited)")
+	cmd.Flags().StringVar(&since, "since", "", "Scan checkpoints since a duration or commit ID")
 	return cmd
 }
 
@@ -190,6 +170,147 @@ func countCheckpointBranches(refs []checkpointRefInfo) int {
 		branches[branch] = struct{}{}
 	}
 	return len(branches)
+}
+
+func filterCheckpointRefsForPending(ctx context.Context, repoRoot string, refs []checkpointRefInfo, since string, limit int, now time.Time) ([]checkpointRefInfo, error) {
+	if limit < 0 {
+		return nil, fmt.Errorf("--limit must be greater than or equal to 0")
+	}
+
+	selected := append([]checkpointRefInfo(nil), refs...)
+	var err error
+	if strings.TrimSpace(since) != "" {
+		selected, err = filterCheckpointRefsSince(ctx, repoRoot, selected, since, now)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	sortCheckpointRefsForFiltering(selected)
+	if limit > 0 && len(selected) > limit {
+		selected = selected[len(selected)-limit:]
+	}
+	return selected, nil
+}
+
+func filterCheckpointRefsSince(ctx context.Context, repoRoot string, refs []checkpointRefInfo, value string, now time.Time) ([]checkpointRefInfo, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return refs, nil
+	}
+
+	if duration, err := parsePendingSinceDuration(trimmed); err == nil {
+		return checkpointRefsSinceTime(refs, now.UTC().Add(-duration))
+	}
+
+	commit, err := resolveCommitID(ctx, repoRoot, trimmed)
+	if err != nil {
+		return nil, fmt.Errorf("invalid --since value %q: not a duration or resolvable commit", value)
+	}
+
+	matchingCheckpointRefs := checkpointRefsMatchingCommit(refs, commit)
+	if len(matchingCheckpointRefs) > 0 {
+		sortCheckpointRefsForFiltering(matchingCheckpointRefs)
+		cutoff, err := parseCheckpointTimestamp(matchingCheckpointRefs[0].Timestamp)
+		if err != nil {
+			return nil, err
+		}
+		return checkpointRefsSinceTime(refs, cutoff)
+	}
+
+	selected := make([]checkpointRefInfo, 0, len(refs))
+	for _, ref := range refs {
+		isAncestor, err := isAncestorOrSelf(ctx, repoRoot, commit, checkpointRefCommit(ref))
+		if err != nil {
+			return nil, err
+		}
+		if isAncestor {
+			selected = append(selected, ref)
+		}
+	}
+	return selected, nil
+}
+
+func parsePendingSinceDuration(value string) (time.Duration, error) {
+	trimmed := strings.TrimSpace(value)
+	if strings.HasSuffix(trimmed, "d") {
+		days, err := strconv.Atoi(strings.TrimSuffix(trimmed, "d"))
+		if err != nil || days < 0 {
+			return 0, fmt.Errorf("invalid duration")
+		}
+		return time.Duration(days) * 24 * time.Hour, nil
+	}
+
+	duration, err := time.ParseDuration(trimmed)
+	if err != nil || duration < 0 {
+		return 0, fmt.Errorf("invalid duration")
+	}
+	return duration, nil
+}
+
+func resolveCommitID(ctx context.Context, repoRoot, value string) (string, error) {
+	result, err := runGitCommand(ctx, repoRoot, nil, "rev-parse", "--verify", value+"^{commit}")
+	if err != nil {
+		return "", gitCommandError(err, result)
+	}
+	commit := strings.TrimSpace(result.Stdout)
+	if commit == "" {
+		return "", fmt.Errorf("empty commit")
+	}
+	return commit, nil
+}
+
+func checkpointRefsMatchingCommit(refs []checkpointRefInfo, commit string) []checkpointRefInfo {
+	normalized := strings.ToLower(strings.TrimSpace(commit))
+	matches := make([]checkpointRefInfo, 0)
+	for _, ref := range refs {
+		if strings.ToLower(checkpointRefCommit(ref)) == normalized {
+			matches = append(matches, ref)
+		}
+	}
+	return matches
+}
+
+func checkpointRefsSinceTime(refs []checkpointRefInfo, cutoff time.Time) ([]checkpointRefInfo, error) {
+	selected := make([]checkpointRefInfo, 0, len(refs))
+	for _, ref := range refs {
+		timestamp, err := parseCheckpointTimestamp(ref.Timestamp)
+		if err != nil {
+			return nil, err
+		}
+		if !timestamp.Before(cutoff.UTC()) {
+			selected = append(selected, ref)
+		}
+	}
+	return selected, nil
+}
+
+func isAncestorOrSelf(ctx context.Context, repoRoot, ancestor, descendant string) (bool, error) {
+	result, err := runGitCommand(ctx, repoRoot, nil, "merge-base", "--is-ancestor", ancestor, descendant)
+	if err == nil {
+		return true, nil
+	}
+	if result.ExitCode == 1 {
+		return false, nil
+	}
+	return false, gitCommandError(err, result)
+}
+
+func sortCheckpointRefsForFiltering(refs []checkpointRefInfo) {
+	sort.Slice(refs, func(i, j int) bool {
+		leftTime, leftErr := parseCheckpointTimestamp(refs[i].Timestamp)
+		rightTime, rightErr := parseCheckpointTimestamp(refs[j].Timestamp)
+		if leftErr == nil && rightErr == nil && !leftTime.Equal(rightTime) {
+			return leftTime.Before(rightTime)
+		}
+		if refs[i].Timestamp != refs[j].Timestamp {
+			return refs[i].Timestamp < refs[j].Timestamp
+		}
+		if refs[i].Branch != refs[j].Branch {
+			return refs[i].Branch < refs[j].Branch
+		}
+		return refs[i].Ref < refs[j].Ref
+	})
 }
 
 type checkpointPendingStatus string
@@ -275,6 +396,165 @@ func classifyPendingCheckpointRefs(ctx context.Context, repoRoot string, checkpo
 	return classifyPendingCheckpointRefsDebug(ctx, repoRoot, checkpoints, branch, allBranches, pendingDebugLogger{})
 }
 
+type pendingExplainRow struct {
+	checkpoint checkpointInfo
+	status     checkpointPendingStatus
+	ready      bool
+}
+
+type flushWriter interface {
+	Flush()
+}
+
+func streamExplainPendingCheckpointRefs(ctx context.Context, repoRoot string, refs []checkpointRefInfo, branch string, allBranches bool, out io.Writer, debugLog pendingDebugLogger) error {
+	if len(refs) == 0 {
+		if allBranches {
+			fmt.Fprintln(out, "no checkpoints")
+		} else if strings.TrimSpace(branch) != "" {
+			fmt.Fprintf(out, "no checkpoints for branch %s\n", strings.TrimSpace(branch))
+		} else {
+			fmt.Fprintln(out, "no checkpoints for current branch")
+		}
+		flushPendingOutput(out)
+		return nil
+	}
+
+	debugLog.Printf("loading checkpoint metadata count=%d mode=explain", len(refs))
+	checkpoints, err := listCheckpointsFromRefs(ctx, repoRoot, refs)
+	if err != nil {
+		return err
+	}
+	debugLog.Printf("loaded checkpoint metadata count=%d mode=explain", len(checkpoints))
+
+	rowByRef := map[string]int{}
+	rows := make([]pendingExplainRow, len(checkpoints))
+	for i, cp := range checkpoints {
+		rowByRef[cp.Ref] = i
+		rows[i].checkpoint = cp
+	}
+
+	classifiedCh := make(chan classifiedCheckpointRef)
+	errCh := make(chan error, 1)
+	go func() {
+		defer close(classifiedCh)
+		errCh <- classifyPendingCheckpointRefsStreamDebug(ctx, repoRoot, refs, branch, allBranches, debugLog, func(classified classifiedCheckpointRef) {
+			classifiedCh <- classified
+		})
+	}()
+
+	next := 0
+	printed := 0
+	flushReadyRows := func() {
+		for next < len(rows) && rows[next].ready {
+			printPendingExplainRow(out, rows[next].checkpoint, rows[next].status, allBranches)
+			flushPendingOutput(out)
+			next++
+			printed++
+		}
+	}
+
+	for classified := range classifiedCh {
+		index, ok := rowByRef[classified.Ref]
+		if !ok {
+			continue
+		}
+		rows[index].status = classified.Status
+		if rows[index].status == "" {
+			rows[index].status = checkpointStatusPending
+		}
+		rows[index].ready = true
+		flushReadyRows()
+	}
+
+	if err := <-errCh; err != nil {
+		return err
+	}
+	for next < len(rows) {
+		if !rows[next].ready {
+			next++
+			continue
+		}
+		printPendingExplainRow(out, rows[next].checkpoint, rows[next].status, allBranches)
+		flushPendingOutput(out)
+		next++
+		printed++
+	}
+	if printed == 0 {
+		if allBranches {
+			fmt.Fprintln(out, "no checkpoints")
+		} else if strings.TrimSpace(branch) != "" {
+			fmt.Fprintf(out, "no checkpoints for branch %s\n", strings.TrimSpace(branch))
+		} else {
+			fmt.Fprintln(out, "no checkpoints for current branch")
+		}
+		flushPendingOutput(out)
+	}
+	debugLog.Printf("streamed checkpoint metadata count=%d mode=explain", printed)
+	return nil
+}
+
+func printPendingExplainRow(out io.Writer, cp checkpointInfo, status checkpointPendingStatus, allBranches bool) {
+	displayTimestamp := formatCheckpointTimestampForList(cp.Timestamp)
+	if allBranches {
+		fmt.Fprintf(out, "%s %s %s %s %s %s\n", cp.Branch, displayTimestamp, status, cp.Ref, cp.Commit, cp.Summary)
+		return
+	}
+	fmt.Fprintf(out, "%s %s %s %s %s\n", displayTimestamp, status, cp.Ref, cp.Commit, cp.Summary)
+}
+
+func flushPendingOutput(out io.Writer) {
+	if flusher, ok := out.(flushWriter); ok {
+		flusher.Flush()
+	}
+}
+
+func classifyPendingCheckpointRefsStreamDebug(ctx context.Context, repoRoot string, checkpoints []checkpointRefInfo, branch string, allBranches bool, debugLog pendingDebugLogger, emit func(classifiedCheckpointRef)) error {
+	grouped := map[string][]checkpointRefInfo{}
+	branchOrder := []string{}
+	for _, cp := range checkpoints {
+		baseRef := strings.TrimSpace(branch)
+		if allBranches || baseRef == "" {
+			baseRef = cp.Branch
+		}
+		baseRef = strings.TrimSpace(baseRef)
+		if baseRef == "" {
+			continue
+		}
+		if _, ok := grouped[baseRef]; !ok {
+			branchOrder = append(branchOrder, baseRef)
+		}
+		grouped[baseRef] = append(grouped[baseRef], cp)
+	}
+
+	if len(grouped) == 0 {
+		debugLog.Printf("no checkpoint refs to classify after grouping")
+		return nil
+	}
+	debugLog.Printf("grouped checkpoint refs branches=%d", len(branchOrder))
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, len(branchOrder))
+	for _, baseRef := range branchOrder {
+		cpList := grouped[baseRef]
+		wg.Add(1)
+		go func(ref string, refs []checkpointRefInfo) {
+			defer wg.Done()
+			if err := classifyPendingRefsForBranchStreamDebug(ctx, repoRoot, ref, refs, allBranches, debugLog, emit); err != nil {
+				errCh <- err
+			}
+		}(baseRef, cpList)
+	}
+
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func classifyPendingCheckpointRefsDebug(ctx context.Context, repoRoot string, checkpoints []checkpointRefInfo, branch string, allBranches bool, debugLog pendingDebugLogger) ([]classifiedCheckpointRef, error) {
 	grouped := map[string][]checkpointRefInfo{}
 	branchOrder := []string{}
@@ -346,6 +626,133 @@ func classifyPendingRefsForBranch(ctx context.Context, repoRoot, baseRef string,
 	return classifyPendingRefsForBranchDebug(ctx, repoRoot, baseRef, checkpoints, allBranches, pendingDebugLogger{})
 }
 
+func classifyPendingRefsForBranchStreamDebug(ctx context.Context, repoRoot, baseRef string, checkpoints []checkpointRefInfo, allBranches bool, debugLog pendingDebugLogger, emit func(classifiedCheckpointRef)) error {
+	if len(checkpoints) == 0 {
+		return nil
+	}
+	debugLog.Printf("branch classification started branch=%s checkpoints=%d order=newest-first mode=explain", baseRef, len(checkpoints))
+	branchStart := time.Now()
+
+	resolvedRef := baseRef
+	if strings.HasPrefix(resolvedRef, "detached-") {
+		resolvedRef = "HEAD"
+	}
+
+	result, err := runGitCommand(ctx, repoRoot, nil, "rev-parse", resolvedRef)
+	if err != nil {
+		if allBranches {
+			debugLog.Printf("branch classification skipped branch=%s reason=unresolved", baseRef)
+			return nil
+		}
+		return fmt.Errorf("failed to resolve branch tip %q: %w", resolvedRef, gitCommandError(err, result))
+	}
+	branchTip := strings.TrimSpace(result.Stdout)
+	if branchTip == "" {
+		if allBranches {
+			debugLog.Printf("branch classification skipped branch=%s reason=empty_tip", baseRef)
+			return nil
+		}
+		return fmt.Errorf("failed to resolve branch tip %q", resolvedRef)
+	}
+	debugLog.Printf("resolved branch tip branch=%s ref=%s commit=%s", baseRef, resolvedRef, shortObjectID(branchTip))
+
+	branchTipTreeResult, err := runGitCommand(ctx, repoRoot, nil, "rev-parse", branchTip+"^{tree}")
+	if err != nil {
+		return fmt.Errorf("failed to resolve branch tip tree %q: %w", resolvedRef, gitCommandError(err, branchTipTreeResult))
+	}
+	branchTipTree := strings.TrimSpace(branchTipTreeResult.Stdout)
+	if branchTipTree == "" {
+		return fmt.Errorf("failed to resolve branch tip tree %q", resolvedRef)
+	}
+	debugLog.Printf("resolved branch tip tree branch=%s tree=%s", baseRef, shortObjectID(branchTipTree))
+
+	debugLog.Printf("resolving checkpoint trees branch=%s count=%d", baseRef, len(checkpoints))
+	revParseArgs := make([]string, 0, len(checkpoints)+1)
+	revParseArgs = append(revParseArgs, "rev-parse")
+	for _, cp := range checkpoints {
+		revParseArgs = append(revParseArgs, checkpointRefCommit(cp)+"^{tree}")
+	}
+	treesResult, err := runGitCommand(ctx, repoRoot, nil, revParseArgs...)
+	if err != nil {
+		return gitCommandError(err, treesResult)
+	}
+
+	treeLines := strings.Split(strings.TrimSpace(treesResult.Stdout), "\n")
+	if len(treeLines) != len(checkpoints) {
+		debugLog.Printf("checkpoint tree batch count mismatch branch=%s expected=%d got=%d; falling back to per-checkpoint resolution", baseRef, len(checkpoints), len(treeLines))
+		treeLines = make([]string, len(checkpoints))
+		for i, cp := range checkpoints {
+			tree, treeErr := getCheckpointTree(ctx, repoRoot, checkpointRefCommit(cp))
+			if treeErr != nil {
+				return treeErr
+			}
+			treeLines[i] = strings.TrimSpace(tree)
+		}
+	}
+	debugLog.Printf("resolved checkpoint trees branch=%s count=%d", baseRef, len(treeLines))
+
+	emitted := make([]bool, len(checkpoints))
+	emitAt := func(i int, status checkpointPendingStatus) {
+		if i < 0 || i >= len(checkpoints) || emitted[i] {
+			return
+		}
+		emitted[i] = true
+		emit(classifiedCheckpointRef{
+			checkpointRefInfo: checkpoints[i],
+			Status:            status,
+		})
+	}
+
+	for i := len(checkpoints) - 1; i >= 0; i-- {
+		cp := checkpoints[i]
+		if i < len(treeLines) && strings.TrimSpace(treeLines[i]) == branchTipTree {
+			debugLog.Printf("checkpoint classified branch=%s index=%d/%d ref=%s commit=%s status=%s reason=tree_exact", baseRef, i+1, len(checkpoints), cp.Ref, cp.Commit, checkpointStatusExact)
+			emitAt(i, checkpointStatusExact)
+			for older := 0; older < i; older++ {
+				status := checkpointStatusObsolete
+				if older < len(treeLines) && strings.TrimSpace(treeLines[older]) == branchTipTree {
+					status = checkpointStatusExact
+				}
+				debugLog.Printf("checkpoint classified branch=%s index=%d/%d ref=%s commit=%s status=%s", baseRef, older+1, len(checkpoints), checkpoints[older].Ref, checkpoints[older].Commit, status)
+				emitAt(older, status)
+			}
+			debugLog.Printf("branch classification finished branch=%s classified=%d elapsed=%s", baseRef, len(checkpoints), time.Since(branchStart).Round(time.Millisecond))
+			return nil
+		}
+
+		debugLog.Printf("merge classification started branch=%s index=%d/%d ref=%s commit=%s", baseRef, i+1, len(checkpoints), cp.Ref, cp.Commit)
+		mergeStatus, unsupported, err := classifyCheckpointMergeStatusDebug(ctx, repoRoot, branchTip, branchTipTree, cp, debugLog)
+		if err != nil {
+			return err
+		}
+		if unsupported {
+			debugLog.Printf("merge-tree --write-tree unsupported; using strict classification branch=%s", baseRef)
+			for _, classified := range classifyPendingRefsStrict(checkpoints, treeLines, branchTipTree) {
+				emit(classified)
+			}
+			debugLog.Printf("branch classification finished branch=%s classified=%d elapsed=%s", baseRef, len(checkpoints), time.Since(branchStart).Round(time.Millisecond))
+			return nil
+		}
+		debugLog.Printf("checkpoint classified branch=%s index=%d/%d ref=%s commit=%s status=%s", baseRef, i+1, len(checkpoints), cp.Ref, cp.Commit, mergeStatus)
+		emitAt(i, mergeStatus)
+		if mergeStatus == checkpointStatusIntegrated {
+			for older := 0; older < i; older++ {
+				status := checkpointStatusObsolete
+				if older < len(treeLines) && strings.TrimSpace(treeLines[older]) == branchTipTree {
+					status = checkpointStatusExact
+				}
+				debugLog.Printf("checkpoint classified branch=%s index=%d/%d ref=%s commit=%s status=%s", baseRef, older+1, len(checkpoints), checkpoints[older].Ref, checkpoints[older].Commit, status)
+				emitAt(older, status)
+			}
+			debugLog.Printf("branch classification finished branch=%s classified=%d elapsed=%s", baseRef, len(checkpoints), time.Since(branchStart).Round(time.Millisecond))
+			return nil
+		}
+	}
+
+	debugLog.Printf("branch classification finished branch=%s classified=%d elapsed=%s", baseRef, len(checkpoints), time.Since(branchStart).Round(time.Millisecond))
+	return nil
+}
+
 func classifyPendingRefsForBranchDebug(ctx context.Context, repoRoot, baseRef string, checkpoints []checkpointRefInfo, allBranches bool, debugLog pendingDebugLogger) ([]classifiedCheckpointRef, error) {
 	if len(checkpoints) == 0 {
 		return nil, nil
@@ -390,7 +797,7 @@ func classifyPendingRefsForBranchDebug(ctx context.Context, repoRoot, baseRef st
 	revParseArgs := make([]string, 0, len(checkpoints)+1)
 	revParseArgs = append(revParseArgs, "rev-parse")
 	for _, cp := range checkpoints {
-		revParseArgs = append(revParseArgs, cp.Commit+"^{tree}")
+		revParseArgs = append(revParseArgs, checkpointRefCommit(cp)+"^{tree}")
 	}
 	treesResult, err := runGitCommand(ctx, repoRoot, nil, revParseArgs...)
 	if err != nil {
@@ -402,7 +809,7 @@ func classifyPendingRefsForBranchDebug(ctx context.Context, repoRoot, baseRef st
 		debugLog.Printf("checkpoint tree batch count mismatch branch=%s expected=%d got=%d; falling back to per-checkpoint resolution", baseRef, len(checkpoints), len(treeLines))
 		treeLines = make([]string, len(checkpoints))
 		for i, cp := range checkpoints {
-			tree, treeErr := getCheckpointTree(ctx, repoRoot, cp.Commit)
+			tree, treeErr := getCheckpointTree(ctx, repoRoot, checkpointRefCommit(cp))
 			if treeErr != nil {
 				return nil, treeErr
 			}
@@ -497,7 +904,7 @@ func actionablePendingRefsForBranchDebug(ctx context.Context, repoRoot, baseRef 
 	revParseArgs := make([]string, 0, len(checkpoints)+1)
 	revParseArgs = append(revParseArgs, "rev-parse")
 	for _, cp := range checkpoints {
-		revParseArgs = append(revParseArgs, cp.Commit+"^{tree}")
+		revParseArgs = append(revParseArgs, checkpointRefCommit(cp)+"^{tree}")
 	}
 	treesResult, err := runGitCommand(ctx, repoRoot, nil, revParseArgs...)
 	if err != nil {
@@ -509,7 +916,7 @@ func actionablePendingRefsForBranchDebug(ctx context.Context, repoRoot, baseRef 
 		debugLog.Printf("checkpoint tree batch count mismatch branch=%s expected=%d got=%d; falling back to per-checkpoint resolution", baseRef, len(checkpoints), len(treeLines))
 		treeLines = make([]string, len(checkpoints))
 		for i, cp := range checkpoints {
-			tree, treeErr := getCheckpointTree(ctx, repoRoot, cp.Commit)
+			tree, treeErr := getCheckpointTree(ctx, repoRoot, checkpointRefCommit(cp))
 			if treeErr != nil {
 				return nil, treeErr
 			}
@@ -572,7 +979,7 @@ func classifyCheckpointMergeStatus(ctx context.Context, repoRoot, branchTip, bra
 
 func classifyCheckpointMergeStatusDebug(ctx context.Context, repoRoot, branchTip, branchTipTree string, cp checkpointRefInfo, debugLog pendingDebugLogger) (checkpointPendingStatus, bool, error) {
 	start := time.Now()
-	result, err := runGitCommand(ctx, repoRoot, nil, "merge-tree", "--write-tree", branchTip, cp.Commit)
+	result, err := runGitCommand(ctx, repoRoot, nil, "merge-tree", "--write-tree", branchTip, checkpointRefCommit(cp))
 	if err != nil && isMergeTreeWriteTreeUnsupported(result) {
 		debugLog.Printf("merge classification finished ref=%s commit=%s status=%s unsupported=true elapsed=%s", cp.Ref, cp.Commit, checkpointStatusStrict, time.Since(start).Round(time.Millisecond))
 		return checkpointStatusStrict, true, nil

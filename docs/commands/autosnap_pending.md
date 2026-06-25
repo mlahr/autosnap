@@ -16,6 +16,8 @@ autosnap pending [flags]
       --debug           Show progress diagnostics on stderr
       --explain         Show integration status for all scanned checkpoints
   -h, --help            help for pending
+      --limit int       Maximum number of newest checkpoints to scan (0 means unlimited)
+      --since string    Scan checkpoints since a duration or commit ID
 ```
 
 ### SEE ALSO
