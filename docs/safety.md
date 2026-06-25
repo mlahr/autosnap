@@ -35,7 +35,8 @@ documentation does not rely on that.
 
 Some explicit commands are meant to modify the worktree or branch:
 
-- `autosnap pick <checkpoint>` applies a checkpoint's incremental patch.
+- `autosnap pick <checkpoint-or-range>` applies a checkpoint patch.
+- `autosnap unpick <checkpoint-or-range>` removes a checkpoint patch.
 - `autosnap restore <checkpoint>` applies checkpoint changes into the worktree
   and index without moving `HEAD`.
 - `autosnap promote <checkpoint>` creates a normal commit on the active branch.

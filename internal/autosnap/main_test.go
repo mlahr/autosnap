@@ -4347,6 +4347,16 @@ func TestRootCommandIncludesPickCommand(t *testing.T) {
 	t.Fatalf("expected root command to include pick")
 }
 
+func TestRootCommandIncludesUnpickCommand(t *testing.T) {
+	root := NewRootCommand()
+	for _, command := range root.Commands() {
+		if command.Name() == "unpick" {
+			return
+		}
+	}
+	t.Fatalf("expected root command to include unpick")
+}
+
 func TestPickCommandAppliesIncrementalCheckpointPatch(t *testing.T) {
 	requireIntegration(t)
 	repo := createTestRepo(t)
@@ -4431,6 +4441,42 @@ func TestPickCommandAppliesIncrementalCheckpointPatch(t *testing.T) {
 		}
 		if status := runGitOutput(t, repo, "status", "--porcelain"); !strings.Contains(status, "A  good.txt") {
 			t.Fatalf("expected picked change to be staged, got %q", status)
+		}
+	})
+}
+
+func TestPickCommandAppliesInclusiveCheckpointRange(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		ref1, _, ref3 := createCheckpointRangeScenario(t, repo)
+
+		runGit(t, repo, "reset", "--hard", "HEAD")
+		runGit(t, repo, "clean", "-fd")
+
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newPromoteCommand())
+		root.AddCommand(newPickCommand())
+		root.SetOut(&bytes.Buffer{})
+		root.SetErr(&bytes.Buffer{})
+		root.SetArgs([]string{"promote", ref1})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("promote first checkpoint failed: %v", err)
+		}
+
+		root.SetArgs([]string{"pick", "first+1..last"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("pick checkpoint range failed: %v", err)
+		}
+
+		if _, err := os.Stat(filepath.Join(repo, "bad.txt")); !os.IsNotExist(err) {
+			t.Fatalf("expected canceled bad.txt to be absent after range pick through %s, stat err=%v", ref3, err)
+		}
+		if got := runGitOutput(t, repo, "show", ":good.txt"); got != "good checkpoint 3" {
+			t.Fatalf("expected good.txt to be staged from range pick, got %q", got)
+		}
+		if status := runGitOutput(t, repo, "status", "--porcelain"); !strings.Contains(status, "A  good.txt") {
+			t.Fatalf("expected range picked change to be staged, got %q", status)
 		}
 	})
 }
@@ -4720,6 +4766,142 @@ func TestPickCommandRejectsInvalidConflictPolicy(t *testing.T) {
 	if !strings.Contains(err.Error(), "invalid --conflict value") {
 		t.Fatalf("expected invalid conflict policy error, got %v", err)
 	}
+}
+
+func TestPickCommandRejectsMalformedRange(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		root := NewRootCommand()
+		root.SetArgs([]string{"pick", "first..last..last"})
+
+		err := root.Execute()
+		if err == nil {
+			t.Fatalf("expected malformed checkpoint range to fail")
+		}
+		if !strings.Contains(err.Error(), "invalid checkpoint range") {
+			t.Fatalf("expected invalid checkpoint range error, got %v", err)
+		}
+	})
+}
+
+func TestUnpickCommandRemovesIncrementalCheckpointPatch(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		ref1, ref2, _ := createCheckpointRangeScenario(t, repo)
+
+		runGit(t, repo, "reset", "--hard", "HEAD")
+		runGit(t, repo, "clean", "-fd")
+
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newPromoteCommand())
+		root.AddCommand(newPickCommand())
+		root.AddCommand(newUnpickCommand())
+		root.SetOut(&bytes.Buffer{})
+		root.SetErr(&bytes.Buffer{})
+		root.SetArgs([]string{"promote", ref1})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("promote first checkpoint failed: %v", err)
+		}
+
+		root.SetArgs([]string{"pick", ref2})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("pick second checkpoint failed: %v", err)
+		}
+		if got := runGitOutput(t, repo, "show", ":bad.txt"); got != "bad checkpoint 2" {
+			t.Fatalf("expected bad.txt to be staged by pick, got %q", got)
+		}
+
+		root.SetArgs([]string{"unpick", "--force", ref2})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("unpick second checkpoint failed: %v", err)
+		}
+
+		if _, err := os.Stat(filepath.Join(repo, "bad.txt")); !os.IsNotExist(err) {
+			t.Fatalf("expected bad.txt to be removed by unpick, stat err=%v", err)
+		}
+		if status := runGitOutput(t, repo, "status", "--porcelain"); status != "" {
+			t.Fatalf("expected unpick to restore clean promoted checkpoint state, got %q", status)
+		}
+	})
+}
+
+func TestUnpickCommandRemovesInclusiveCheckpointRange(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		ref1, _, ref3 := createCheckpointRangeScenario(t, repo)
+
+		runGit(t, repo, "reset", "--hard", "HEAD")
+		runGit(t, repo, "clean", "-fd")
+
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newPromoteCommand())
+		root.AddCommand(newPickCommand())
+		root.AddCommand(newUnpickCommand())
+		root.SetOut(&bytes.Buffer{})
+		root.SetErr(&bytes.Buffer{})
+		root.SetArgs([]string{"promote", ref1})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("promote first checkpoint failed: %v", err)
+		}
+
+		root.SetArgs([]string{"pick", "first+1..last"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("pick checkpoint range failed: %v", err)
+		}
+		if got := runGitOutput(t, repo, "show", ":good.txt"); got != "good checkpoint 3" {
+			t.Fatalf("expected good.txt to be staged by range pick, got %q", got)
+		}
+
+		root.SetArgs([]string{"unpick", "--force", "first+1..last"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("unpick checkpoint range through %s failed: %v", ref3, err)
+		}
+
+		if _, err := os.Stat(filepath.Join(repo, "good.txt")); !os.IsNotExist(err) {
+			t.Fatalf("expected good.txt to be removed by range unpick, stat err=%v", err)
+		}
+		if _, err := os.Stat(filepath.Join(repo, "bad.txt")); !os.IsNotExist(err) {
+			t.Fatalf("expected canceled bad.txt to remain absent after range unpick, stat err=%v", err)
+		}
+		if status := runGitOutput(t, repo, "status", "--porcelain"); status != "" {
+			t.Fatalf("expected range unpick to restore clean promoted checkpoint state, got %q", status)
+		}
+	})
+}
+
+func TestUnpickCommandRejectsInvalidConflictPolicy(t *testing.T) {
+	root := NewRootCommand()
+	root.SetArgs([]string{"unpick", "--conflict=checkpoint", "last"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatalf("expected invalid conflict policy to fail")
+	}
+	if !strings.Contains(err.Error(), "invalid --conflict value") {
+		t.Fatalf("expected invalid conflict policy error, got %v", err)
+	}
+}
+
+func TestUnpickCommandRejectsReversedRange(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		createCheckpointRangeScenario(t, repo)
+
+		root := NewRootCommand()
+		root.SetArgs([]string{"unpick", "last..first+1"})
+
+		err := root.Execute()
+		if err == nil {
+			t.Fatalf("expected reversed checkpoint range to fail")
+		}
+		if !strings.Contains(err.Error(), "range start must not be after range end") {
+			t.Fatalf("expected reversed range error, got %v", err)
+		}
+	})
 }
 
 func TestPromoteCommandRejectsTimestamp(t *testing.T) {
@@ -5246,6 +5428,69 @@ func createPickConflictScenario(t *testing.T, repo string) string {
 	runGit(t, repo, "commit", "-m", "conflicting branch commit")
 
 	return ref2
+}
+
+func createCheckpointRangeScenario(t *testing.T, repo string) (string, string, string) {
+	t.Helper()
+	originalNow := currentTimestampFn
+	timestamps := []string{"20260101T120000Z", "20260101T120001Z", "20260101T120002Z"}
+	i := 0
+	currentTimestampFn = func() string {
+		value := timestamps[i]
+		i++
+		return value
+	}
+	t.Cleanup(func() { currentTimestampFn = originalNow })
+
+	_, _, branchRef, err := detectRepository(context.Background())
+	if err != nil {
+		t.Fatalf("detectRepository failed: %v", err)
+	}
+	gitDirectory, err := gitDir(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("gitDir failed: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("checkpoint 1\n"), 0o644); err != nil {
+		t.Fatalf("write first checkpoint file failed: %v", err)
+	}
+	tree1, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
+	if err != nil {
+		t.Fatalf("computeWorktreeTree first failed: %v", err)
+	}
+	ref1, _, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree1, "first")
+	if err != nil {
+		t.Fatalf("create first checkpoint failed: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(repo, "bad.txt"), []byte("bad checkpoint 2\n"), 0o644); err != nil {
+		t.Fatalf("write second checkpoint file failed: %v", err)
+	}
+	tree2, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
+	if err != nil {
+		t.Fatalf("computeWorktreeTree second failed: %v", err)
+	}
+	ref2, _, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree2, "second")
+	if err != nil {
+		t.Fatalf("create second checkpoint failed: %v", err)
+	}
+
+	if err := os.Remove(filepath.Join(repo, "bad.txt")); err != nil {
+		t.Fatalf("remove bad checkpoint file failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "good.txt"), []byte("good checkpoint 3\n"), 0o644); err != nil {
+		t.Fatalf("write third checkpoint file failed: %v", err)
+	}
+	tree3, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
+	if err != nil {
+		t.Fatalf("computeWorktreeTree third failed: %v", err)
+	}
+	ref3, _, err := createCheckpoint(context.Background(), repo, branchRef, "npm test", 5*time.Second, tree3, "third")
+	if err != nil {
+		t.Fatalf("create third checkpoint failed: %v", err)
+	}
+
+	return ref1, ref2, ref3
 }
 
 func testTreeFileContent(t *testing.T, repoRoot, tree, filePath string) string {

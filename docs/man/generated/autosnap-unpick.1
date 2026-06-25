@@ -2,18 +2,18 @@
 .TH "AUTOSNAP" "1" "Jun 2026" "autosnap" "autosnap manual"
 
 .SH NAME
-autosnap-pick - Apply a checkpoint's incremental patch
+autosnap-unpick - Remove a checkpoint's incremental patch
 
 
 .SH SYNOPSIS
-\fBautosnap pick  [flags]\fP
+\fBautosnap unpick  [flags]\fP
 
 
 .SH DESCRIPTION
-Apply the same patch displayed by autosnap show \&.
+Remove the same patch displayed by autosnap show \&.
 
 .PP
-A range A..B applies the net patch from the diff base of A through B. Ranges
+A range A..B removes the net patch from the diff base of A through B. Ranges
 are inclusive autosnap checkpoint intervals, not general Git revision ranges.
 
 .PP
@@ -33,7 +33,7 @@ immediately before the latest checkpoint.
 
 .SH OPTIONS
 \fB--conflict\fP="manual"
-	Conflict resolution policy: manual, checkpoint, head
+	Conflict resolution policy: manual, base, head
 
 .PP
 \fB--force\fP[=false]
@@ -41,16 +41,16 @@ immediately before the latest checkpoint.
 
 .PP
 \fB-h\fP, \fB--help\fP[=false]
-	help for pick
+	help for unpick
 
 
 .SH EXAMPLE
 .EX
-autosnap pick last
-autosnap pick last-1
-autosnap pick first+2
-autosnap pick first+2..last
-autosnap pick refs/autosnapshots/main/20260605T120000Z
+autosnap unpick last
+autosnap unpick last-1
+autosnap unpick first+2
+autosnap unpick first+2..last
+autosnap unpick refs/autosnapshots/main/20260605T120000Z
 .EE
 
 

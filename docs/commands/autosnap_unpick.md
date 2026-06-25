@@ -1,14 +1,14 @@
-# autosnap pick
+# autosnap unpick
 
-## autosnap pick
+## autosnap unpick
 
-Apply a checkpoint's incremental patch
+Remove a checkpoint's incremental patch
 
 ### Synopsis
 
-Apply the same patch displayed by autosnap show <checkpoint>.
+Remove the same patch displayed by autosnap show <checkpoint>.
 
-A range A..B applies the net patch from the diff base of A through B. Ranges
+A range A..B removes the net patch from the diff base of A through B. Ranges
 are inclusive autosnap checkpoint intervals, not general Git revision ranges.
 
 The checkpoint argument can be an explicit autosnap ref, a checkpoint commit hash,
@@ -23,25 +23,25 @@ Examples: first+1 selects the second checkpoint. last-1 selects the checkpoint
 immediately before the latest checkpoint.
 
 ```
-autosnap pick <checkpoint-or-range> [flags]
+autosnap unpick <checkpoint-or-range> [flags]
 ```
 
 ### Examples
 
 ```
-autosnap pick last
-autosnap pick last-1
-autosnap pick first+2
-autosnap pick first+2..last
-autosnap pick refs/autosnapshots/main/20260605T120000Z
+autosnap unpick last
+autosnap unpick last-1
+autosnap unpick first+2
+autosnap unpick first+2..last
+autosnap unpick refs/autosnapshots/main/20260605T120000Z
 ```
 
 ### Options
 
 ```
-      --conflict string   Conflict resolution policy: manual, checkpoint, head (default "manual")
+      --conflict string   Conflict resolution policy: manual, base, head (default "manual")
       --force             Skip the clean worktree/index precheck
-  -h, --help              help for pick
+  -h, --help              help for unpick
 ```
 
 ### SEE ALSO

@@ -30,6 +30,7 @@ const (
 
 const (
 	conflictPolicyManual     = "manual"
+	conflictPolicyBase       = "base"
 	conflictPolicyCheckpoint = "checkpoint"
 	conflictPolicyHead       = "head"
 )
@@ -49,6 +50,12 @@ type checkpointRefInfo struct {
 	Commit    string
 	Timestamp string
 	Branch    string
+}
+
+type checkpointPatchRange struct {
+	Start checkpointRefInfo
+	End   checkpointRefInfo
+	Base  string
 }
 
 type patchConflictError struct {
@@ -528,12 +535,42 @@ func pickCheckpoint(ctx context.Context, repoRoot, branchRef string, meta checkp
 		return err
 	}
 
-	diffBase, err := resolveShowDiffBase(ctx, repoRoot, branchRef, meta.Ref, meta.Commit)
+	patchRange, err := resolveCheckpointPatchRange(ctx, repoRoot, branchRef, meta.Ref)
 	if err != nil {
 		return err
 	}
 
-	return applyCheckpointDiff(ctx, repoRoot, "picked", diffBase, meta.Commit, conflictPolicy)
+	return pickCheckpointPatchRange(ctx, repoRoot, patchRange, conflictPolicy)
+}
+
+func pickCheckpointRange(ctx context.Context, repoRoot, branchRef, arg string, force bool, conflictPolicy string) (checkpointPatchRange, error) {
+	patchRange, err := resolveCheckpointPatchRange(ctx, repoRoot, branchRef, arg)
+	if err != nil {
+		return checkpointPatchRange{}, err
+	}
+
+	if err := ensureCleanWorktree(ctx, repoRoot, "pick", force); err != nil {
+		return checkpointPatchRange{}, err
+	}
+
+	return patchRange, pickCheckpointPatchRange(ctx, repoRoot, patchRange, conflictPolicy)
+}
+
+func pickCheckpointPatchRange(ctx context.Context, repoRoot string, patchRange checkpointPatchRange, conflictPolicy string) error {
+	return applyCheckpointDiff(ctx, repoRoot, "picked", patchRange.Base, patchRange.End.Commit, conflictPolicy)
+}
+
+func unpickCheckpointRange(ctx context.Context, repoRoot, branchRef, arg string, force bool, conflictPolicy string) (checkpointPatchRange, error) {
+	patchRange, err := resolveCheckpointPatchRange(ctx, repoRoot, branchRef, arg)
+	if err != nil {
+		return checkpointPatchRange{}, err
+	}
+
+	if err := ensureCleanWorktree(ctx, repoRoot, "unpick", force); err != nil {
+		return checkpointPatchRange{}, err
+	}
+
+	return patchRange, applyCheckpointDiff(ctx, repoRoot, "unpicked", patchRange.End.Commit, patchRange.Base, conflictPolicy)
 }
 
 func normalizeConflictPolicy(policy string) (string, error) {
@@ -548,6 +585,18 @@ func normalizeConflictPolicy(policy string) (string, error) {
 	}
 }
 
+func normalizeUnpickConflictPolicy(policy string) (string, error) {
+	if policy == "" {
+		return conflictPolicyManual, nil
+	}
+	switch policy {
+	case conflictPolicyManual, conflictPolicyBase, conflictPolicyHead:
+		return policy, nil
+	default:
+		return "", fmt.Errorf("invalid --conflict value %q (expected manual, base, head)", policy)
+	}
+}
+
 func applyCheckpointDiff(ctx context.Context, repoRoot, action, base, target, conflictPolicy string) error {
 	diff, err := runGitCommand(ctx, repoRoot, nil, "diff", "--binary", base, target)
 	if err != nil {
@@ -559,7 +608,7 @@ func applyCheckpointDiff(ctx context.Context, repoRoot, action, base, target, co
 
 	applyArgs := []string{"apply", "--binary", "--3way", "--index"}
 	switch conflictPolicy {
-	case conflictPolicyCheckpoint:
+	case conflictPolicyBase, conflictPolicyCheckpoint:
 		applyArgs = append(applyArgs, "--theirs")
 	case conflictPolicyHead:
 		applyArgs = append(applyArgs, "--ours")
@@ -578,6 +627,96 @@ func applyCheckpointDiff(ctx context.Context, repoRoot, action, base, target, co
 	}
 
 	return nil
+}
+
+func resolveCheckpointPatchRange(ctx context.Context, repoRoot, branchRef, arg string) (checkpointPatchRange, error) {
+	startArg, endArg, ranged, err := splitCheckpointRangeArg(arg)
+	if err != nil {
+		return checkpointPatchRange{}, err
+	}
+
+	start, err := resolveShowCheckpointRefMetadata(ctx, repoRoot, branchRef, startArg)
+	if err != nil {
+		return checkpointPatchRange{}, err
+	}
+
+	end := start
+	if ranged {
+		end, err = resolveShowCheckpointRefMetadata(ctx, repoRoot, branchRef, endArg)
+		if err != nil {
+			return checkpointPatchRange{}, err
+		}
+	}
+
+	startBranch := checkpointRefBranch(start, branchRef)
+	endBranch := checkpointRefBranch(end, branchRef)
+	if startBranch != endBranch {
+		return checkpointPatchRange{}, fmt.Errorf("checkpoint range endpoints must be on the same autosnap branch: %s and %s", startBranch, endBranch)
+	}
+
+	checkpoints, err := listCheckpointRefsForBranch(ctx, repoRoot, startBranch)
+	if err != nil {
+		return checkpointPatchRange{}, err
+	}
+
+	startIndex := checkpointRefIndex(checkpoints, start.Ref)
+	if startIndex < 0 {
+		return checkpointPatchRange{}, fmt.Errorf("checkpoint not found in branch history: %s", start.Ref)
+	}
+	endIndex := checkpointRefIndex(checkpoints, end.Ref)
+	if endIndex < 0 {
+		return checkpointPatchRange{}, fmt.Errorf("checkpoint not found in branch history: %s", end.Ref)
+	}
+	if startIndex > endIndex {
+		return checkpointPatchRange{}, fmt.Errorf("checkpoint range start must not be after range end")
+	}
+
+	base, err := resolveShowDiffBase(ctx, repoRoot, startBranch, start.Ref, start.Commit)
+	if err != nil {
+		return checkpointPatchRange{}, err
+	}
+
+	return checkpointPatchRange{
+		Start: start,
+		End:   end,
+		Base:  base,
+	}, nil
+}
+
+func splitCheckpointRangeArg(arg string) (string, string, bool, error) {
+	if strings.Count(arg, "..") == 0 {
+		return arg, arg, false, nil
+	}
+	if strings.Count(arg, "..") != 1 {
+		return "", "", false, fmt.Errorf("invalid checkpoint range %q", arg)
+	}
+
+	parts := strings.SplitN(arg, "..", 2)
+	start := strings.TrimSpace(parts[0])
+	end := strings.TrimSpace(parts[1])
+	if start == "" || end == "" {
+		return "", "", false, fmt.Errorf("invalid checkpoint range %q", arg)
+	}
+	return start, end, true, nil
+}
+
+func checkpointRefBranch(meta checkpointRefInfo, fallback string) string {
+	if meta.Branch != "" {
+		return meta.Branch
+	}
+	if branch := branchFromCheckpointRef(meta.Ref); branch != "" {
+		return branch
+	}
+	return fallback
+}
+
+func checkpointRefIndex(checkpoints []checkpointRefInfo, ref string) int {
+	for i, checkpoint := range checkpoints {
+		if checkpoint.Ref == ref {
+			return i
+		}
+	}
+	return -1
 }
 
 func parseApplyConflictPaths(output string) []string {

@@ -31,4 +31,5 @@ autosnap [flags]
 * [autosnap start](autosnap_start.md)	 - Start the autosnap daemon and checkpoint on idle passing checks
 * [autosnap status](autosnap_status.md)	 - Show current autosnap state
 * [autosnap stop](autosnap_stop.md)	 - Stop the autosnap daemon
+* [autosnap unpick](autosnap_unpick.md)	 - Remove a checkpoint's incremental patch
 

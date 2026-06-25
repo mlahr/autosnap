@@ -69,14 +69,22 @@ To apply one checkpoint's incremental patch:
 autosnap pick last-1
 ```
 
+To apply or remove a net checkpoint interval, use an inclusive autosnap
+checkpoint range:
+
+```bash
+autosnap pick first+1..last
+autosnap unpick first+1..last --force
+```
+
 To turn a useful checkpoint into a normal branch commit:
 
 ```bash
 autosnap promote last-1
 ```
 
-`pick` and `promote` are secondary recovery tools. The primary path is still to
-make normal Git commits yourself as work becomes ready.
+`pick`, `unpick`, and `promote` are secondary recovery tools. The primary path is
+still to make normal Git commits yourself as work becomes ready.
 
 ## Restore A Checkpoint
 

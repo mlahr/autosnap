@@ -28,6 +28,7 @@ func NewRootCommand() *cobra.Command {
 	root.AddCommand(newShowCommand())
 	root.AddCommand(newRestoreCommand())
 	root.AddCommand(newPickCommand())
+	root.AddCommand(newUnpickCommand())
 	root.AddCommand(newPromoteCommand())
 	root.AddCommand(newPruneCommand())
 	root.AddCommand(newStopCommand())

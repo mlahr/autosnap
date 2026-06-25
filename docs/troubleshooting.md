@@ -50,7 +50,8 @@ autosnap restart
 
 ## A Recovery Command Refused To Run
 
-`pick`, `restore`, and `promote` require a clean worktree and index by default.
+`pick`, `unpick`, `restore`, and `promote` require a clean worktree and index by
+default.
 
 Check Git status:
 
