@@ -43,6 +43,7 @@ type snapshotRunner struct {
 	branchRef    string
 	checkCmd     string
 	msgSourceCmd string
+	commitMsg    string
 	snapshotMode string
 	commitMode   string
 	watchMode    string
@@ -378,8 +379,8 @@ func (r *snapshotRunner) runCheckUnlocked() (checkpointRunResult, error) {
 
 	_ = saveAutosnapState(r.statePath, r.state)
 
-	commitMessage := ""
-	if strings.TrimSpace(r.msgSourceCmd) != "" {
+	commitMessage := strings.TrimSpace(r.commitMsg)
+	if commitMessage == "" && strings.TrimSpace(r.msgSourceCmd) != "" {
 		diffBase := previousCheckpointRef
 		if diffBase == "" {
 			diffBase = position.Head

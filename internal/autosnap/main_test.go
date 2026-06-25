@@ -5188,6 +5188,142 @@ func TestCheckpointCommandCreatesImmediateCheckpoint(t *testing.T) {
 	})
 }
 
+func TestCheckpointCommandUsesCommitMessageArgument(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("manual message checkpoint"), 0o644); err != nil {
+			t.Fatalf("write file failed: %v", err)
+		}
+
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newCheckpointCommand())
+		root.SetArgs([]string{"checkpoint", "manual checkpoint message", "--check", "true"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("checkpoint command failed: %v", err)
+		}
+
+		checkpoints, err := listCheckpointRefsForBranch(context.Background(), repo, branchRef)
+		if err != nil {
+			t.Fatalf("list checkpoints failed: %v", err)
+		}
+		if len(checkpoints) != 1 {
+			t.Fatalf("expected one checkpoint, got %d", len(checkpoints))
+		}
+		if got := runGitOutput(t, repo, "log", "-1", "--pretty=%s", checkpoints[0].Commit); got != "manual checkpoint message" {
+			t.Fatalf("expected checkpoint subject %q, got %q", "manual checkpoint message", got)
+		}
+	})
+}
+
+func TestCheckpointCommandRejectsCommitMessageArgumentWithMsgSourceCmd(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("conflicting message source"), 0o644); err != nil {
+			t.Fatalf("write file failed: %v", err)
+		}
+
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newCheckpointCommand())
+		root.SetArgs([]string{"checkpoint", "manual checkpoint message", "--check", "true", "--msg-source-cmd", "printf sourced"})
+		err = root.Execute()
+		if err == nil {
+			t.Fatalf("expected checkpoint command to reject conflicting message sources")
+		}
+		if !strings.Contains(err.Error(), "COMMIT_MSG cannot be used with --msg-source-cmd") {
+			t.Fatalf("expected COMMIT_MSG conflict error, got %v", err)
+		}
+
+		checkpoints, err := listCheckpointRefsForBranch(context.Background(), repo, branchRef)
+		if err != nil {
+			t.Fatalf("list checkpoints failed: %v", err)
+		}
+		if len(checkpoints) != 0 {
+			t.Fatalf("expected no checkpoints, got %d", len(checkpoints))
+		}
+	})
+}
+
+func TestCheckpointCommandRejectsCommitMessageArgumentWithConfiguredMsgSourceCmd(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, ".autosnap.toml"), []byte("check = \"true\"\nmsg_source_cmd = \"printf sourced\"\n"), 0o644); err != nil {
+			t.Fatalf("write config failed: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("configured conflicting message source"), 0o644); err != nil {
+			t.Fatalf("write file failed: %v", err)
+		}
+
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newCheckpointCommand())
+		root.SetArgs([]string{"checkpoint", "manual checkpoint message"})
+		err = root.Execute()
+		if err == nil {
+			t.Fatalf("expected checkpoint command to reject configured conflicting message source")
+		}
+		if !strings.Contains(err.Error(), "COMMIT_MSG cannot be used with --msg-source-cmd") {
+			t.Fatalf("expected COMMIT_MSG conflict error, got %v", err)
+		}
+
+		checkpoints, err := listCheckpointRefsForBranch(context.Background(), repo, branchRef)
+		if err != nil {
+			t.Fatalf("list checkpoints failed: %v", err)
+		}
+		if len(checkpoints) != 0 {
+			t.Fatalf("expected no checkpoints, got %d", len(checkpoints))
+		}
+	})
+}
+
+func TestCheckpointCommandAllowsCommitMessageArgumentWithClearedConfiguredMsgSourceCmd(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, ".autosnap.toml"), []byte("check = \"true\"\nmsg_source_cmd = \"printf sourced\"\n"), 0o644); err != nil {
+			t.Fatalf("write config failed: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("cleared configured message source"), 0o644); err != nil {
+			t.Fatalf("write file failed: %v", err)
+		}
+
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newCheckpointCommand())
+		root.SetArgs([]string{"checkpoint", "manual checkpoint message", "--msg-source-cmd", ""})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("checkpoint command failed: %v", err)
+		}
+
+		checkpoints, err := listCheckpointRefsForBranch(context.Background(), repo, branchRef)
+		if err != nil {
+			t.Fatalf("list checkpoints failed: %v", err)
+		}
+		if len(checkpoints) != 1 {
+			t.Fatalf("expected one checkpoint, got %d", len(checkpoints))
+		}
+		if got := runGitOutput(t, repo, "log", "-1", "--pretty=%s", checkpoints[0].Commit); got != "manual checkpoint message" {
+			t.Fatalf("expected checkpoint subject %q, got %q", "manual checkpoint message", got)
+		}
+	})
+}
+
 func TestCheckpointCommandReturnsErrorWhenCheckFails(t *testing.T) {
 	requireIntegration(t)
 	repo := createTestRepo(t)

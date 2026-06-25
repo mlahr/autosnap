@@ -3,6 +3,7 @@ package autosnap
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -18,11 +19,16 @@ func newCheckpointCommand() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "checkpoint",
+		Use:   "checkpoint [COMMIT_MSG]",
 		Short: "Create a checkpoint immediately",
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if timeout < 0 {
 				return fmt.Errorf("--timeout must be greater than or equal to 0")
+			}
+			commitMsg := ""
+			if len(args) > 0 {
+				commitMsg = strings.TrimSpace(args[0])
 			}
 
 			ctx := context.Background()
@@ -35,6 +41,9 @@ func newCheckpointCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if commitMsg != "" && strings.TrimSpace(cfg.MsgSourceCmd) != "" {
+				return fmt.Errorf("COMMIT_MSG cannot be used with --msg-source-cmd")
+			}
 
 			statePath, err := stateFilePath(repoRoot)
 			if err != nil {
@@ -45,6 +54,7 @@ func newCheckpointCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			runner.commitMsg = commitMsg
 
 			result, err := runner.runCheckWithLock(timeout)
 			if err != nil {

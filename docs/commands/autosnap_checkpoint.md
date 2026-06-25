@@ -5,7 +5,7 @@
 Create a checkpoint immediately
 
 ```
-autosnap checkpoint [flags]
+autosnap checkpoint [COMMIT_MSG] [flags]
 ```
 
 ### Options
