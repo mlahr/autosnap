@@ -102,11 +102,16 @@ or one of these current-branch history selectors:
 			if err != nil {
 				return err
 			}
+			worktreeMatches, err := checkpointWorktreeMatches(ctx, repoRoot, checkpoints)
+			if err != nil {
+				return err
+			}
 			if normalizedFormat == outputFormatJSON {
 				return writeCheckpointsJSON(ctx, repoRoot, out, checkpoints, checkpointJSONLOptions{
-					IncludeNotes: includeNotes,
-					NotesJSON:    notesJSON,
-					NoteRef:      resolvedNoteRef,
+					IncludeNotes:    includeNotes,
+					NotesJSON:       notesJSON,
+					NoteRef:         resolvedNoteRef,
+					WorktreeMatches: worktreeMatches,
 				})
 			}
 			if normalizedFormat == outputFormatJSONL {
@@ -114,9 +119,10 @@ or one of these current-branch history selectors:
 					return nil
 				}
 				return writeCheckpointsJSONL(ctx, repoRoot, out, checkpoints, checkpointJSONLOptions{
-					IncludeNotes: includeNotes,
-					NotesJSON:    notesJSON,
-					NoteRef:      resolvedNoteRef,
+					IncludeNotes:    includeNotes,
+					NotesJSON:       notesJSON,
+					NoteRef:         resolvedNoteRef,
+					WorktreeMatches: worktreeMatches,
 				})
 			}
 			if len(checkpoints) == 0 {
@@ -133,10 +139,11 @@ or one of these current-branch history selectors:
 
 			for _, cp := range checkpoints {
 				displayTimestamp := formatCheckpointTimestampForList(cp.Timestamp)
+				marker := checkpointWorktreeMatchMarker(worktreeMatches[cp.Ref])
 				if allBranches {
-					fmt.Fprintf(out, "%s %s %s %s\n", cp.Branch, displayTimestamp, cp.Commit, cp.Summary)
+					fmt.Fprintf(out, "%s %s %s %s %s\n", cp.Branch, displayTimestamp, cp.Commit, marker, cp.Summary)
 				} else {
-					fmt.Fprintf(out, "%s %s %s\n", displayTimestamp, cp.Commit, cp.Summary)
+					fmt.Fprintf(out, "%s %s %s %s\n", displayTimestamp, cp.Commit, marker, cp.Summary)
 				}
 				if includeNotes {
 					if err := writeCheckpointTextNote(ctx, repoRoot, out, resolvedNoteRef, cp.Ref); err != nil {

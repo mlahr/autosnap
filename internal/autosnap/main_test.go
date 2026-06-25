@@ -2743,6 +2743,106 @@ func TestListCommandJSONLOutput(t *testing.T) {
 	})
 }
 
+func TestListCommandShowsWorktreeMatchMarkers(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		createAutosnapTestCommitRef(t, repo, branchRef, "20260101T000000Z", "head checkpoint")
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("staged\n"), 0o644); err != nil {
+			t.Fatalf("write staged file failed: %v", err)
+		}
+		runGit(t, repo, "add", "file.txt")
+		indexTree := runGitOutput(t, repo, "write-tree")
+		createAutosnapTestCommitRefFromTree(t, repo, branchRef, "20260101T000001Z", indexTree, "index checkpoint")
+
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("worktree\n"), 0o644); err != nil {
+			t.Fatalf("write worktree file failed: %v", err)
+		}
+		gitDirectory, err := gitDir(context.Background(), repo)
+		if err != nil {
+			t.Fatalf("gitDir failed: %v", err)
+		}
+		worktreeTree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
+		if err != nil {
+			t.Fatalf("compute worktree tree failed: %v", err)
+		}
+		createAutosnapTestCommitRefFromTree(t, repo, branchRef, "20260101T000002Z", worktreeTree, "worktree checkpoint")
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newListCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"list"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("list command failed: %v", err)
+		}
+
+		output := buf.String()
+		if !strings.Contains(output, "** worktree checkpoint") {
+			t.Fatalf("expected worktree match marker in list output, got %q", output)
+		}
+		if !strings.Contains(output, "*  index checkpoint") {
+			t.Fatalf("expected index match marker in list output, got %q", output)
+		}
+	})
+}
+
+func TestListCommandJSONLIncludesWorktreeMatch(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		createAutosnapTestCommitRef(t, repo, branchRef, "20260101T000000Z", "head checkpoint")
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("staged\n"), 0o644); err != nil {
+			t.Fatalf("write staged file failed: %v", err)
+		}
+		runGit(t, repo, "add", "file.txt")
+		indexTree := runGitOutput(t, repo, "write-tree")
+		indexRef := createAutosnapTestCommitRefFromTree(t, repo, branchRef, "20260101T000001Z", indexTree, "index checkpoint")
+
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("worktree\n"), 0o644); err != nil {
+			t.Fatalf("write worktree file failed: %v", err)
+		}
+		gitDirectory, err := gitDir(context.Background(), repo)
+		if err != nil {
+			t.Fatalf("gitDir failed: %v", err)
+		}
+		worktreeTree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
+		if err != nil {
+			t.Fatalf("compute worktree tree failed: %v", err)
+		}
+		worktreeRef := createAutosnapTestCommitRefFromTree(t, repo, branchRef, "20260101T000002Z", worktreeTree, "worktree checkpoint")
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newListCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"list", "--format", "jsonl"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("list jsonl command failed: %v", err)
+		}
+
+		byRef := jsonRowsByRef(parseJSONLRows(t, buf.String()))
+		if byRef[worktreeRef]["worktreeMatch"] != string(checkpointWorktreeMatchWorktree) {
+			t.Fatalf("expected worktree JSON marker, got %#v", byRef[worktreeRef])
+		}
+		if byRef[indexRef]["worktreeMatch"] != string(checkpointWorktreeMatchIndex) {
+			t.Fatalf("expected index JSON marker, got %#v", byRef[indexRef])
+		}
+	})
+}
+
 func TestListCommandJSONLOutputIncludesDecodedJSONNote(t *testing.T) {
 	requireIntegration(t)
 	repo := createTestRepo(t)
@@ -3123,6 +3223,156 @@ func TestPendingCommandJSONLOutput(t *testing.T) {
 		}
 		if _, ok := rows[0]["pendingStatus"]; ok {
 			t.Fatalf("expected normal pending JSONL not to include pendingStatus, got %#v", rows[0])
+		}
+	})
+}
+
+func TestPendingCommandShowsWorktreeMatchMarkers(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		createAutosnapTestCommitRef(t, repo, branchRef, "20260101T000000Z", "head checkpoint")
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("staged\n"), 0o644); err != nil {
+			t.Fatalf("write staged file failed: %v", err)
+		}
+		runGit(t, repo, "add", "file.txt")
+		indexTree := runGitOutput(t, repo, "write-tree")
+		createAutosnapTestCommitRefFromTree(t, repo, branchRef, "20260101T000001Z", indexTree, "index checkpoint")
+
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("worktree\n"), 0o644); err != nil {
+			t.Fatalf("write worktree file failed: %v", err)
+		}
+		gitDirectory, err := gitDir(context.Background(), repo)
+		if err != nil {
+			t.Fatalf("gitDir failed: %v", err)
+		}
+		worktreeTree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
+		if err != nil {
+			t.Fatalf("compute worktree tree failed: %v", err)
+		}
+		createAutosnapTestCommitRefFromTree(t, repo, branchRef, "20260101T000002Z", worktreeTree, "worktree checkpoint")
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newPendingCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"pending"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("pending command failed: %v", err)
+		}
+
+		output := buf.String()
+		if !strings.Contains(output, "** worktree checkpoint") {
+			t.Fatalf("expected worktree match marker in pending output, got %q", output)
+		}
+		if !strings.Contains(output, "*  index checkpoint") {
+			t.Fatalf("expected index match marker in pending output, got %q", output)
+		}
+	})
+}
+
+func TestPendingExplainCommandShowsWorktreeMatchMarkers(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		createAutosnapTestCommitRef(t, repo, branchRef, "20260101T000000Z", "head checkpoint")
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("staged\n"), 0o644); err != nil {
+			t.Fatalf("write staged file failed: %v", err)
+		}
+		runGit(t, repo, "add", "file.txt")
+		indexTree := runGitOutput(t, repo, "write-tree")
+		createAutosnapTestCommitRefFromTree(t, repo, branchRef, "20260101T000001Z", indexTree, "index checkpoint")
+
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("worktree\n"), 0o644); err != nil {
+			t.Fatalf("write worktree file failed: %v", err)
+		}
+		gitDirectory, err := gitDir(context.Background(), repo)
+		if err != nil {
+			t.Fatalf("gitDir failed: %v", err)
+		}
+		worktreeTree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
+		if err != nil {
+			t.Fatalf("compute worktree tree failed: %v", err)
+		}
+		createAutosnapTestCommitRefFromTree(t, repo, branchRef, "20260101T000002Z", worktreeTree, "worktree checkpoint")
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newPendingCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"pending", "--explain"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("pending explain command failed: %v", err)
+		}
+
+		output := buf.String()
+		if !strings.Contains(output, "pending  ") || !strings.Contains(output, "** worktree checkpoint") {
+			t.Fatalf("expected worktree match marker in pending explain output, got %q", output)
+		}
+		if !strings.Contains(output, "pending  ") || !strings.Contains(output, "*  index checkpoint") {
+			t.Fatalf("expected index match marker in pending explain output, got %q", output)
+		}
+	})
+}
+
+func TestPendingCommandJSONLIncludesWorktreeMatch(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		createAutosnapTestCommitRef(t, repo, branchRef, "20260101T000000Z", "head checkpoint")
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("staged\n"), 0o644); err != nil {
+			t.Fatalf("write staged file failed: %v", err)
+		}
+		runGit(t, repo, "add", "file.txt")
+		indexTree := runGitOutput(t, repo, "write-tree")
+		indexRef := createAutosnapTestCommitRefFromTree(t, repo, branchRef, "20260101T000001Z", indexTree, "index checkpoint")
+
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("worktree\n"), 0o644); err != nil {
+			t.Fatalf("write worktree file failed: %v", err)
+		}
+		gitDirectory, err := gitDir(context.Background(), repo)
+		if err != nil {
+			t.Fatalf("gitDir failed: %v", err)
+		}
+		worktreeTree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
+		if err != nil {
+			t.Fatalf("compute worktree tree failed: %v", err)
+		}
+		worktreeRef := createAutosnapTestCommitRefFromTree(t, repo, branchRef, "20260101T000002Z", worktreeTree, "worktree checkpoint")
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newPendingCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"pending", "--format", "jsonl"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("pending jsonl command failed: %v", err)
+		}
+
+		byRef := jsonRowsByRef(parseJSONLRows(t, buf.String()))
+		if byRef[worktreeRef]["worktreeMatch"] != string(checkpointWorktreeMatchWorktree) {
+			t.Fatalf("expected worktree JSON marker, got %#v", byRef[worktreeRef])
+		}
+		if byRef[indexRef]["worktreeMatch"] != string(checkpointWorktreeMatchIndex) {
+			t.Fatalf("expected index JSON marker, got %#v", byRef[indexRef])
 		}
 	})
 }
@@ -6557,6 +6807,11 @@ func createAutosnapTestCommitRef(t *testing.T, repoRoot, branchRef, timestamp, m
 func createAutosnapTestCommitRefFromIndex(t *testing.T, repoRoot, branchRef, timestamp, message string) string {
 	t.Helper()
 	tree := runGitOutput(t, repoRoot, "write-tree")
+	return createAutosnapTestCommitRefFromTree(t, repoRoot, branchRef, timestamp, tree, message)
+}
+
+func createAutosnapTestCommitRefFromTree(t *testing.T, repoRoot, branchRef, timestamp, tree, message string) string {
+	t.Helper()
 	parent := runGitOutput(t, repoRoot, "rev-parse", "HEAD")
 	result, err := runGitCommandWithInput(context.Background(), repoRoot, nil, message, "commit-tree", tree, "-p", parent, "-F", "-")
 	if err != nil {

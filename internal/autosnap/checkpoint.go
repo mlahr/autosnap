@@ -59,6 +59,13 @@ type checkpointPatchRange struct {
 	Base  string
 }
 
+type checkpointWorktreeMatch string
+
+const (
+	checkpointWorktreeMatchWorktree checkpointWorktreeMatch = "worktree"
+	checkpointWorktreeMatchIndex    checkpointWorktreeMatch = "index"
+)
+
 type patchConflictError struct {
 	action     string
 	checkpoint string
@@ -486,6 +493,86 @@ func getCheckpointTree(ctx context.Context, repoRoot, ref string) (string, error
 		return "", err
 	}
 	return strings.TrimSpace(result.Stdout), nil
+}
+
+func checkpointWorktreeMatches(ctx context.Context, repoRoot string, checkpoints []checkpointInfo) (map[string]checkpointWorktreeMatch, error) {
+	matches := map[string]checkpointWorktreeMatch{}
+	if len(checkpoints) == 0 {
+		return matches, nil
+	}
+
+	gitDirectory, err := gitDir(ctx, repoRoot)
+	if err != nil {
+		return nil, err
+	}
+	worktreeTree, err := computeWorktreeTree(ctx, repoRoot, gitDirectory, snapshotModeBoth)
+	if err != nil {
+		return nil, err
+	}
+	indexTree, err := computeWorktreeTree(ctx, repoRoot, gitDirectory, snapshotModeStaged)
+	if err != nil {
+		return nil, err
+	}
+
+	treeLines, err := checkpointTreeLines(ctx, repoRoot, checkpoints)
+	if err != nil {
+		return nil, err
+	}
+	for i, cp := range checkpoints {
+		if i >= len(treeLines) {
+			continue
+		}
+		tree := strings.TrimSpace(treeLines[i])
+		switch {
+		case tree != "" && tree == worktreeTree:
+			matches[cp.Ref] = checkpointWorktreeMatchWorktree
+		case tree != "" && tree == indexTree:
+			matches[cp.Ref] = checkpointWorktreeMatchIndex
+		}
+	}
+	return matches, nil
+}
+
+func checkpointTreeLines(ctx context.Context, repoRoot string, checkpoints []checkpointInfo) ([]string, error) {
+	if len(checkpoints) == 0 {
+		return nil, nil
+	}
+
+	revParseArgs := make([]string, 0, len(checkpoints)+1)
+	revParseArgs = append(revParseArgs, "rev-parse")
+	for _, cp := range checkpoints {
+		revParseArgs = append(revParseArgs, cp.Ref+"^{tree}")
+	}
+	treesResult, err := runGitCommand(ctx, repoRoot, nil, revParseArgs...)
+	if err != nil {
+		return nil, gitCommandError(err, treesResult)
+	}
+
+	treeLines := strings.Split(strings.TrimSpace(treesResult.Stdout), "\n")
+	if len(treeLines) == len(checkpoints) {
+		return treeLines, nil
+	}
+
+	treeLines = make([]string, len(checkpoints))
+	for i, cp := range checkpoints {
+		tree, treeErr := getCheckpointTree(ctx, repoRoot, cp.Ref)
+		if treeErr != nil {
+			return nil, treeErr
+		}
+		treeLines[i] = strings.TrimSpace(tree)
+	}
+	return treeLines, nil
+}
+
+func checkpointWorktreeMatchMarker(match checkpointWorktreeMatch) string {
+	switch match {
+	case checkpointWorktreeMatchWorktree:
+		return "**"
+	case checkpointWorktreeMatchIndex:
+		return "* "
+	default:
+		return "  "
+	}
 }
 
 func getCommitParent(ctx context.Context, repoRoot, commit string) (string, error) {

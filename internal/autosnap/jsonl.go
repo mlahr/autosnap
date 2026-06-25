@@ -15,10 +15,11 @@ const (
 )
 
 type checkpointJSONLOptions struct {
-	IncludeNotes  bool
-	NotesJSON     bool
-	NoteRef       string
-	PendingStatus map[string]checkpointPendingStatus
+	IncludeNotes    bool
+	NotesJSON       bool
+	NoteRef         string
+	PendingStatus   map[string]checkpointPendingStatus
+	WorktreeMatches map[string]checkpointWorktreeMatch
 }
 
 func normalizeOutputFormat(format string) (string, error) {
@@ -99,6 +100,9 @@ func checkpointJSONRows(ctx context.Context, repoRoot string, checkpoints []chec
 		}
 		if status, ok := opts.PendingStatus[checkpoint.Ref]; ok {
 			row["pendingStatus"] = status
+		}
+		if match, ok := opts.WorktreeMatches[checkpoint.Ref]; ok {
+			row["worktreeMatch"] = match
 		}
 		if opts.IncludeNotes {
 			note, noteErr, err := readCheckpointNote(ctx, repoRoot, opts.NoteRef, checkpoint.Ref, opts.NotesJSON)
