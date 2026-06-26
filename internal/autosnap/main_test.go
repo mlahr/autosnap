@@ -2716,10 +2716,10 @@ func TestMarkCommandLabelsListShowAndJSONOutput(t *testing.T) {
 		if len(rows) != 2 {
 			t.Fatalf("expected 2 json rows, got %d", len(rows))
 		}
-		if rows[0]["mark"] != "unmarked" || rows[0]["bad"] != false {
-			t.Fatalf("expected first checkpoint mark=unmarked bad=false, got %+v", rows[0])
+		if rows[0]["mark"] != "unmarked" {
+			t.Fatalf("expected first checkpoint mark=unmarked, got %+v", rows[0])
 		}
-		if rows[1]["mark"] != "bad" || rows[1]["bad"] != true || rows[1]["badReason"] != "regression" {
+		if rows[1]["mark"] != "bad" || rows[1]["badReason"] != "regression" {
 			t.Fatalf("expected second checkpoint bad reason in json, got %+v", rows[1])
 		}
 

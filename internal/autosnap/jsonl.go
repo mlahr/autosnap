@@ -111,12 +111,9 @@ func checkpointJSONRows(ctx context.Context, repoRoot string, checkpoints []chec
 		}
 		row["mark"] = mark.Mark
 		if mark.Mark == checkpointMarkStateBad {
-			row["bad"] = true
 			if strings.TrimSpace(mark.Reason) != "" {
 				row["badReason"] = strings.TrimSpace(mark.Reason)
 			}
-		} else {
-			row["bad"] = false
 		}
 		if opts.IncludeNotes {
 			note, noteErr, err := readCheckpointNote(ctx, repoRoot, opts.NoteRef, checkpoint.Ref, opts.NotesJSON)
