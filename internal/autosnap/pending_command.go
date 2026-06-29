@@ -20,6 +20,7 @@ func newPendingCommand() *cobra.Command {
 		notes       bool
 		notesJSON   bool
 		noteRef     string
+		patchStatus bool
 		since       string
 	)
 
@@ -53,6 +54,9 @@ func newPendingCommand() *cobra.Command {
 			}
 			if limit < 0 {
 				return fmt.Errorf("--limit must be non-negative")
+			}
+			if patchStatus && !explain {
+				return fmt.Errorf("--patch-status requires --explain")
 			}
 
 			debugLog.Printf("detecting repository")
@@ -99,20 +103,22 @@ func newPendingCommand() *cobra.Command {
 			if explain {
 				if normalizedFormat == outputFormatJSON {
 					return writePendingExplainJSON(ctx, repoRoot, refs, branch, allBranches, out, debugLog, checkpointJSONLOptions{
-						IncludeNotes: includeNotes,
-						NotesJSON:    notesJSON,
-						NoteRef:      resolvedNoteRef,
+						IncludeNotes:       includeNotes,
+						NotesJSON:          notesJSON,
+						NoteRef:            resolvedNoteRef,
+						IncludePatchStatus: patchStatus,
 					})
 				}
 				if normalizedFormat == outputFormatJSONL {
 					return writePendingExplainJSONL(ctx, repoRoot, refs, branch, allBranches, out, debugLog, checkpointJSONLOptions{
-						IncludeNotes: includeNotes,
-						NotesJSON:    notesJSON,
-						NoteRef:      resolvedNoteRef,
+						IncludeNotes:       includeNotes,
+						NotesJSON:          notesJSON,
+						NoteRef:            resolvedNoteRef,
+						IncludePatchStatus: patchStatus,
 					})
 				}
 				debugLog.Printf("streaming explain checkpoints count=%d mode=explain", len(refs))
-				err := streamExplainPendingCheckpointRefs(ctx, repoRoot, refs, branch, allBranches, out, useColor, debugLog, includeNotes, resolvedNoteRef)
+				err := streamExplainPendingCheckpointRefs(ctx, repoRoot, refs, branch, allBranches, out, useColor, debugLog, includeNotes, resolvedNoteRef, patchStatus)
 				if err != nil {
 					return err
 				}
@@ -203,6 +209,7 @@ func newPendingCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&notes, "notes", false, "Include checkpoint git notes as text")
 	cmd.Flags().BoolVar(&notesJSON, "notes-json", false, "Include checkpoint git notes decoded as JSON (requires --format json or jsonl)")
 	cmd.Flags().StringVar(&noteRef, "note-ref", "", "Git notes ref for checkpoint notes")
+	cmd.Flags().BoolVar(&patchStatus, "patch-status", false, "Include whether each checkpoint patch is included in the current worktree (requires --explain)")
 	cmd.Flags().StringVar(&since, "since", "", "Scan checkpoints since a duration or commit ID")
 	return cmd
 }

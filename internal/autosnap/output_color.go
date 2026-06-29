@@ -90,3 +90,38 @@ func colorizePendingStatusPadded(enabled bool, status checkpointPendingStatus, w
 
 	return statusText + strings.Repeat(" ", padding)
 }
+
+func colorizePatchStatus(enabled bool, status checkpointPatchStatus) string {
+	if !enabled {
+		return string(status)
+	}
+
+	switch status {
+	case checkpointPatchStatusIncluded:
+		return colorize(true, ansiGreen, string(status))
+	case checkpointPatchStatusMissing:
+		return colorize(true, ansiCyan, string(status))
+	case checkpointPatchStatusConflict:
+		return colorize(true, ansiYellow, string(status))
+	default:
+		return string(status)
+	}
+}
+
+func colorizePatchStatusPadded(enabled bool, status checkpointPatchStatus, width int) string {
+	if status == "" {
+		status = checkpointPatchStatusConflict
+	}
+	raw := string(status)
+	padding := 0
+	if len(raw) < width {
+		padding = width - len(raw)
+	}
+
+	statusText := colorizePatchStatus(enabled, status)
+	if statusText == raw {
+		return raw + strings.Repeat(" ", padding)
+	}
+
+	return statusText + strings.Repeat(" ", padding)
+}

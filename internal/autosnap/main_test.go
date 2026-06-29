@@ -4210,6 +4210,16 @@ func TestPendingCommandRejectsInvalidLimit(t *testing.T) {
 	}
 }
 
+func TestPendingCommandRejectsPatchStatusWithoutExplain(t *testing.T) {
+	t.Parallel()
+	root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+	root.AddCommand(newPendingCommand())
+	root.SetArgs([]string{"pending", "--patch-status"})
+	if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "--patch-status requires --explain") {
+		t.Fatalf("expected patch status explain requirement error, got %v", err)
+	}
+}
+
 func TestPendingCommandRejectsInvalidSince(t *testing.T) {
 	requireIntegration(t)
 	repo := createTestRepo(t)
@@ -4445,6 +4455,274 @@ func TestPendingCommandHidesManuallyIntegratedCheckpoint(t *testing.T) {
 			t.Fatalf("expected explain output to show integrated checkpoint, got %q", output)
 		}
 	})
+}
+
+func TestPendingExplainShowsPatchStatusColumn(t *testing.T) {
+	t.Parallel()
+	requireIntegration(t)
+
+	tests := []struct {
+		name            string
+		worktreeContent string
+		wantStatus      string
+		wantReason      string
+	}{
+		{name: "included", worktreeContent: "checkpoint\n", wantStatus: string(checkpointPatchStatusIncluded), wantReason: "reason=tree_paths_included"},
+		{name: "missing", worktreeContent: "base\n", wantStatus: string(checkpointPatchStatusMissing), wantReason: "reason=tree_paths_missing"},
+		{name: "conflict", worktreeContent: "manual\n", wantStatus: string(checkpointPatchStatusConflict), wantReason: "reason=tree_paths_conflict"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			repo := createTestRepo(t)
+			withWorkingDir(t, repo, func() {
+				_, _, branchRef, err := detectRepository(context.Background())
+				if err != nil {
+					t.Fatalf("detectRepository failed: %v", err)
+				}
+
+				if err := os.WriteFile(filepath.Join(repo, "patch-status.txt"), []byte("base\n"), 0o644); err != nil {
+					t.Fatalf("write base file failed: %v", err)
+				}
+				runGit(t, repo, "add", "patch-status.txt")
+				_ = createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20210108T000000Z", "patch base checkpoint")
+
+				if err := os.WriteFile(filepath.Join(repo, "patch-status.txt"), []byte("checkpoint\n"), 0o644); err != nil {
+					t.Fatalf("write checkpoint file failed: %v", err)
+				}
+				runGit(t, repo, "add", "patch-status.txt")
+				_ = createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20210108T000001Z", "patch target checkpoint")
+
+				if err := os.WriteFile(filepath.Join(repo, "patch-status.txt"), []byte(tt.worktreeContent), 0o644); err != nil {
+					t.Fatalf("write worktree file failed: %v", err)
+				}
+
+				buf := &bytes.Buffer{}
+				root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+				root.AddCommand(newPendingCommand())
+				root.SetOut(buf)
+				root.SetErr(buf)
+				root.SetArgs([]string{"pending", "--debug", "--explain", "--patch-status"})
+				if err := root.Execute(); err != nil {
+					t.Fatalf("pending explain failed: %v", err)
+				}
+
+				line := lineContaining(buf.String(), "patch target checkpoint")
+				if line == "" {
+					t.Fatalf("expected target checkpoint line, got %q", buf.String())
+				}
+				if !strings.Contains(line, " "+tt.wantStatus+" ") {
+					t.Fatalf("expected patch status %q in target line %q", tt.wantStatus, line)
+				}
+				if !strings.Contains(buf.String(), tt.wantReason) {
+					t.Fatalf("expected debug output to contain %q, got %q", tt.wantReason, buf.String())
+				}
+				if strings.Contains(buf.String(), "loading patch statuses count=") {
+					t.Fatalf("expected text explain output to avoid upfront patch status loading, got %q", buf.String())
+				}
+				rowIndex := strings.Index(buf.String(), "patch target checkpoint")
+				summaryIndex := strings.Index(buf.String(), "patch status classification finished")
+				if rowIndex < 0 || summaryIndex < 0 || rowIndex > summaryIndex {
+					t.Fatalf("expected text row before final patch status summary, got %q", buf.String())
+				}
+
+				buf.Reset()
+				root = &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+				root.AddCommand(newPendingCommand())
+				root.SetOut(buf)
+				root.SetErr(buf)
+				root.SetArgs([]string{"pending", "--explain"})
+				if err := root.Execute(); err != nil {
+					t.Fatalf("pending explain without patch status failed: %v", err)
+				}
+				line = lineContaining(buf.String(), "patch target checkpoint")
+				if line == "" {
+					t.Fatalf("expected target checkpoint line, got %q", buf.String())
+				}
+				if strings.Contains(line, " "+tt.wantStatus+" ") {
+					t.Fatalf("expected default explain output to omit patch status %q in target line %q", tt.wantStatus, line)
+				}
+			})
+		})
+	}
+}
+
+func TestPendingExplainPatchStatusFastPathAddedAndDeletedFiles(t *testing.T) {
+	t.Parallel()
+	requireIntegration(t)
+
+	tests := []struct {
+		name       string
+		baseFiles  map[string]string
+		patchFiles map[string]*string
+		target     map[string]string
+		wantStatus string
+	}{
+		{
+			name:       "added file included",
+			baseFiles:  map[string]string{"unchanged.txt": "base\n"},
+			patchFiles: map[string]*string{"added.txt": stringPointer("checkpoint\n")},
+			target:     map[string]string{"unchanged.txt": "base\n", "added.txt": "checkpoint\n"},
+			wantStatus: string(checkpointPatchStatusIncluded),
+		},
+		{
+			name:       "added file missing",
+			baseFiles:  map[string]string{"unchanged.txt": "base\n"},
+			patchFiles: map[string]*string{"added.txt": stringPointer("checkpoint\n")},
+			target:     map[string]string{"unchanged.txt": "base\n"},
+			wantStatus: string(checkpointPatchStatusMissing),
+		},
+		{
+			name:       "deleted file included",
+			baseFiles:  map[string]string{"deleted.txt": "base\n", "unchanged.txt": "base\n"},
+			patchFiles: map[string]*string{"deleted.txt": nil},
+			target:     map[string]string{"unchanged.txt": "base\n"},
+			wantStatus: string(checkpointPatchStatusIncluded),
+		},
+		{
+			name:       "deleted file missing",
+			baseFiles:  map[string]string{"deleted.txt": "base\n", "unchanged.txt": "base\n"},
+			patchFiles: map[string]*string{"deleted.txt": nil},
+			target:     map[string]string{"deleted.txt": "base\n", "unchanged.txt": "base\n"},
+			wantStatus: string(checkpointPatchStatusMissing),
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			repo := createTestRepo(t)
+			withWorkingDir(t, repo, func() {
+				_, _, branchRef, err := detectRepository(context.Background())
+				if err != nil {
+					t.Fatalf("detectRepository failed: %v", err)
+				}
+
+				writeTestFiles(t, repo, tt.baseFiles)
+				runGit(t, repo, "add", ".")
+				_ = createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20210108T000000Z", "base checkpoint")
+
+				for path, content := range tt.patchFiles {
+					fullPath := filepath.Join(repo, path)
+					if content == nil {
+						if err := os.Remove(fullPath); err != nil {
+							t.Fatalf("remove checkpoint file failed: %v", err)
+						}
+						continue
+					}
+					if err := os.WriteFile(fullPath, []byte(*content), 0o644); err != nil {
+						t.Fatalf("write checkpoint file failed: %v", err)
+					}
+				}
+				runGit(t, repo, "add", ".")
+				_ = createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20210108T000001Z", "target checkpoint")
+
+				runGit(t, repo, "reset", "--hard", "HEAD")
+				runGit(t, repo, "clean", "-fd")
+				writeTestFiles(t, repo, tt.target)
+
+				buf := &bytes.Buffer{}
+				root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+				root.AddCommand(newPendingCommand())
+				root.SetOut(buf)
+				root.SetErr(buf)
+				root.SetArgs([]string{"pending", "--debug", "--explain", "--patch-status"})
+				if err := root.Execute(); err != nil {
+					t.Fatalf("pending explain failed: %v", err)
+				}
+
+				line := lineContaining(buf.String(), "target checkpoint")
+				if line == "" {
+					t.Fatalf("expected target checkpoint line, got %q", buf.String())
+				}
+				if !strings.Contains(line, " "+tt.wantStatus+" ") {
+					t.Fatalf("expected patch status %q in target line %q", tt.wantStatus, line)
+				}
+				if !strings.Contains(buf.String(), "reason=tree_paths_") {
+					t.Fatalf("expected tree-path fast path debug reason, got %q", buf.String())
+				}
+			})
+		})
+	}
+}
+
+func TestPendingExplainJSONLIncludesPatchStatus(t *testing.T) {
+	t.Parallel()
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		if err := os.WriteFile(filepath.Join(repo, "patch-status-json.txt"), []byte("base\n"), 0o644); err != nil {
+			t.Fatalf("write base file failed: %v", err)
+		}
+		runGit(t, repo, "add", "patch-status-json.txt")
+		_ = createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20210108T000000Z", "json patch base checkpoint")
+
+		if err := os.WriteFile(filepath.Join(repo, "patch-status-json.txt"), []byte("checkpoint\n"), 0o644); err != nil {
+			t.Fatalf("write checkpoint file failed: %v", err)
+		}
+		runGit(t, repo, "add", "patch-status-json.txt")
+		targetRef := createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20210108T000001Z", "json patch target checkpoint")
+
+		if err := os.WriteFile(filepath.Join(repo, "patch-status-json.txt"), []byte("checkpoint\n"), 0o644); err != nil {
+			t.Fatalf("write worktree file failed: %v", err)
+		}
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newPendingCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"pending", "--explain", "--format", "jsonl"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("pending explain jsonl failed: %v", err)
+		}
+
+		rows := jsonRowsByRef(parseJSONLRows(t, buf.String()))
+		row := rows[targetRef]
+		if row == nil {
+			t.Fatalf("expected target row in JSONL output, got %q", buf.String())
+		}
+		if _, ok := row["patchStatus"]; ok {
+			t.Fatalf("expected default JSONL output to omit patchStatus, got %#v", row)
+		}
+
+		buf.Reset()
+		root = &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newPendingCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"pending", "--explain", "--patch-status", "--format", "jsonl"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("pending explain jsonl with patch status failed: %v", err)
+		}
+
+		rows = jsonRowsByRef(parseJSONLRows(t, buf.String()))
+		row = rows[targetRef]
+		if row == nil {
+			t.Fatalf("expected target row in JSONL output, got %q", buf.String())
+		}
+		if row["patchStatus"] != string(checkpointPatchStatusIncluded) {
+			t.Fatalf("expected patchStatus included, got %#v", row)
+		}
+	})
+}
+
+func TestParseCheckpointPatchChangedPaths(t *testing.T) {
+	t.Parallel()
+	output := "M\x00file.txt\x00A\x00added.txt\x00D\x00deleted.txt\x00M\x00file.txt\x00"
+	got := parseCheckpointPatchChangedPaths(output)
+	want := []string{"file.txt", "added.txt", "deleted.txt"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("expected changed paths %#v, got %#v", want, got)
+	}
 }
 
 func TestPendingCommandMarksOlderVariantsObsolete(t *testing.T) {
@@ -7612,6 +7890,32 @@ func parseJSONRows(t *testing.T, output string) []map[string]any {
 		t.Fatalf("parse JSON output %q failed: %v", output, err)
 	}
 	return rows
+}
+
+func lineContaining(output, needle string) string {
+	for _, line := range strings.Split(output, "\n") {
+		if strings.Contains(line, needle) {
+			return line
+		}
+	}
+	return ""
+}
+
+func stringPointer(value string) *string {
+	return &value
+}
+
+func writeTestFiles(t *testing.T, repoRoot string, files map[string]string) {
+	t.Helper()
+	for path, content := range files {
+		fullPath := filepath.Join(repoRoot, path)
+		if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+			t.Fatalf("create test file directory failed: %v", err)
+		}
+		if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
+			t.Fatalf("write test file failed: %v", err)
+		}
+	}
 }
 
 func jsonRowsByRef(rows []map[string]any) map[string]map[string]any {

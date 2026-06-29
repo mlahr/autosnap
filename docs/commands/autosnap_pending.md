@@ -21,6 +21,7 @@ autosnap pending [flags]
       --note-ref string   Git notes ref for checkpoint notes
       --notes             Include checkpoint git notes as text
       --notes-json        Include checkpoint git notes decoded as JSON (requires --format json or jsonl)
+      --patch-status      Include whether each checkpoint patch is included in the current worktree (requires --explain)
       --since string      Scan checkpoints since a duration or commit ID
 ```
 

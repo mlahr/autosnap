@@ -11,16 +11,18 @@ import (
 type pendingExplainRow struct {
 	checkpoint    checkpointInfo
 	status        checkpointPendingStatus
+	patchStatus   checkpointPatchStatus
 	worktreeMatch checkpointWorktreeMatch
 	mark          checkpointMark
 	ready         bool
+	patchReady    bool
 }
 
 type flushWriter interface {
 	Flush()
 }
 
-func streamExplainPendingCheckpointRefs(ctx context.Context, repoRoot string, refs []checkpointRefInfo, branch string, allBranches bool, out io.Writer, useColor bool, debugLog pendingDebugLogger, includeNotes bool, noteRef string) error {
+func streamExplainPendingCheckpointRefs(ctx context.Context, repoRoot string, refs []checkpointRefInfo, branch string, allBranches bool, out io.Writer, useColor bool, debugLog pendingDebugLogger, includeNotes bool, noteRef string, includePatchStatus bool) error {
 	if len(refs) == 0 {
 		if allBranches {
 			fmt.Fprintln(out, "no checkpoints")
@@ -40,11 +42,20 @@ func streamExplainPendingCheckpointRefs(ctx context.Context, repoRoot string, re
 	}
 	debugLog.Printf("loaded checkpoint metadata count=%d mode=explain", len(checkpoints))
 	debugLog.Printf("loading worktree markers count=%d mode=explain", len(checkpoints))
-	worktreeMatches, err := checkpointWorktreeMatchesDebug(ctx, repoRoot, checkpoints, debugLog)
+	worktreeState, err := checkpointWorktreeMatchStateDebug(ctx, repoRoot, checkpoints, debugLog)
 	if err != nil {
 		return err
 	}
+	worktreeMatches := worktreeState.Matches
 	debugLog.Printf("loaded worktree markers count=%d mode=explain", len(worktreeMatches))
+	var patchClassifier *checkpointPatchStatusClassifier
+	if includePatchStatus {
+		debugLog.Printf("patch status classification started checkpoints=%d target_tree=%s mode=explain-stream", len(checkpoints), shortObjectID(worktreeState.WorktreeTree))
+		patchClassifier, err = newCheckpointPatchStatusClassifier(ctx, repoRoot, branch, worktreeState.WorktreeTree, checkpoints)
+		if err != nil {
+			return err
+		}
+	}
 	markStart := time.Now()
 	debugLog.Printf("loading checkpoint marks count=%d mode=explain", len(checkpoints))
 	marks, err := checkpointMarks(ctx, repoRoot, checkpoints)
@@ -73,9 +84,25 @@ func streamExplainPendingCheckpointRefs(ctx context.Context, repoRoot string, re
 
 	next := 0
 	printed := 0
+	classifyPatchStatus := func(index int) error {
+		if !includePatchStatus || rows[index].patchReady {
+			return nil
+		}
+		status, reason, elapsed, err := patchClassifier.Classify(ctx, index, rows[index].checkpoint)
+		if err != nil {
+			return err
+		}
+		rows[index].patchStatus = status
+		rows[index].patchReady = true
+		debugLog.Printf("patch status classified ref=%s commit=%s status=%s reason=%s elapsed=%s", rows[index].checkpoint.Ref, rows[index].checkpoint.Commit, status, reason, elapsed.Round(time.Millisecond))
+		return nil
+	}
 	flushReadyRows := func() error {
 		for next < len(rows) && rows[next].ready {
-			printPendingExplainRow(out, rows[next].checkpoint, rows[next].status, rows[next].worktreeMatch, rows[next].mark, allBranches, useColor)
+			if err := classifyPatchStatus(next); err != nil {
+				return err
+			}
+			printPendingExplainRow(out, rows[next].checkpoint, rows[next].status, rows[next].patchStatus, rows[next].worktreeMatch, rows[next].mark, allBranches, useColor, includePatchStatus)
 			if includeNotes {
 				if err := writeCheckpointTextNote(ctx, repoRoot, out, noteRef, rows[next].checkpoint.Ref); err != nil {
 					return err
@@ -111,7 +138,10 @@ func streamExplainPendingCheckpointRefs(ctx context.Context, repoRoot string, re
 			next++
 			continue
 		}
-		printPendingExplainRow(out, rows[next].checkpoint, rows[next].status, rows[next].worktreeMatch, rows[next].mark, allBranches, useColor)
+		if err := classifyPatchStatus(next); err != nil {
+			return err
+		}
+		printPendingExplainRow(out, rows[next].checkpoint, rows[next].status, rows[next].patchStatus, rows[next].worktreeMatch, rows[next].mark, allBranches, useColor, includePatchStatus)
 		if includeNotes {
 			if err := writeCheckpointTextNote(ctx, repoRoot, out, noteRef, rows[next].checkpoint.Ref); err != nil {
 				return err
@@ -131,21 +161,33 @@ func streamExplainPendingCheckpointRefs(ctx context.Context, repoRoot string, re
 		}
 		flushPendingOutput(out)
 	}
+	if includePatchStatus {
+		patchClassifier.DebugSummary(debugLog, printed)
+	}
 	debugLog.Printf("streamed checkpoint metadata count=%d mode=explain", printed)
 	return nil
 }
 
-func printPendingExplainRow(out io.Writer, cp checkpointInfo, status checkpointPendingStatus, match checkpointWorktreeMatch, mark checkpointMark, allBranches bool, useColor bool) {
+func printPendingExplainRow(out io.Writer, cp checkpointInfo, status checkpointPendingStatus, patchStatus checkpointPatchStatus, match checkpointWorktreeMatch, mark checkpointMark, allBranches bool, useColor bool, includePatchStatus bool) {
 	displayTimestamp := formatCheckpointTimestampForList(cp.Timestamp)
 	marker := colorizeWorktreeMatchMarker(useColor, match)
 	commit := colorizeCheckpointID(useColor, cp.Commit)
 	summary := checkpointMarkSummary(useColor, mark, cp.Summary)
 	statusText := colorizePendingStatusPadded(useColor, status, 8)
-	if allBranches {
-		fmt.Fprintf(out, "%s %s %s %s %s %s\n", cp.Branch, displayTimestamp, statusText, commit, marker, summary)
+	if !includePatchStatus {
+		if allBranches {
+			fmt.Fprintf(out, "%s %s %s %s %s %s\n", cp.Branch, displayTimestamp, statusText, commit, marker, summary)
+			return
+		}
+		fmt.Fprintf(out, "%s %s %s %s %s\n", displayTimestamp, statusText, commit, marker, summary)
 		return
 	}
-	fmt.Fprintf(out, "%s %s %s %s %s\n", displayTimestamp, statusText, commit, marker, summary)
+	patchStatusText := colorizePatchStatusPadded(useColor, patchStatus, 8)
+	if allBranches {
+		fmt.Fprintf(out, "%s %s %s %s %s %s %s\n", cp.Branch, displayTimestamp, statusText, patchStatusText, commit, marker, summary)
+		return
+	}
+	fmt.Fprintf(out, "%s %s %s %s %s %s\n", displayTimestamp, statusText, patchStatusText, commit, marker, summary)
 }
 
 func writePendingExplainJSON(ctx context.Context, repoRoot string, refs []checkpointRefInfo, branch string, allBranches bool, out io.Writer, debugLog pendingDebugLogger, opts checkpointJSONLOptions) error {
@@ -166,11 +208,21 @@ func writePendingExplainJSON(ctx context.Context, repoRoot string, refs []checkp
 	}
 	debugLog.Printf("loaded checkpoint metadata count=%d mode=explain-json", len(checkpoints))
 	debugLog.Printf("loading worktree markers count=%d mode=explain-json", len(checkpoints))
-	opts.WorktreeMatches, err = checkpointWorktreeMatchesDebug(ctx, repoRoot, checkpoints, debugLog)
+	worktreeState, err := checkpointWorktreeMatchStateDebug(ctx, repoRoot, checkpoints, debugLog)
 	if err != nil {
 		return err
 	}
+	opts.WorktreeMatches = worktreeState.Matches
 	debugLog.Printf("loaded worktree markers count=%d mode=explain-json", len(opts.WorktreeMatches))
+	if opts.IncludePatchStatus {
+		patchStart := time.Now()
+		debugLog.Printf("loading patch statuses count=%d mode=explain-json", len(checkpoints))
+		opts.PatchStatus, err = checkpointPatchStatusesDebug(ctx, repoRoot, branch, worktreeState.WorktreeTree, checkpoints, debugLog)
+		if err != nil {
+			return err
+		}
+		debugLog.Printf("loaded patch statuses count=%d mode=explain-json elapsed=%s", len(opts.PatchStatus), time.Since(patchStart).Round(time.Millisecond))
+	}
 	markStart := time.Now()
 	debugLog.Printf("loading checkpoint marks count=%d mode=explain-json", len(checkpoints))
 	opts.Marks, err = checkpointMarks(ctx, repoRoot, checkpoints)
@@ -199,11 +251,21 @@ func writePendingExplainJSONL(ctx context.Context, repoRoot string, refs []check
 	}
 	debugLog.Printf("loaded checkpoint metadata count=%d mode=explain-jsonl", len(checkpoints))
 	debugLog.Printf("loading worktree markers count=%d mode=explain-jsonl", len(checkpoints))
-	opts.WorktreeMatches, err = checkpointWorktreeMatchesDebug(ctx, repoRoot, checkpoints, debugLog)
+	worktreeState, err := checkpointWorktreeMatchStateDebug(ctx, repoRoot, checkpoints, debugLog)
 	if err != nil {
 		return err
 	}
+	opts.WorktreeMatches = worktreeState.Matches
 	debugLog.Printf("loaded worktree markers count=%d mode=explain-jsonl", len(opts.WorktreeMatches))
+	if opts.IncludePatchStatus {
+		patchStart := time.Now()
+		debugLog.Printf("loading patch statuses count=%d mode=explain-jsonl", len(checkpoints))
+		opts.PatchStatus, err = checkpointPatchStatusesDebug(ctx, repoRoot, branch, worktreeState.WorktreeTree, checkpoints, debugLog)
+		if err != nil {
+			return err
+		}
+		debugLog.Printf("loaded patch statuses count=%d mode=explain-jsonl elapsed=%s", len(opts.PatchStatus), time.Since(patchStart).Round(time.Millisecond))
+	}
 	markStart := time.Now()
 	debugLog.Printf("loading checkpoint marks count=%d mode=explain-jsonl", len(checkpoints))
 	opts.Marks, err = checkpointMarks(ctx, repoRoot, checkpoints)

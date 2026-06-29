@@ -69,6 +69,44 @@ const (
 	checkpointWorktreeMatchIndex    checkpointWorktreeMatch = "index"
 )
 
+type checkpointPatchStatus string
+
+const (
+	checkpointPatchStatusIncluded checkpointPatchStatus = "included"
+	checkpointPatchStatusMissing  checkpointPatchStatus = "missing"
+	checkpointPatchStatusConflict checkpointPatchStatus = "conflict"
+)
+
+type checkpointPatchStatusMetrics struct {
+	FastIncluded       int
+	FastMissing        int
+	TreeConflict       int
+	ChangedPathElapsed time.Duration
+	TreeEntryElapsed   time.Duration
+}
+
+type checkpointPatchStatusClassifier struct {
+	repoRoot        string
+	targetTree      string
+	baseByRef       map[string]string
+	checkpointTrees []string
+	metrics         *checkpointPatchStatusMetrics
+	start           time.Time
+}
+
+type gitTreeEntry struct {
+	Mode   string
+	Type   string
+	Object string
+	Exists bool
+}
+
+type checkpointWorktreeMatchState struct {
+	Matches      map[string]checkpointWorktreeMatch
+	WorktreeTree string
+	IndexTree    string
+}
+
 type patchConflictError struct {
 	action     string
 	checkpoint string
@@ -712,27 +750,35 @@ func checkpointWorktreeMatches(ctx context.Context, repoRoot string, checkpoints
 }
 
 func checkpointWorktreeMatchesDebug(ctx context.Context, repoRoot string, checkpoints []checkpointInfo, debugLog pendingDebugLogger) (map[string]checkpointWorktreeMatch, error) {
+	state, err := checkpointWorktreeMatchStateDebug(ctx, repoRoot, checkpoints, debugLog)
+	if err != nil {
+		return nil, err
+	}
+	return state.Matches, nil
+}
+
+func checkpointWorktreeMatchStateDebug(ctx context.Context, repoRoot string, checkpoints []checkpointInfo, debugLog pendingDebugLogger) (checkpointWorktreeMatchState, error) {
 	start := time.Now()
 	matches := map[string]checkpointWorktreeMatch{}
 	if len(checkpoints) == 0 {
-		return matches, nil
+		return checkpointWorktreeMatchState{Matches: matches}, nil
 	}
 
 	gitDirStart := time.Now()
 	gitDirectory, err := gitDir(ctx, repoRoot)
 	if err != nil {
-		return nil, err
+		return checkpointWorktreeMatchState{}, err
 	}
 	debugLog.Printf("worktree marker git dir resolved elapsed=%s", time.Since(gitDirStart).Round(time.Millisecond))
 	worktreeTree, indexTree, err := computeWorktreeMatchTreesDebug(ctx, repoRoot, gitDirectory, debugLog)
 	if err != nil {
-		return nil, err
+		return checkpointWorktreeMatchState{}, err
 	}
 
 	checkpointTreeStart := time.Now()
 	treeLines, err := checkpointTreeLines(ctx, repoRoot, checkpoints)
 	if err != nil {
-		return nil, err
+		return checkpointWorktreeMatchState{}, err
 	}
 	debugLog.Printf("worktree marker checkpoint trees loaded count=%d elapsed=%s", len(treeLines), time.Since(checkpointTreeStart).Round(time.Millisecond))
 	for i, cp := range checkpoints {
@@ -748,7 +794,11 @@ func checkpointWorktreeMatchesDebug(ctx context.Context, repoRoot string, checkp
 		}
 	}
 	debugLog.Printf("worktree marker matching finished checkpoints=%d matches=%d elapsed=%s", len(checkpoints), len(matches), time.Since(start).Round(time.Millisecond))
-	return matches, nil
+	return checkpointWorktreeMatchState{
+		Matches:      matches,
+		WorktreeTree: worktreeTree,
+		IndexTree:    indexTree,
+	}, nil
 }
 
 func checkpointTreeLines(ctx context.Context, repoRoot string, checkpoints []checkpointInfo) ([]string, error) {
@@ -1006,6 +1056,266 @@ func resolveCheckpointPatchRange(ctx context.Context, repoRoot, branchRef, arg s
 		End:   end,
 		Base:  base,
 	}, nil
+}
+
+func checkpointPatchStatusesDebug(ctx context.Context, repoRoot, branchRef, targetTree string, checkpoints []checkpointInfo, debugLog pendingDebugLogger) (map[string]checkpointPatchStatus, error) {
+	statuses := map[string]checkpointPatchStatus{}
+	if len(checkpoints) == 0 {
+		return statuses, nil
+	}
+	debugLog.Printf("patch status classification started checkpoints=%d target_tree=%s", len(checkpoints), shortObjectID(targetTree))
+	classifier, err := newCheckpointPatchStatusClassifier(ctx, repoRoot, branchRef, targetTree, checkpoints)
+	if err != nil {
+		return nil, err
+	}
+	for i, checkpoint := range checkpoints {
+		status, reason, elapsed, err := classifier.Classify(ctx, i, checkpoint)
+		if err != nil {
+			return nil, err
+		}
+		statuses[checkpoint.Ref] = status
+		debugLog.Printf("patch status classified ref=%s commit=%s status=%s reason=%s elapsed=%s", checkpoint.Ref, checkpoint.Commit, status, reason, elapsed.Round(time.Millisecond))
+	}
+
+	classifier.DebugSummary(debugLog, len(checkpoints))
+	return statuses, nil
+}
+
+func newCheckpointPatchStatusClassifier(ctx context.Context, repoRoot, branchRef, targetTree string, checkpoints []checkpointInfo) (*checkpointPatchStatusClassifier, error) {
+	baseByRef, err := checkpointShowDiffBases(ctx, repoRoot, branchRef, checkpoints)
+	if err != nil {
+		return nil, err
+	}
+	checkpointTrees, err := checkpointTreeLines(ctx, repoRoot, checkpoints)
+	if err != nil {
+		return nil, err
+	}
+	return &checkpointPatchStatusClassifier{
+		repoRoot:        repoRoot,
+		targetTree:      targetTree,
+		baseByRef:       baseByRef,
+		checkpointTrees: checkpointTrees,
+		metrics:         &checkpointPatchStatusMetrics{},
+		start:           time.Now(),
+	}, nil
+}
+
+func (c *checkpointPatchStatusClassifier) Classify(ctx context.Context, index int, checkpoint checkpointInfo) (checkpointPatchStatus, string, time.Duration, error) {
+	checkpointStart := time.Now()
+	base := c.baseByRef[checkpoint.Ref]
+	if strings.TrimSpace(base) == "" {
+		return "", "", 0, fmt.Errorf("missing show diff base for checkpoint %s", checkpoint.Ref)
+	}
+	commit := checkpointInfoCommit(checkpoint)
+	checkpointTree := ""
+	if index < len(c.checkpointTrees) {
+		checkpointTree = strings.TrimSpace(c.checkpointTrees[index])
+	}
+	if checkpointTree == "" {
+		checkpointTree = commit
+	}
+	status, reason, err := checkpointPatchStatusFromTrees(ctx, c.repoRoot, base, checkpointTree, c.targetTree, c.metrics)
+	if err != nil {
+		return "", "", 0, err
+	}
+	switch status {
+	case checkpointPatchStatusIncluded:
+		c.metrics.FastIncluded++
+	case checkpointPatchStatusMissing:
+		c.metrics.FastMissing++
+	case checkpointPatchStatusConflict:
+		c.metrics.TreeConflict++
+	}
+	return status, reason, time.Since(checkpointStart), nil
+}
+
+func (c *checkpointPatchStatusClassifier) DebugSummary(debugLog pendingDebugLogger, checkpoints int) {
+	debugLog.Printf("patch status classification finished checkpoints=%d included=%d missing=%d conflicts=%d changed_paths=%s tree_entries=%s elapsed=%s", checkpoints, c.metrics.FastIncluded, c.metrics.FastMissing, c.metrics.TreeConflict, c.metrics.ChangedPathElapsed.Round(time.Millisecond), c.metrics.TreeEntryElapsed.Round(time.Millisecond), time.Since(c.start).Round(time.Millisecond))
+}
+
+func checkpointPatchStatusFromTrees(ctx context.Context, repoRoot, baseTree, checkpointTree, targetTree string, metrics *checkpointPatchStatusMetrics) (checkpointPatchStatus, string, error) {
+	changedPathStart := time.Now()
+	paths, err := checkpointPatchChangedPaths(ctx, repoRoot, baseTree, checkpointTree)
+	if metrics != nil {
+		metrics.ChangedPathElapsed += time.Since(changedPathStart)
+	}
+	if err != nil {
+		return "", "", err
+	}
+	if len(paths) == 0 {
+		return checkpointPatchStatusIncluded, "empty_patch_paths", nil
+	}
+
+	treeEntryStart := time.Now()
+	baseEntries, err := gitTreeEntriesForPaths(ctx, repoRoot, baseTree, paths)
+	if err != nil {
+		return "", "", err
+	}
+	checkpointEntries, err := gitTreeEntriesForPaths(ctx, repoRoot, checkpointTree, paths)
+	if err != nil {
+		return "", "", err
+	}
+	targetEntries, err := gitTreeEntriesForPaths(ctx, repoRoot, targetTree, paths)
+	if err != nil {
+		return "", "", err
+	}
+	if metrics != nil {
+		metrics.TreeEntryElapsed += time.Since(treeEntryStart)
+	}
+
+	allCheckpoint := true
+	allBase := true
+	for _, path := range paths {
+		targetEntry := targetEntries[path]
+		if !gitTreeEntriesEqual(targetEntry, checkpointEntries[path]) {
+			allCheckpoint = false
+		}
+		if !gitTreeEntriesEqual(targetEntry, baseEntries[path]) {
+			allBase = false
+		}
+	}
+
+	switch {
+	case allCheckpoint:
+		return checkpointPatchStatusIncluded, "tree_paths_included", nil
+	case allBase:
+		return checkpointPatchStatusMissing, "tree_paths_missing", nil
+	default:
+		return checkpointPatchStatusConflict, "tree_paths_conflict", nil
+	}
+}
+
+func checkpointPatchChangedPaths(ctx context.Context, repoRoot, baseTree, checkpointTree string) ([]string, error) {
+	result, err := runGitCommand(ctx, repoRoot, nil, "diff", "--name-status", "-z", "--no-renames", baseTree, checkpointTree)
+	if err != nil {
+		return nil, gitCommandError(err, result)
+	}
+	return parseCheckpointPatchChangedPaths(result.Stdout), nil
+}
+
+func parseCheckpointPatchChangedPaths(output string) []string {
+	tokens := strings.Split(output, "\x00")
+	seen := map[string]bool{}
+	paths := []string{}
+	for i := 0; i+1 < len(tokens); i += 2 {
+		status := strings.TrimSpace(tokens[i])
+		path := tokens[i+1]
+		if status == "" || path == "" {
+			continue
+		}
+		if seen[path] {
+			continue
+		}
+		seen[path] = true
+		paths = append(paths, path)
+	}
+	return paths
+}
+
+func gitTreeEntriesForPaths(ctx context.Context, repoRoot, tree string, paths []string) (map[string]gitTreeEntry, error) {
+	entries := map[string]gitTreeEntry{}
+	if strings.TrimSpace(tree) == "" || len(paths) == 0 {
+		return entries, nil
+	}
+	args := []string{"ls-tree", "-rz", tree, "--"}
+	args = append(args, paths...)
+	result, err := runGitCommand(ctx, repoRoot, nil, args...)
+	if err != nil {
+		return nil, gitCommandError(err, result)
+	}
+	for path, entry := range parseGitTreeEntries(result.Stdout) {
+		entries[path] = entry
+	}
+	return entries, nil
+}
+
+func parseGitTreeEntries(output string) map[string]gitTreeEntry {
+	entries := map[string]gitTreeEntry{}
+	for _, record := range strings.Split(output, "\x00") {
+		if record == "" {
+			continue
+		}
+		meta, path, ok := strings.Cut(record, "\t")
+		if !ok || path == "" {
+			continue
+		}
+		fields := strings.Fields(meta)
+		if len(fields) != 3 {
+			continue
+		}
+		entries[path] = gitTreeEntry{
+			Mode:   fields[0],
+			Type:   fields[1],
+			Object: fields[2],
+			Exists: true,
+		}
+	}
+	return entries
+}
+
+func gitTreeEntriesEqual(a, b gitTreeEntry) bool {
+	if a.Exists != b.Exists {
+		return false
+	}
+	if !a.Exists {
+		return true
+	}
+	return a.Mode == b.Mode && a.Type == b.Type && a.Object == b.Object
+}
+
+func checkpointShowDiffBases(ctx context.Context, repoRoot, branchRef string, checkpoints []checkpointInfo) (map[string]string, error) {
+	baseByRef := map[string]string{}
+	grouped := map[string][]checkpointInfo{}
+	for _, checkpoint := range checkpoints {
+		branch := strings.TrimSpace(checkpoint.Branch)
+		if branch == "" {
+			branch = branchFromCheckpointRef(checkpoint.Ref)
+		}
+		if branch == "" {
+			branch = branchRef
+		}
+		grouped[branch] = append(grouped[branch], checkpoint)
+	}
+
+	for branch, branchCheckpoints := range grouped {
+		previousByRef := map[string]string{}
+		if strings.TrimSpace(branch) != "" {
+			refs, err := listCheckpointRefsForBranch(ctx, repoRoot, branch)
+			if err != nil {
+				return nil, err
+			}
+			var previousRef string
+			for _, ref := range refs {
+				if previousRef != "" {
+					previousByRef[ref.Ref] = previousRef
+				}
+				previousRef = ref.Ref
+			}
+		}
+
+		for _, checkpoint := range branchCheckpoints {
+			if previousRef := previousByRef[checkpoint.Ref]; previousRef != "" {
+				baseByRef[checkpoint.Ref] = previousRef
+				continue
+			}
+			parent, err := getCommitParent(ctx, repoRoot, checkpointInfoCommit(checkpoint))
+			if err != nil {
+				return nil, err
+			}
+			baseByRef[checkpoint.Ref] = parent
+		}
+	}
+	return baseByRef, nil
+}
+
+func checkpointInfoCommit(checkpoint checkpointInfo) string {
+	if strings.TrimSpace(checkpoint.FullCommit) != "" {
+		return strings.TrimSpace(checkpoint.FullCommit)
+	}
+	if strings.TrimSpace(checkpoint.Commit) != "" {
+		return strings.TrimSpace(checkpoint.Commit)
+	}
+	return strings.TrimSpace(checkpoint.Ref)
 }
 
 func splitCheckpointRangeArg(arg string) (string, string, bool, error) {
