@@ -32,3 +32,7 @@ func (d pendingDebugLogger) Printf(format string, args ...any) {
 	defer d.mu.Unlock()
 	fmt.Fprintf(d.out, "debug: pending: +%s "+format+"\n", append([]any{elapsed}, args...)...)
 }
+
+func (d pendingDebugLogger) Enabled() bool {
+	return d.enabled && d.out != nil
+}

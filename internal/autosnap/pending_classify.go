@@ -299,6 +299,7 @@ func classifyPendingRefsForBranchStreamDebug(ctx context.Context, repoRoot, base
 	if bc == nil {
 		return nil
 	}
+	checkpoints = checkpointRefsWithTrees(checkpoints, bc.treeLines)
 
 	emitted := make([]bool, len(checkpoints))
 	emitAt := func(i int, status checkpointPendingStatus) {
@@ -376,6 +377,7 @@ func classifyPendingRefsForBranchDebug(ctx context.Context, repoRoot, baseRef st
 	if bc == nil {
 		return nil, nil
 	}
+	checkpoints = checkpointRefsWithTrees(checkpoints, bc.treeLines)
 
 	classified := make([]classifiedCheckpointRef, 0, len(checkpoints))
 	newestIntegratedIndex := -1
@@ -433,6 +435,7 @@ func actionablePendingRefsForBranchDebug(ctx context.Context, repoRoot, baseRef 
 	if bc == nil {
 		return nil, nil
 	}
+	checkpoints = checkpointRefsWithTrees(checkpoints, bc.treeLines)
 
 	actionableByIndex := make([]bool, len(checkpoints))
 	boundaryIndex := -1
@@ -480,6 +483,21 @@ func actionablePendingRefsForBranchDebug(ctx context.Context, repoRoot, baseRef 
 	debugLog.Printf("branch actionable classification finished branch=%s actionable=%d elapsed=%s", baseRef, len(pending), time.Since(branchStart).Round(time.Millisecond))
 
 	return pending, nil
+}
+
+func checkpointRefsWithTrees(checkpoints []checkpointRefInfo, treeLines []string) []checkpointRefInfo {
+	if len(checkpoints) == 0 {
+		return nil
+	}
+	withTrees := make([]checkpointRefInfo, len(checkpoints))
+	copy(withTrees, checkpoints)
+	for i := range withTrees {
+		if i >= len(treeLines) {
+			continue
+		}
+		withTrees[i].Tree = strings.TrimSpace(treeLines[i])
+	}
+	return withTrees
 }
 
 func classifyCheckpointMergeStatus(ctx context.Context, repoRoot, branchTip, branchTipTree string, cp checkpointRefInfo) (checkpointPendingStatus, bool, error) {

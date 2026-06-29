@@ -98,14 +98,14 @@ func newPendingCommand() *cobra.Command {
 
 			if explain {
 				if normalizedFormat == outputFormatJSON {
-					return writePendingExplainJSON(ctx, repoRoot, refs, branch, allBranches, out, checkpointJSONLOptions{
+					return writePendingExplainJSON(ctx, repoRoot, refs, branch, allBranches, out, debugLog, checkpointJSONLOptions{
 						IncludeNotes: includeNotes,
 						NotesJSON:    notesJSON,
 						NoteRef:      resolvedNoteRef,
 					})
 				}
 				if normalizedFormat == outputFormatJSONL {
-					return writePendingExplainJSONL(ctx, repoRoot, refs, branch, allBranches, out, checkpointJSONLOptions{
+					return writePendingExplainJSONL(ctx, repoRoot, refs, branch, allBranches, out, debugLog, checkpointJSONLOptions{
 						IncludeNotes: includeNotes,
 						NotesJSON:    notesJSON,
 						NoteRef:      resolvedNoteRef,
@@ -131,14 +131,19 @@ func newPendingCommand() *cobra.Command {
 				return err
 			}
 			debugLog.Printf("loaded checkpoint metadata count=%d mode=pending", len(pending))
-			worktreeMatches, err := checkpointWorktreeMatches(ctx, repoRoot, pending)
+			debugLog.Printf("loading worktree markers count=%d mode=pending", len(pending))
+			worktreeMatches, err := checkpointWorktreeMatchesDebug(ctx, repoRoot, pending, debugLog)
 			if err != nil {
 				return err
 			}
+			debugLog.Printf("loaded worktree markers count=%d mode=pending", len(worktreeMatches))
+			markStart := time.Now()
+			debugLog.Printf("loading checkpoint marks count=%d mode=pending", len(pending))
 			marks, err := checkpointMarks(ctx, repoRoot, pending)
 			if err != nil {
 				return err
 			}
+			debugLog.Printf("loaded checkpoint marks count=%d mode=pending elapsed=%s", len(marks), time.Since(markStart).Round(time.Millisecond))
 
 			if normalizedFormat == outputFormatJSON {
 				return writeCheckpointsJSON(ctx, repoRoot, out, pending, checkpointJSONLOptions{

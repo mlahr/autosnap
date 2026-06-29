@@ -36,19 +36,22 @@ const (
 )
 
 type checkpointInfo struct {
-	Ref       string
-	Timestamp string
-	Commit    string
-	Branch    string
-	Status    string
-	CheckCmd  string
-	Summary   string
+	Ref        string
+	Timestamp  string
+	Commit     string
+	FullCommit string
+	Tree       string
+	Branch     string
+	Status     string
+	CheckCmd   string
+	Summary    string
 }
 
 type checkpointRefInfo struct {
 	Ref        string
 	Commit     string
 	FullCommit string
+	Tree       string
 	Timestamp  string
 	Branch     string
 }
@@ -257,6 +260,215 @@ func computeWorktreeTree(ctx context.Context, repoRoot, gitDirectory, mode strin
 		return "", err
 	}
 	return strings.TrimSpace(treeResult.Stdout), nil
+}
+
+func computeWorktreeMatchTrees(ctx context.Context, repoRoot, gitDirectory string) (string, string, error) {
+	return computeWorktreeMatchTreesDebug(ctx, repoRoot, gitDirectory, pendingDebugLogger{})
+}
+
+func computeWorktreeMatchTreesDebug(ctx context.Context, repoRoot, gitDirectory string, debugLog pendingDebugLogger) (string, string, error) {
+	start := time.Now()
+	tmpIndexFile, err := os.CreateTemp(gitDirectory, "autosnap-index.*")
+	if err != nil {
+		return "", "", err
+	}
+	tmpIndex := tmpIndexFile.Name()
+	if err := tmpIndexFile.Close(); err != nil {
+		_ = os.Remove(tmpIndex)
+		return "", "", err
+	}
+	defer func() {
+		_ = os.Remove(tmpIndex)
+	}()
+
+	indexPath := filepath.Join(gitDirectory, "index")
+	if _, err := os.Stat(indexPath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", "", fmt.Errorf("git index file not found for staged snapshot mode")
+		}
+		return "", "", err
+	}
+	if err := copyFile(indexPath, tmpIndex); err != nil {
+		return "", "", err
+	}
+	debugLog.Printf("worktree marker temp index copied elapsed=%s", time.Since(start).Round(time.Millisecond))
+
+	env := map[string]string{
+		"GIT_INDEX_FILE": tmpIndex,
+	}
+	indexStart := time.Now()
+	indexTreeResult, err := runGitCommand(ctx, repoRoot, env, "write-tree")
+	if err != nil {
+		return "", "", err
+	}
+	indexTree := strings.TrimSpace(indexTreeResult.Stdout)
+	debugLog.Printf("worktree marker index tree computed tree=%s elapsed=%s", shortObjectID(indexTree), time.Since(indexStart).Round(time.Millisecond))
+
+	statusStart := time.Now()
+	statusResult, err := runGitCommand(ctx, repoRoot, nil, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+	if err != nil {
+		return "", "", gitCommandError(err, statusResult)
+	}
+	entries := parsePorcelainStatusEntries(statusResult.Stdout)
+	debugLog.Printf("worktree marker status scanned entries=%d elapsed=%s", len(entries), time.Since(statusStart).Round(time.Millisecond))
+	addPaths, removePaths, fallback := worktreeMarkerPathUpdates(entries)
+	debugLog.Printf("worktree marker path updates add=%d remove=%d fallback=%t", len(addPaths), len(removePaths), fallback)
+
+	if len(addPaths) == 0 && len(removePaths) == 0 && !fallback {
+		debugLog.Printf("worktree marker clean path used total=%s", time.Since(start).Round(time.Millisecond))
+		return indexTree, indexTree, nil
+	}
+
+	if fallback {
+		if err := addAllToWorktreeMarkerIndex(ctx, repoRoot, env, debugLog); err != nil {
+			worktreeTree, indexTree, fallbackErr := computeWorktreeMatchTreesSnapshotFallback(ctx, repoRoot, gitDirectory, indexTree, start, debugLog)
+			if fallbackErr != nil {
+				return "", "", fallbackErr
+			}
+			return worktreeTree, indexTree, nil
+		}
+	} else {
+		if err := applyWorktreeMarkerPathUpdates(ctx, repoRoot, env, addPaths, removePaths, debugLog); err != nil {
+			debugLog.Printf("worktree marker path update failed: %v; falling back to full git add", err)
+			if err := addAllToWorktreeMarkerIndex(ctx, repoRoot, env, debugLog); err != nil {
+				worktreeTree, indexTree, fallbackErr := computeWorktreeMatchTreesSnapshotFallback(ctx, repoRoot, gitDirectory, indexTree, start, debugLog)
+				if fallbackErr != nil {
+					return "", "", fallbackErr
+				}
+				return worktreeTree, indexTree, nil
+			}
+		}
+	}
+
+	worktreeStart := time.Now()
+	worktreeTreeResult, err := runGitCommand(ctx, repoRoot, env, "write-tree")
+	if err != nil {
+		return "", "", err
+	}
+	worktreeTree := strings.TrimSpace(worktreeTreeResult.Stdout)
+	debugLog.Printf("worktree marker worktree tree computed tree=%s elapsed=%s total=%s", shortObjectID(worktreeTree), time.Since(worktreeStart).Round(time.Millisecond), time.Since(start).Round(time.Millisecond))
+	return worktreeTree, indexTree, nil
+}
+
+func worktreeMarkerPathUpdates(entries []porcelainStatusEntry) ([]string, []string, bool) {
+	addPaths := make([]string, 0, len(entries))
+	removePaths := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.previousPath != "" {
+			return nil, nil, true
+		}
+		if entry.status == "??" {
+			addPaths = append(addPaths, entry.path)
+			continue
+		}
+		if entry.status == "!!" {
+			continue
+		}
+		if len(entry.status) != 2 || entry.path == "" {
+			return nil, nil, true
+		}
+		worktreeStatus := entry.worktreeStatus()
+		switch worktreeStatus {
+		case " ":
+			continue
+		case "M", "T":
+			addPaths = append(addPaths, entry.path)
+		case "D":
+			removePaths = append(removePaths, entry.path)
+		default:
+			return nil, nil, true
+		}
+	}
+	return addPaths, removePaths, false
+}
+
+func applyWorktreeMarkerPathUpdates(ctx context.Context, repoRoot string, env map[string]string, addPaths, removePaths []string, debugLog pendingDebugLogger) error {
+	if debugLog.Enabled() {
+		return applyWorktreeMarkerPathUpdatesDebug(ctx, repoRoot, env, addPaths, removePaths, debugLog)
+	}
+
+	if len(addPaths) > 0 {
+		addStart := time.Now()
+		args := append([]string{"add", "--"}, addPaths...)
+		result, err := runGitCommand(ctx, repoRoot, env, args...)
+		if err != nil {
+			return gitCommandError(err, result)
+		}
+		debugLog.Printf("worktree marker path add completed paths=%d elapsed=%s", len(addPaths), time.Since(addStart).Round(time.Millisecond))
+	}
+	if len(removePaths) > 0 {
+		removeStart := time.Now()
+		args := append([]string{"rm", "--cached", "--ignore-unmatch", "--"}, removePaths...)
+		result, err := runGitCommand(ctx, repoRoot, env, args...)
+		if err != nil {
+			return gitCommandError(err, result)
+		}
+		debugLog.Printf("worktree marker path remove completed paths=%d elapsed=%s", len(removePaths), time.Since(removeStart).Round(time.Millisecond))
+	}
+	return nil
+}
+
+func applyWorktreeMarkerPathUpdatesDebug(ctx context.Context, repoRoot string, env map[string]string, addPaths, removePaths []string, debugLog pendingDebugLogger) error {
+	for i, path := range addPaths {
+		addStart := time.Now()
+		debugLog.Printf("worktree marker path add started index=%d/%d path=%q %s", i+1, len(addPaths), path, worktreeMarkerPathDebugInfo(repoRoot, path))
+		result, err := runGitCommand(ctx, repoRoot, env, "add", "--", path)
+		if err != nil {
+			return gitCommandError(err, result)
+		}
+		debugLog.Printf("worktree marker path add finished index=%d/%d path=%q elapsed=%s", i+1, len(addPaths), path, time.Since(addStart).Round(time.Millisecond))
+	}
+	for i, path := range removePaths {
+		removeStart := time.Now()
+		debugLog.Printf("worktree marker path remove started index=%d/%d path=%q %s", i+1, len(removePaths), path, worktreeMarkerPathDebugInfo(repoRoot, path))
+		result, err := runGitCommand(ctx, repoRoot, env, "rm", "--cached", "--ignore-unmatch", "--", path)
+		if err != nil {
+			return gitCommandError(err, result)
+		}
+		debugLog.Printf("worktree marker path remove finished index=%d/%d path=%q elapsed=%s", i+1, len(removePaths), path, time.Since(removeStart).Round(time.Millisecond))
+	}
+	return nil
+}
+
+func worktreeMarkerPathDebugInfo(repoRoot, relPath string) string {
+	info, err := os.Lstat(filepath.Join(repoRoot, filepath.FromSlash(relPath)))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "state=missing"
+		}
+		return fmt.Sprintf("state=stat_error error=%q", err.Error())
+	}
+	switch {
+	case info.Mode()&os.ModeSymlink != 0:
+		return fmt.Sprintf("state=symlink mode=%s", info.Mode().String())
+	case info.IsDir():
+		return fmt.Sprintf("state=dir mode=%s", info.Mode().String())
+	case info.Mode().IsRegular():
+		return fmt.Sprintf("state=file size=%d mode=%s", info.Size(), info.Mode().String())
+	default:
+		return fmt.Sprintf("state=other mode=%s", info.Mode().String())
+	}
+}
+
+func addAllToWorktreeMarkerIndex(ctx context.Context, repoRoot string, env map[string]string, debugLog pendingDebugLogger) error {
+	addStart := time.Now()
+	result, err := runGitCommand(ctx, repoRoot, env, "add", "-A")
+	if err != nil {
+		debugLog.Printf("worktree marker full git add failed elapsed=%s", time.Since(addStart).Round(time.Millisecond))
+		return gitCommandError(err, result)
+	}
+	debugLog.Printf("worktree marker full git add completed elapsed=%s", time.Since(addStart).Round(time.Millisecond))
+	return nil
+}
+
+func computeWorktreeMatchTreesSnapshotFallback(ctx context.Context, repoRoot, gitDirectory, indexTree string, start time.Time, debugLog pendingDebugLogger) (string, string, error) {
+	fallbackStart := time.Now()
+	worktreeTree, fallbackErr := computeWorktreeTree(ctx, repoRoot, gitDirectory, snapshotModeBoth)
+	if fallbackErr != nil {
+		return "", "", fallbackErr
+	}
+	debugLog.Printf("worktree marker snapshot fallback tree computed tree=%s elapsed=%s total=%s", shortObjectID(worktreeTree), time.Since(fallbackStart).Round(time.Millisecond), time.Since(start).Round(time.Millisecond))
+	return worktreeTree, indexTree, nil
 }
 
 func copyFile(src, dest string) error {
@@ -496,28 +708,33 @@ func getCheckpointTree(ctx context.Context, repoRoot, ref string) (string, error
 }
 
 func checkpointWorktreeMatches(ctx context.Context, repoRoot string, checkpoints []checkpointInfo) (map[string]checkpointWorktreeMatch, error) {
+	return checkpointWorktreeMatchesDebug(ctx, repoRoot, checkpoints, pendingDebugLogger{})
+}
+
+func checkpointWorktreeMatchesDebug(ctx context.Context, repoRoot string, checkpoints []checkpointInfo, debugLog pendingDebugLogger) (map[string]checkpointWorktreeMatch, error) {
+	start := time.Now()
 	matches := map[string]checkpointWorktreeMatch{}
 	if len(checkpoints) == 0 {
 		return matches, nil
 	}
 
+	gitDirStart := time.Now()
 	gitDirectory, err := gitDir(ctx, repoRoot)
 	if err != nil {
 		return nil, err
 	}
-	worktreeTree, err := computeWorktreeTree(ctx, repoRoot, gitDirectory, snapshotModeBoth)
-	if err != nil {
-		return nil, err
-	}
-	indexTree, err := computeWorktreeTree(ctx, repoRoot, gitDirectory, snapshotModeStaged)
+	debugLog.Printf("worktree marker git dir resolved elapsed=%s", time.Since(gitDirStart).Round(time.Millisecond))
+	worktreeTree, indexTree, err := computeWorktreeMatchTreesDebug(ctx, repoRoot, gitDirectory, debugLog)
 	if err != nil {
 		return nil, err
 	}
 
+	checkpointTreeStart := time.Now()
 	treeLines, err := checkpointTreeLines(ctx, repoRoot, checkpoints)
 	if err != nil {
 		return nil, err
 	}
+	debugLog.Printf("worktree marker checkpoint trees loaded count=%d elapsed=%s", len(treeLines), time.Since(checkpointTreeStart).Round(time.Millisecond))
 	for i, cp := range checkpoints {
 		if i >= len(treeLines) {
 			continue
@@ -530,6 +747,7 @@ func checkpointWorktreeMatches(ctx context.Context, repoRoot string, checkpoints
 			matches[cp.Ref] = checkpointWorktreeMatchIndex
 		}
 	}
+	debugLog.Printf("worktree marker matching finished checkpoints=%d matches=%d elapsed=%s", len(checkpoints), len(matches), time.Since(start).Round(time.Millisecond))
 	return matches, nil
 }
 
@@ -538,9 +756,25 @@ func checkpointTreeLines(ctx context.Context, repoRoot string, checkpoints []che
 		return nil, nil
 	}
 
-	revParseArgs := make([]string, 0, len(checkpoints)+1)
+	treeLines := make([]string, len(checkpoints))
+	missing := make([]checkpointInfo, 0)
+	missingIndexes := make([]int, 0)
+	for i, cp := range checkpoints {
+		tree := strings.TrimSpace(cp.Tree)
+		if tree != "" {
+			treeLines[i] = tree
+			continue
+		}
+		missing = append(missing, cp)
+		missingIndexes = append(missingIndexes, i)
+	}
+	if len(missing) == 0 {
+		return treeLines, nil
+	}
+
+	revParseArgs := make([]string, 0, len(missing)+1)
 	revParseArgs = append(revParseArgs, "rev-parse")
-	for _, cp := range checkpoints {
+	for _, cp := range missing {
 		revParseArgs = append(revParseArgs, cp.Ref+"^{tree}")
 	}
 	treesResult, err := runGitCommand(ctx, repoRoot, nil, revParseArgs...)
@@ -548,8 +782,11 @@ func checkpointTreeLines(ctx context.Context, repoRoot string, checkpoints []che
 		return nil, gitCommandError(err, treesResult)
 	}
 
-	treeLines := strings.Split(strings.TrimSpace(treesResult.Stdout), "\n")
-	if len(treeLines) == len(checkpoints) {
+	resolvedTreeLines := strings.Split(strings.TrimSpace(treesResult.Stdout), "\n")
+	if len(resolvedTreeLines) == len(missing) {
+		for i, tree := range resolvedTreeLines {
+			treeLines[missingIndexes[i]] = strings.TrimSpace(tree)
+		}
 		return treeLines, nil
 	}
 
@@ -1247,13 +1484,15 @@ func listCheckpointsFromRefs(ctx context.Context, repoRoot string, entries []che
 		}
 
 		checkpoints = append(checkpoints, checkpointInfo{
-			Ref:       entry.Ref,
-			Commit:    entry.Commit,
-			Timestamp: entry.Timestamp,
-			Branch:    entry.Branch,
-			Status:    status,
-			CheckCmd:  checkCmd,
-			Summary:   summary,
+			Ref:        entry.Ref,
+			Commit:     entry.Commit,
+			FullCommit: entry.FullCommit,
+			Tree:       entry.Tree,
+			Timestamp:  entry.Timestamp,
+			Branch:     entry.Branch,
+			Status:     status,
+			CheckCmd:   checkCmd,
+			Summary:    summary,
 		})
 	}
 

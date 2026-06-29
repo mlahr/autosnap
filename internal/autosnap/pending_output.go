@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 )
 
 type pendingExplainRow struct {
@@ -38,14 +39,19 @@ func streamExplainPendingCheckpointRefs(ctx context.Context, repoRoot string, re
 		return err
 	}
 	debugLog.Printf("loaded checkpoint metadata count=%d mode=explain", len(checkpoints))
-	worktreeMatches, err := checkpointWorktreeMatches(ctx, repoRoot, checkpoints)
+	debugLog.Printf("loading worktree markers count=%d mode=explain", len(checkpoints))
+	worktreeMatches, err := checkpointWorktreeMatchesDebug(ctx, repoRoot, checkpoints, debugLog)
 	if err != nil {
 		return err
 	}
+	debugLog.Printf("loaded worktree markers count=%d mode=explain", len(worktreeMatches))
+	markStart := time.Now()
+	debugLog.Printf("loading checkpoint marks count=%d mode=explain", len(checkpoints))
 	marks, err := checkpointMarks(ctx, repoRoot, checkpoints)
 	if err != nil {
 		return err
 	}
+	debugLog.Printf("loaded checkpoint marks count=%d mode=explain elapsed=%s", len(marks), time.Since(markStart).Round(time.Millisecond))
 
 	rowByRef := map[string]int{}
 	rows := make([]pendingExplainRow, len(checkpoints))
@@ -142,55 +148,69 @@ func printPendingExplainRow(out io.Writer, cp checkpointInfo, status checkpointP
 	fmt.Fprintf(out, "%s %s %s %s %s\n", displayTimestamp, statusText, commit, marker, summary)
 }
 
-func writePendingExplainJSON(ctx context.Context, repoRoot string, refs []checkpointRefInfo, branch string, allBranches bool, out io.Writer, opts checkpointJSONLOptions) error {
+func writePendingExplainJSON(ctx context.Context, repoRoot string, refs []checkpointRefInfo, branch string, allBranches bool, out io.Writer, debugLog pendingDebugLogger, opts checkpointJSONLOptions) error {
 	if len(refs) == 0 {
 		return writeCheckpointsJSON(ctx, repoRoot, out, nil, opts)
 	}
 
-	statusByRef, err := classifyPendingCheckpointRefsStreamMap(ctx, repoRoot, refs, branch, allBranches, pendingDebugLogger{})
+	statusByRef, err := classifyPendingCheckpointRefsStreamMap(ctx, repoRoot, refs, branch, allBranches, debugLog)
 	if err != nil {
 		return err
 	}
 	opts.PendingStatus = statusByRef
 
+	debugLog.Printf("loading checkpoint metadata count=%d mode=explain-json", len(refs))
 	checkpoints, err := listCheckpointsFromRefs(ctx, repoRoot, refs)
 	if err != nil {
 		return err
 	}
-	opts.WorktreeMatches, err = checkpointWorktreeMatches(ctx, repoRoot, checkpoints)
+	debugLog.Printf("loaded checkpoint metadata count=%d mode=explain-json", len(checkpoints))
+	debugLog.Printf("loading worktree markers count=%d mode=explain-json", len(checkpoints))
+	opts.WorktreeMatches, err = checkpointWorktreeMatchesDebug(ctx, repoRoot, checkpoints, debugLog)
 	if err != nil {
 		return err
 	}
+	debugLog.Printf("loaded worktree markers count=%d mode=explain-json", len(opts.WorktreeMatches))
+	markStart := time.Now()
+	debugLog.Printf("loading checkpoint marks count=%d mode=explain-json", len(checkpoints))
 	opts.Marks, err = checkpointMarks(ctx, repoRoot, checkpoints)
 	if err != nil {
 		return err
 	}
+	debugLog.Printf("loaded checkpoint marks count=%d mode=explain-json elapsed=%s", len(opts.Marks), time.Since(markStart).Round(time.Millisecond))
 	return writeCheckpointsJSON(ctx, repoRoot, out, checkpoints, opts)
 }
 
-func writePendingExplainJSONL(ctx context.Context, repoRoot string, refs []checkpointRefInfo, branch string, allBranches bool, out io.Writer, opts checkpointJSONLOptions) error {
+func writePendingExplainJSONL(ctx context.Context, repoRoot string, refs []checkpointRefInfo, branch string, allBranches bool, out io.Writer, debugLog pendingDebugLogger, opts checkpointJSONLOptions) error {
 	if len(refs) == 0 {
 		return nil
 	}
 
-	statusByRef, err := classifyPendingCheckpointRefsStreamMap(ctx, repoRoot, refs, branch, allBranches, pendingDebugLogger{})
+	statusByRef, err := classifyPendingCheckpointRefsStreamMap(ctx, repoRoot, refs, branch, allBranches, debugLog)
 	if err != nil {
 		return err
 	}
 	opts.PendingStatus = statusByRef
 
+	debugLog.Printf("loading checkpoint metadata count=%d mode=explain-jsonl", len(refs))
 	checkpoints, err := listCheckpointsFromRefs(ctx, repoRoot, refs)
 	if err != nil {
 		return err
 	}
-	opts.WorktreeMatches, err = checkpointWorktreeMatches(ctx, repoRoot, checkpoints)
+	debugLog.Printf("loaded checkpoint metadata count=%d mode=explain-jsonl", len(checkpoints))
+	debugLog.Printf("loading worktree markers count=%d mode=explain-jsonl", len(checkpoints))
+	opts.WorktreeMatches, err = checkpointWorktreeMatchesDebug(ctx, repoRoot, checkpoints, debugLog)
 	if err != nil {
 		return err
 	}
+	debugLog.Printf("loaded worktree markers count=%d mode=explain-jsonl", len(opts.WorktreeMatches))
+	markStart := time.Now()
+	debugLog.Printf("loading checkpoint marks count=%d mode=explain-jsonl", len(checkpoints))
 	opts.Marks, err = checkpointMarks(ctx, repoRoot, checkpoints)
 	if err != nil {
 		return err
 	}
+	debugLog.Printf("loaded checkpoint marks count=%d mode=explain-jsonl elapsed=%s", len(opts.Marks), time.Since(markStart).Round(time.Millisecond))
 	return writeCheckpointsJSONL(ctx, repoRoot, out, checkpoints, opts)
 }
 

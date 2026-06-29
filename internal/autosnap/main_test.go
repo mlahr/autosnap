@@ -2739,6 +2739,110 @@ func TestMarkCommandLabelsListShowAndJSONOutput(t *testing.T) {
 	})
 }
 
+func TestCheckpointMarksLoadsMarkedAndUnmarkedCheckpoints(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		createAutosnapTestCommitRef(t, repo, branchRef, "20260101T000000Z", "first checkpoint")
+		badRef := createAutosnapTestCommitRef(t, repo, branchRef, "20260101T000001Z", "second checkpoint")
+		goodRef := createAutosnapTestCommitRef(t, repo, branchRef, "20260101T000002Z", "third checkpoint")
+
+		if err := markCheckpointBad(context.Background(), repo, checkpointRefInfo{Ref: badRef, FullCommit: runGitOutput(t, repo, "rev-parse", badRef)}, "regression", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)); err != nil {
+			t.Fatalf("mark bad failed: %v", err)
+		}
+		if err := markCheckpointGood(context.Background(), repo, checkpointRefInfo{Ref: goodRef, FullCommit: runGitOutput(t, repo, "rev-parse", goodRef)}, time.Date(2026, 1, 1, 0, 0, 1, 0, time.UTC)); err != nil {
+			t.Fatalf("mark good failed: %v", err)
+		}
+
+		refs, err := listCheckpointRefsForBranch(context.Background(), repo, branchRef)
+		if err != nil {
+			t.Fatalf("listCheckpointRefsForBranch failed: %v", err)
+		}
+		checkpoints, err := listCheckpointsFromRefs(context.Background(), repo, refs)
+		if err != nil {
+			t.Fatalf("listCheckpointsFromRefs failed: %v", err)
+		}
+		marks, err := checkpointMarks(context.Background(), repo, checkpoints)
+		if err != nil {
+			t.Fatalf("checkpointMarks failed: %v", err)
+		}
+		if marks[refs[0].Ref].Mark != checkpointMarkStateUnmarked {
+			t.Fatalf("expected first checkpoint to be unmarked, got %+v", marks[refs[0].Ref])
+		}
+		if marks[badRef].Mark != checkpointMarkStateBad || marks[badRef].Reason != "regression" {
+			t.Fatalf("expected bad checkpoint mark with reason, got %+v", marks[badRef])
+		}
+		if marks[goodRef].Mark != checkpointMarkStateGood {
+			t.Fatalf("expected good checkpoint mark, got %+v", marks[goodRef])
+		}
+	})
+}
+
+func TestCheckpointMarksAppliesCommitMarkToDuplicateCheckpointRefs(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		firstRef := createAutosnapTestCommitRef(t, repo, branchRef, "20260101T000000Z", "first checkpoint")
+		commit := runGitOutput(t, repo, "rev-parse", firstRef)
+		secondRef := snapshotRef(branchRef, "20260101T000001Z")
+		runGit(t, repo, "update-ref", secondRef, commit)
+		addGitNote(t, repo, checkpointMarkNoteRef, commit, `{"mark":"bad","reason":"same commit"}`)
+
+		refs, err := listCheckpointRefsForBranch(context.Background(), repo, branchRef)
+		if err != nil {
+			t.Fatalf("listCheckpointRefsForBranch failed: %v", err)
+		}
+		checkpoints, err := listCheckpointsFromRefs(context.Background(), repo, refs)
+		if err != nil {
+			t.Fatalf("listCheckpointsFromRefs failed: %v", err)
+		}
+		marks, err := checkpointMarks(context.Background(), repo, checkpoints)
+		if err != nil {
+			t.Fatalf("checkpointMarks failed: %v", err)
+		}
+		if marks[firstRef].Mark != checkpointMarkStateBad || marks[secondRef].Mark != checkpointMarkStateBad {
+			t.Fatalf("expected both duplicate refs to use commit mark, got first=%+v second=%+v", marks[firstRef], marks[secondRef])
+		}
+		if marks[firstRef].Reason != "same commit" || marks[secondRef].Reason != "same commit" {
+			t.Fatalf("expected both duplicate refs to keep mark reason, got first=%+v second=%+v", marks[firstRef], marks[secondRef])
+		}
+	})
+}
+
+func TestCheckpointMarksRejectsInvalidMarkPayload(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		ref := createAutosnapTestCommitRef(t, repo, branchRef, "20260101T000000Z", "first checkpoint")
+		addGitNote(t, repo, checkpointMarkNoteRef, ref, `{not json`)
+
+		refs, err := listCheckpointRefsForBranch(context.Background(), repo, branchRef)
+		if err != nil {
+			t.Fatalf("listCheckpointRefsForBranch failed: %v", err)
+		}
+		checkpoints, err := listCheckpointsFromRefs(context.Background(), repo, refs)
+		if err != nil {
+			t.Fatalf("listCheckpointsFromRefs failed: %v", err)
+		}
+		_, err = checkpointMarks(context.Background(), repo, checkpoints)
+		if err == nil || !strings.Contains(err.Error(), "invalid checkpoint mark") {
+			t.Fatalf("expected invalid checkpoint mark error, got %v", err)
+		}
+	})
+}
+
 func TestMarkCommandMarksRangeAndClearsWithGood(t *testing.T) {
 	requireIntegration(t)
 	repo := createTestRepo(t)
@@ -3390,6 +3494,51 @@ func TestListCheckpointsFromRefsUsesFirstContentLine(t *testing.T) {
 		}
 		if got, want := checkpoints[0].Summary, "feat(logging): implement structured logging"; got != want {
 			t.Fatalf("expected summary %q, got %q", want, got)
+		}
+	})
+}
+
+func TestCheckpointTreeLinesUsesCachedTrees(t *testing.T) {
+	t.Parallel()
+	treeLines, err := checkpointTreeLines(context.Background(), "", []checkpointInfo{
+		{Ref: "refs/autosnapshots/main/20260101T000000Z", Tree: "1111111111111111111111111111111111111111"},
+		{Ref: "refs/autosnapshots/main/20260101T000001Z", Tree: "2222222222222222222222222222222222222222"},
+	})
+	if err != nil {
+		t.Fatalf("checkpointTreeLines failed: %v", err)
+	}
+	if len(treeLines) != 2 || treeLines[0] != "1111111111111111111111111111111111111111" || treeLines[1] != "2222222222222222222222222222222222222222" {
+		t.Fatalf("expected cached tree lines in order, got %#v", treeLines)
+	}
+}
+
+func TestCheckpointTreeLinesResolvesOnlyMissingTreesInOrder(t *testing.T) {
+	t.Parallel()
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		firstRef := createAutosnapTestCommitRef(t, repo, branchRef, "20260101T000000Z", "first checkpoint")
+		if err := os.WriteFile(filepath.Join(repo, "mixed-cache.txt"), []byte("changed\n"), 0o644); err != nil {
+			t.Fatalf("write file failed: %v", err)
+		}
+		runGit(t, repo, "add", "mixed-cache.txt")
+		secondRef := createAutosnapTestCommitRefFromIndex(t, repo, branchRef, "20260101T000001Z", "second checkpoint")
+		firstTree := runGitOutput(t, repo, "rev-parse", firstRef+"^{tree}")
+		secondTree := runGitOutput(t, repo, "rev-parse", secondRef+"^{tree}")
+
+		treeLines, err := checkpointTreeLines(context.Background(), repo, []checkpointInfo{
+			{Ref: firstRef, Tree: firstTree},
+			{Ref: secondRef},
+		})
+		if err != nil {
+			t.Fatalf("checkpointTreeLines failed: %v", err)
+		}
+		if len(treeLines) != 2 || treeLines[0] != firstTree || treeLines[1] != secondTree {
+			t.Fatalf("expected mixed cached/resolved tree lines in order, got %#v want [%s %s]", treeLines, firstTree, secondTree)
 		}
 	})
 }
@@ -6909,6 +7058,212 @@ func TestComputeWorktreeTreeSnapshotModes(t *testing.T) {
 			t.Fatalf("working mode should include working tree content, got %q", got)
 		}
 	})
+}
+
+func TestWorktreeMarkerPathUpdates(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name         string
+		entries      []porcelainStatusEntry
+		wantAdd      []string
+		wantRemove   []string
+		wantFallback bool
+	}{
+		{
+			name:    "untracked",
+			entries: []porcelainStatusEntry{{status: "??", path: "new.txt"}},
+			wantAdd: []string{"new.txt"},
+		},
+		{
+			name:    "unstaged modification",
+			entries: []porcelainStatusEntry{{status: " M", path: "file.txt"}},
+			wantAdd: []string{"file.txt"},
+		},
+		{
+			name:       "unstaged deletion",
+			entries:    []porcelainStatusEntry{{status: " D", path: "file.txt"}},
+			wantRemove: []string{"file.txt"},
+		},
+		{
+			name:    "staged only",
+			entries: []porcelainStatusEntry{{status: "M ", path: "file.txt"}},
+		},
+		{
+			name:         "rename falls back",
+			entries:      []porcelainStatusEntry{{status: "R ", path: "new.txt", previousPath: "old.txt"}},
+			wantFallback: true,
+		},
+		{
+			name:         "unmerged falls back",
+			entries:      []porcelainStatusEntry{{status: "UU", path: "file.txt"}},
+			wantFallback: true,
+		},
+		{
+			name:         "unknown worktree status falls back",
+			entries:      []porcelainStatusEntry{{status: " X", path: "file.txt"}},
+			wantFallback: true,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			addPaths, removePaths, fallback := worktreeMarkerPathUpdates(tt.entries)
+			if !reflect.DeepEqual(emptyStringSlice(addPaths), emptyStringSlice(tt.wantAdd)) {
+				t.Fatalf("add paths = %#v, want %#v", addPaths, tt.wantAdd)
+			}
+			if !reflect.DeepEqual(emptyStringSlice(removePaths), emptyStringSlice(tt.wantRemove)) {
+				t.Fatalf("remove paths = %#v, want %#v", removePaths, tt.wantRemove)
+			}
+			if fallback != tt.wantFallback {
+				t.Fatalf("fallback = %t, want %t", fallback, tt.wantFallback)
+			}
+		})
+	}
+}
+
+func emptyStringSlice(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	return values
+}
+
+func TestComputeWorktreeMatchTreesMatchesExistingSnapshotModeTrees(t *testing.T) {
+	t.Parallel()
+	requireIntegration(t)
+
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, repo string)
+	}{
+		{
+			name: "clean tree",
+			setup: func(t *testing.T, repo string) {
+				t.Helper()
+			},
+		},
+		{
+			name: "staged only change",
+			setup: func(t *testing.T, repo string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("staged\n"), 0o644); err != nil {
+					t.Fatalf("write staged file failed: %v", err)
+				}
+				runGit(t, repo, "add", "file.txt")
+			},
+		},
+		{
+			name: "unstaged tracked modification",
+			setup: func(t *testing.T, repo string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("staged\n"), 0o644); err != nil {
+					t.Fatalf("write staged file failed: %v", err)
+				}
+				runGit(t, repo, "add", "file.txt")
+				if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("unstaged\n"), 0o644); err != nil {
+					t.Fatalf("write unstaged file failed: %v", err)
+				}
+			},
+		},
+		{
+			name: "tracked deletion",
+			setup: func(t *testing.T, repo string) {
+				t.Helper()
+				if err := os.Remove(filepath.Join(repo, "file.txt")); err != nil {
+					t.Fatalf("remove tracked file failed: %v", err)
+				}
+			},
+		},
+		{
+			name: "untracked file",
+			setup: func(t *testing.T, repo string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(repo, "untracked.txt"), []byte("untracked\n"), 0o644); err != nil {
+					t.Fatalf("write untracked file failed: %v", err)
+				}
+			},
+		},
+		{
+			name: "ignored file",
+			setup: func(t *testing.T, repo string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("ignored.txt\n"), 0o644); err != nil {
+					t.Fatalf("write gitignore failed: %v", err)
+				}
+				runGit(t, repo, "add", ".gitignore")
+				if err := os.WriteFile(filepath.Join(repo, "ignored.txt"), []byte("ignored\n"), 0o644); err != nil {
+					t.Fatalf("write ignored file failed: %v", err)
+				}
+			},
+		},
+		{
+			name: "mixed modify delete untracked",
+			setup: func(t *testing.T, repo string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("staged\n"), 0o644); err != nil {
+					t.Fatalf("write staged file failed: %v", err)
+				}
+				runGit(t, repo, "add", "file.txt")
+				if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("unstaged\n"), 0o644); err != nil {
+					t.Fatalf("write unstaged file failed: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(repo, "delete-me.txt"), []byte("delete me\n"), 0o644); err != nil {
+					t.Fatalf("write delete file failed: %v", err)
+				}
+				runGit(t, repo, "add", "delete-me.txt")
+				if err := os.Remove(filepath.Join(repo, "delete-me.txt")); err != nil {
+					t.Fatalf("remove delete file failed: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(repo, "untracked.txt"), []byte("untracked\n"), 0o644); err != nil {
+					t.Fatalf("write untracked file failed: %v", err)
+				}
+			},
+		},
+		{
+			name: "rename fallback",
+			setup: func(t *testing.T, repo string) {
+				t.Helper()
+				runGit(t, repo, "mv", "file.txt", "renamed.txt")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			repo := createTestRepo(t)
+			withWorkingDir(t, repo, func() {
+				gitDirectory, err := gitDir(context.Background(), repo)
+				if err != nil {
+					t.Fatalf("gitDir failed: %v", err)
+				}
+				tt.setup(t, repo)
+
+				wantWorktreeTree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeBoth)
+				if err != nil {
+					t.Fatalf("computeWorktreeTree both failed: %v", err)
+				}
+				wantIndexTree, err := computeWorktreeTree(context.Background(), repo, gitDirectory, snapshotModeStaged)
+				if err != nil {
+					t.Fatalf("computeWorktreeTree staged failed: %v", err)
+				}
+				gotWorktreeTree, gotIndexTree, err := computeWorktreeMatchTrees(context.Background(), repo, gitDirectory)
+				if err != nil {
+					t.Fatalf("computeWorktreeMatchTrees failed: %v", err)
+				}
+
+				if gotWorktreeTree != wantWorktreeTree {
+					t.Fatalf("worktree tree mismatch: got %s want %s", gotWorktreeTree, wantWorktreeTree)
+				}
+				if gotIndexTree != wantIndexTree {
+					t.Fatalf("index tree mismatch: got %s want %s", gotIndexTree, wantIndexTree)
+				}
+			})
+		})
+	}
 }
 
 var testRepoTemplate struct {
