@@ -1,16 +1,19 @@
 .nh
-.TH "AUTOSNAP" "1" "Jun 2026" "autosnap" "autosnap manual"
+.TH "AUTOSNAP" "1" "Jul 2026" "autosnap" "autosnap manual"
 
 .SH NAME
 autosnap-show - Show checkpoint details
 
 
 .SH SYNOPSIS
-\fBautosnap show  [flags]\fP
+\fBautosnap show [checkpoint-or-range] [flags]\fP
 
 
 .SH DESCRIPTION
 Show checkpoint metadata and the diff for a checkpoint.
+
+.PP
+With no checkpoint argument, show defaults to the last checkpoint on the current branch.
 
 .PP
 A range A..B shows the net patch from the diff base of A through B. Ranges are
@@ -54,6 +57,7 @@ immediately before the latest checkpoint.
 
 .SH EXAMPLE
 .EX
+autosnap show
 autosnap show last
 autosnap show last-1
 autosnap show first+1

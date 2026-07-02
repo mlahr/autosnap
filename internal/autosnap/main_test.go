@@ -5225,7 +5225,7 @@ func TestShowCommandHelpDocumentsHistorySelectors(t *testing.T) {
 	}
 
 	output := buf.String()
-	for _, want := range []string{"first+N", "last-N", "autosnap show last-1", "--git-diff"} {
+	for _, want := range []string{"show [checkpoint-or-range]", "defaults to the last checkpoint", "first+N", "last-N", "autosnap show\n", "autosnap show last-1", "--git-diff"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("expected show help to contain %q, got:\n%s", want, output)
 		}
@@ -5313,6 +5313,15 @@ func TestShowCommandSupportsFirstAndLastSelectors(t *testing.T) {
 		}
 		if !strings.Contains(buf.String(), "checkpoint: "+ref3) {
 			t.Fatalf("expected last selector to resolve to latest checkpoint, got %q", buf.String())
+		}
+
+		buf.Reset()
+		root.SetArgs([]string{"show"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("show without checkpoint argument failed: %v", err)
+		}
+		if !strings.Contains(buf.String(), "checkpoint: "+ref3) {
+			t.Fatalf("expected omitted selector to resolve to latest checkpoint, got %q", buf.String())
 		}
 
 		if ref1 == ref2 || ref2 == ref3 || ref1 == ref3 {

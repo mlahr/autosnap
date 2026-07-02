@@ -20,9 +20,11 @@ func newShowCommand() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "show <checkpoint-or-range>",
+		Use:   "show [checkpoint-or-range]",
 		Short: "Show checkpoint details",
 		Long: strings.TrimSpace(`Show checkpoint metadata and the diff for a checkpoint.
+
+With no checkpoint argument, show defaults to the last checkpoint on the current branch.
 
 A range A..B shows the net patch from the diff base of A through B. Ranges are
 inclusive autosnap checkpoint intervals, not general Git revision ranges.
@@ -37,12 +39,13 @@ or one of these current-branch history selectors:
 
 Examples: first+1 selects the second checkpoint. last-1 selects the checkpoint
 immediately before the latest checkpoint.`),
-		Example: strings.TrimSpace(`autosnap show last
+		Example: strings.TrimSpace(`autosnap show
+autosnap show last
 autosnap show last-1
 autosnap show first+1
 autosnap show first+1..last
 autosnap show --name-only refs/autosnapshots/main/20260605T120000Z`),
-		Args: cobra.ExactArgs(1),
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			out := cmd.OutOrStdout()
 			ctx := context.Background()
@@ -51,11 +54,16 @@ autosnap show --name-only refs/autosnapshots/main/20260605T120000Z`),
 				return err
 			}
 
-			_, _, ranged, err := splitCheckpointRangeArg(args[0])
+			checkpointArg := "last"
+			if len(args) == 1 {
+				checkpointArg = args[0]
+			}
+
+			_, _, ranged, err := splitCheckpointRangeArg(checkpointArg)
 			if err != nil {
 				return err
 			}
-			patchRange, err := resolveCheckpointPatchRange(ctx, repoRoot, branchRef, args[0])
+			patchRange, err := resolveCheckpointPatchRange(ctx, repoRoot, branchRef, checkpointArg)
 			if err != nil {
 				return err
 			}
