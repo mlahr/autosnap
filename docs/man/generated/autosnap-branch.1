@@ -1,0 +1,27 @@
+.nh
+.TH "AUTOSNAP" "1" "Jul 2026" "autosnap" "autosnap manual"
+
+.SH NAME
+autosnap-branch - Create Git branches with autosnap checkpoints
+
+
+.SH SYNOPSIS
+\fBautosnap branch [flags]\fP
+
+
+.SH DESCRIPTION
+Create Git branches and copy autosnap checkpoint refs between branch namespaces.
+
+.PP
+Autosnap checkpoints are stored as refs under refs/autosnapshots//.
+Branch commands copy those refs. They do not duplicate checkpoint commit
+objects, apply checkpoint patches, or push anything to a remote.
+
+
+.SH OPTIONS
+\fB-h\fP, \fB--help\fP[=false]
+	help for branch
+
+
+.SH SEE ALSO
+\fBautosnap(1)\fP, \fBautosnap-branch-copy(1)\fP, \fBautosnap-branch-create(1)\fP

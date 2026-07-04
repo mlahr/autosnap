@@ -1,0 +1,43 @@
+.nh
+.TH "AUTOSNAP" "1" "Jul 2026" "autosnap" "autosnap manual"
+
+.SH NAME
+autosnap-branch-create - Create and check out a Git branch with checkpoint refs
+
+
+.SH SYNOPSIS
+\fBautosnap branch create  [flags]\fP
+
+
+.SH DESCRIPTION
+Create and check out a Git branch, then copy autosnap checkpoint refs
+from the previously checked-out branch into the new branch namespace.
+
+.PP
+This is equivalent to git checkout -b  plus copying refs from
+refs/autosnapshots// to refs/autosnapshots//.
+
+
+.SH OPTIONS
+\fB-h\fP, \fB--help\fP[=false]
+	help for create
+
+.PP
+\fB--no-copy-checkpoints\fP[=false]
+	Create the Git branch without copying checkpoint refs
+
+.PP
+\fB--overwrite\fP[=false]
+	Replace colliding target checkpoint refs
+
+
+.SH EXAMPLE
+.EX
+autosnap branch create feature/next
+autosnap branch create feature/next --no-copy-checkpoints
+autosnap branch create feature/next --overwrite
+.EE
+
+
+.SH SEE ALSO
+\fBautosnap-branch(1)\fP

@@ -51,6 +51,30 @@ Checkpoint selectors include:
 
 Timestamp-only selectors are not accepted.
 
+## Continue On A New Branch
+
+When you want to keep working from the current branch state but continue on a new
+branch with the same autosnap checkpoint timeline, use:
+
+```bash
+autosnap branch create Branch-B
+```
+
+This creates and checks out `Branch-B`, then copies the current branch's
+autosnap checkpoint refs into `refs/autosnapshots/Branch-B/`. It copies refs, not
+checkpoint commit objects or patches. To create the Git branch without copying
+checkpoint refs, use:
+
+```bash
+autosnap branch create Branch-B --no-copy-checkpoints
+```
+
+If you already created the Git branch, copy checkpoints explicitly:
+
+```bash
+autosnap branch copy --from Branch-A --to Branch-B
+```
+
 ## Salvage Selected Changes
 
 Sometimes a checkpoint passed the configured check but still contains a change

@@ -1,0 +1,45 @@
+.nh
+.TH "AUTOSNAP" "1" "Jul 2026" "autosnap" "autosnap manual"
+
+.SH NAME
+autosnap-branch-copy - Copy checkpoint refs between autosnap branch namespaces
+
+
+.SH SYNOPSIS
+\fBautosnap branch copy [flags]\fP
+
+
+.SH DESCRIPTION
+Copy autosnap checkpoint refs from one branch namespace to another.
+
+.PP
+The target Git branch must already exist. This command does not check out or
+create Git branches.
+
+
+.SH OPTIONS
+\fB--from\fP=""
+	Source autosnap branch namespace
+
+.PP
+\fB-h\fP, \fB--help\fP[=false]
+	help for copy
+
+.PP
+\fB--overwrite\fP[=false]
+	Replace colliding target checkpoint refs
+
+.PP
+\fB--to\fP=""
+	Target autosnap branch namespace
+
+
+.SH EXAMPLE
+.EX
+autosnap branch copy --from main --to feature/next
+autosnap branch copy --from main --to feature/next --overwrite
+.EE
+
+
+.SH SEE ALSO
+\fBautosnap-branch(1)\fP

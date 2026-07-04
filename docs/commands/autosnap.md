@@ -16,6 +16,7 @@ autosnap [flags]
 
 ### SEE ALSO
 
+* [autosnap branch](autosnap_branch.md)	 - Create Git branches with autosnap checkpoints
 * [autosnap checkpoint](autosnap_checkpoint.md)	 - Create a checkpoint immediately
 * [autosnap config](autosnap_config.md)	 - Manage autosnap configuration
 * [autosnap docs](autosnap_docs.md)	 - Show installed documentation locations

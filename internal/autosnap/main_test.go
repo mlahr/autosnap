@@ -125,6 +125,16 @@ func TestRootCommandIncludesCheckpointCommand(t *testing.T) {
 	t.Fatalf("expected root command to include checkpoint")
 }
 
+func TestRootCommandIncludesBranchCommand(t *testing.T) {
+	root := NewRootCommand()
+	for _, command := range root.Commands() {
+		if command.Name() == "branch" {
+			return
+		}
+	}
+	t.Fatalf("expected root command to include branch")
+}
+
 func TestRootCommandIncludesDocsCommand(t *testing.T) {
 	root := NewRootCommand()
 	for _, command := range root.Commands() {
@@ -161,6 +171,31 @@ func TestMarkCommandValidation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
 			root.AddCommand(newMarkCommand())
+			root.SetArgs(tt.args)
+			err := root.Execute()
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("expected error containing %q, got %v", tt.want, err)
+			}
+		})
+	}
+}
+
+func TestBranchCopyCommandValidation(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "missing from", args: []string{"branch", "copy", "--to", "feature/next"}, want: "branch copy requires --from"},
+		{name: "missing to", args: []string{"branch", "copy", "--from", "main"}, want: "branch copy requires --to"},
+		{name: "invalid from", args: []string{"branch", "copy", "--from", "bad..branch", "--to", "feature/next"}, want: "invalid --from"},
+		{name: "invalid to", args: []string{"branch", "copy", "--from", "main", "--to", "bad..branch"}, want: "invalid --to"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+			root.AddCommand(newBranchCommand())
 			root.SetArgs(tt.args)
 			err := root.Execute()
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
@@ -7091,6 +7126,218 @@ func TestParsePruneDuration(t *testing.T) {
 	if _, err := parsePruneDuration("-1h"); err == nil {
 		t.Fatalf("expected negative duration to fail")
 	}
+}
+
+func TestBranchCreateCopiesCurrentBranchCheckpointRefs(t *testing.T) {
+	t.Parallel()
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, sourceBranch, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		first := createAutosnapTestCommitRef(t, repo, sourceBranch, "20260101T000000Z", "first checkpoint")
+		second := createAutosnapTestCommitRef(t, repo, sourceBranch, "20260101T000001Z", "second checkpoint")
+		firstCommit := runGitOutput(t, repo, "rev-parse", first)
+		secondCommit := runGitOutput(t, repo, "rev-parse", second)
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newBranchCommand())
+		root.SetOut(buf)
+		root.SetArgs([]string{"branch", "create", "feature/next"})
+
+		if err := root.Execute(); err != nil {
+			t.Fatalf("branch create failed: %v", err)
+		}
+		if got := runGitOutput(t, repo, "branch", "--show-current"); got != "feature/next" {
+			t.Fatalf("expected checked-out branch feature/next, got %q", got)
+		}
+		targetFirst := snapshotRef("feature/next", "20260101T000000Z")
+		targetSecond := snapshotRef("feature/next", "20260101T000001Z")
+		if got := runGitOutput(t, repo, "rev-parse", targetFirst); got != firstCommit {
+			t.Fatalf("expected copied first commit %s, got %s", firstCommit, got)
+		}
+		if got := runGitOutput(t, repo, "rev-parse", targetSecond); got != secondCommit {
+			t.Fatalf("expected copied second commit %s, got %s", secondCommit, got)
+		}
+		if !strings.Contains(buf.String(), "created and checked out branch feature/next") ||
+			!strings.Contains(buf.String(), "copied 2 checkpoint ref(s) from "+sourceBranch+" to feature/next") {
+			t.Fatalf("unexpected branch create output: %q", buf.String())
+		}
+	})
+}
+
+func TestBranchCreateNoCopyCheckpoints(t *testing.T) {
+	t.Parallel()
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, sourceBranch, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		createAutosnapTestCommitRef(t, repo, sourceBranch, "20260101T000000Z", "first checkpoint")
+
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newBranchCommand())
+		root.SetArgs([]string{"branch", "create", "feature/no-copy", "--no-copy-checkpoints"})
+
+		if err := root.Execute(); err != nil {
+			t.Fatalf("branch create --no-copy-checkpoints failed: %v", err)
+		}
+		if got := runGitOutput(t, repo, "branch", "--show-current"); got != "feature/no-copy" {
+			t.Fatalf("expected checked-out branch feature/no-copy, got %q", got)
+		}
+		if gitRefExists(t, repo, snapshotRef("feature/no-copy", "20260101T000000Z")) {
+			t.Fatalf("expected no checkpoint ref to be copied")
+		}
+	})
+}
+
+func TestBranchCreateRefusesCheckpointCollisionsBeforeCheckout(t *testing.T) {
+	t.Parallel()
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, sourceBranch, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		sourceRef := createAutosnapTestCommitRef(t, repo, sourceBranch, "20260101T000000Z", "source checkpoint")
+		sourceCommit := runGitOutput(t, repo, "rev-parse", sourceRef)
+		targetRef := createAutosnapTestCommitRef(t, repo, "feature/preexisting", "20260101T000000Z", "target checkpoint")
+		targetCommit := runGitOutput(t, repo, "rev-parse", targetRef)
+
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newBranchCommand())
+		root.SetArgs([]string{"branch", "create", "feature/preexisting"})
+
+		err = root.Execute()
+		if err == nil || !strings.Contains(err.Error(), "use --overwrite to replace colliding refs") {
+			t.Fatalf("expected collision error, got %v", err)
+		}
+		if got := runGitOutput(t, repo, "branch", "--show-current"); got != sourceBranch {
+			t.Fatalf("branch create collision should not change checkout; got %q", got)
+		}
+		if gitRefExists(t, repo, "refs/heads/feature/preexisting") {
+			t.Fatalf("branch create collision should not create target Git branch")
+		}
+		if got := runGitOutput(t, repo, "rev-parse", targetRef); got != targetCommit {
+			t.Fatalf("expected target ref to remain %s, got %s", targetCommit, got)
+		}
+
+		root = &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newBranchCommand())
+		root.SetArgs([]string{"branch", "create", "feature/preexisting", "--overwrite"})
+
+		if err := root.Execute(); err != nil {
+			t.Fatalf("branch create --overwrite failed: %v", err)
+		}
+		if got := runGitOutput(t, repo, "branch", "--show-current"); got != "feature/preexisting" {
+			t.Fatalf("expected checked-out branch feature/preexisting, got %q", got)
+		}
+		if got := runGitOutput(t, repo, "rev-parse", targetRef); got != sourceCommit {
+			t.Fatalf("expected target ref to be overwritten with %s, got %s", sourceCommit, got)
+		}
+	})
+}
+
+func TestBranchCopyCopiesRefsWithoutCheckout(t *testing.T) {
+	t.Parallel()
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, sourceBranch, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		sourceRef := createAutosnapTestCommitRef(t, repo, sourceBranch, "20260101T000000Z", "source checkpoint")
+		sourceCommit := runGitOutput(t, repo, "rev-parse", sourceRef)
+		runGit(t, repo, "branch", "feature/copy-target")
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newBranchCommand())
+		root.SetOut(buf)
+		root.SetArgs([]string{"branch", "copy", "--from", sourceBranch, "--to", "feature/copy-target"})
+
+		if err := root.Execute(); err != nil {
+			t.Fatalf("branch copy failed: %v", err)
+		}
+		if got := runGitOutput(t, repo, "branch", "--show-current"); got != sourceBranch {
+			t.Fatalf("branch copy should not change checkout; got %q", got)
+		}
+		targetRef := snapshotRef("feature/copy-target", "20260101T000000Z")
+		if got := runGitOutput(t, repo, "rev-parse", targetRef); got != sourceCommit {
+			t.Fatalf("expected copied commit %s, got %s", sourceCommit, got)
+		}
+		if !strings.Contains(buf.String(), "copied 1 checkpoint ref(s) from "+sourceBranch+" to feature/copy-target") {
+			t.Fatalf("unexpected branch copy output: %q", buf.String())
+		}
+	})
+}
+
+func TestBranchCopyRefusesMissingTargetGitBranch(t *testing.T) {
+	t.Parallel()
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, sourceBranch, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newBranchCommand())
+		root.SetArgs([]string{"branch", "copy", "--from", sourceBranch, "--to", "feature/missing"})
+
+		err = root.Execute()
+		if err == nil || !strings.Contains(err.Error(), "target Git branch does not exist: feature/missing") {
+			t.Fatalf("expected missing target branch error, got %v", err)
+		}
+	})
+}
+
+func TestBranchCopyRefusesCollisionsUnlessOverwrite(t *testing.T) {
+	t.Parallel()
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, sourceBranch, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		sourceRef := createAutosnapTestCommitRef(t, repo, sourceBranch, "20260101T000000Z", "source checkpoint")
+		sourceCommit := runGitOutput(t, repo, "rev-parse", sourceRef)
+		runGit(t, repo, "branch", "feature/collision")
+		targetRef := createAutosnapTestCommitRef(t, repo, "feature/collision", "20260101T000000Z", "target checkpoint")
+		targetCommit := runGitOutput(t, repo, "rev-parse", targetRef)
+
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newBranchCommand())
+		root.SetArgs([]string{"branch", "copy", "--from", sourceBranch, "--to", "feature/collision"})
+
+		err = root.Execute()
+		if err == nil || !strings.Contains(err.Error(), "use --overwrite to replace colliding refs") {
+			t.Fatalf("expected collision error, got %v", err)
+		}
+		if got := runGitOutput(t, repo, "rev-parse", targetRef); got != targetCommit {
+			t.Fatalf("expected target ref to remain %s, got %s", targetCommit, got)
+		}
+
+		root = &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newBranchCommand())
+		root.SetArgs([]string{"branch", "copy", "--from", sourceBranch, "--to", "feature/collision", "--overwrite"})
+
+		if err := root.Execute(); err != nil {
+			t.Fatalf("branch copy --overwrite failed: %v", err)
+		}
+		if got := runGitOutput(t, repo, "rev-parse", targetRef); got != sourceCommit {
+			t.Fatalf("expected target ref to be overwritten with %s, got %s", sourceCommit, got)
+		}
+	})
 }
 
 func TestPruneCommandRejectsInvalidScopeAndPolicy(t *testing.T) {
