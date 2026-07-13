@@ -2,11 +2,11 @@
 
 ## autosnap mark
 
-Mark checkpoints unmarked, good, or bad
+Mark checkpoints unmarked, review, good, or bad
 
 ### Synopsis
 
-Mark one checkpoint or an inclusive checkpoint range unmarked, good, or bad.
+Mark one checkpoint or an inclusive checkpoint range unmarked, review, good, or bad.
 
 A range A..B marks checkpoints from A through B, inclusive. Ranges are
 inclusive autosnap checkpoint intervals, not general Git revision ranges.
@@ -20,7 +20,7 @@ or one of these current-branch history selectors:
   last-N
 
 ```
-autosnap mark (--bad|--good|--unmark) <checkpoint-or-range> [flags]
+autosnap mark (--bad|--good|--review|--unmark) <checkpoint-or-range> [flags]
 ```
 
 ### Options
@@ -30,7 +30,8 @@ autosnap mark (--bad|--good|--unmark) <checkpoint-or-range> [flags]
       --good            Mark selected checkpoints good
   -h, --help            help for mark
       --reason string   Human-readable reason for a bad mark
-      --unmark          Remove explicit good or bad marks from selected checkpoints
+      --review          Mark selected checkpoints for review
+      --unmark          Remove explicit review, good, or bad marks from selected checkpoints
 ```
 
 ### SEE ALSO

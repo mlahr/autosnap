@@ -105,6 +105,8 @@ autosnap show --name-only refs/autosnapshots/main/20260605T120000Z`),
 					markLabel = "end mark"
 				}
 				switch mark.Mark {
+				case checkpointMarkStateReview:
+					fmt.Fprintf(out, "%s: review\n", markLabel)
 				case checkpointMarkStateBad:
 					fmt.Fprintf(out, "%s: bad\n", markLabel)
 					if strings.TrimSpace(mark.Reason) != "" {

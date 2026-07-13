@@ -2,15 +2,15 @@
 .TH "AUTOSNAP" "1" "Jul 2026" "autosnap" "autosnap manual"
 
 .SH NAME
-autosnap-mark - Mark checkpoints unmarked, good, or bad
+autosnap-mark - Mark checkpoints unmarked, review, good, or bad
 
 
 .SH SYNOPSIS
-\fBautosnap mark (--bad|--good|--unmark)  [flags]\fP
+\fBautosnap mark (--bad|--good|--review|--unmark)  [flags]\fP
 
 
 .SH DESCRIPTION
-Mark one checkpoint or an inclusive checkpoint range unmarked, good, or bad.
+Mark one checkpoint or an inclusive checkpoint range unmarked, review, good, or bad.
 
 .PP
 A range A..B marks checkpoints from A through B, inclusive. Ranges are
@@ -44,8 +44,12 @@ first
 	Human-readable reason for a bad mark
 
 .PP
+\fB--review\fP[=false]
+	Mark selected checkpoints for review
+
+.PP
 \fB--unmark\fP[=false]
-	Remove explicit good or bad marks from selected checkpoints
+	Remove explicit review, good, or bad marks from selected checkpoints
 
 
 .SH SEE ALSO

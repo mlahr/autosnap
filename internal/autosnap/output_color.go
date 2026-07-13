@@ -50,6 +50,8 @@ func colorizeCheckpointMark(enabled bool, value, state string) string {
 		return colorize(enabled, ansiRed, value)
 	case checkpointMarkStateGood:
 		return colorize(enabled, ansiGreen, value)
+	case checkpointMarkStateReview:
+		return colorize(enabled, ansiYellow, value)
 	default:
 		return colorize(enabled, ansiYellow, value)
 	}

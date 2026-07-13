@@ -13,6 +13,7 @@ const checkpointMarkNoteRef = "refs/notes/autosnap/mark"
 
 const (
 	checkpointMarkStateUnmarked = "unmarked"
+	checkpointMarkStateReview   = "review"
 	checkpointMarkStateGood     = "good"
 	checkpointMarkStateBad      = "bad"
 )
@@ -29,6 +30,10 @@ func markCheckpointBad(ctx context.Context, repoRoot string, checkpoint checkpoi
 
 func markCheckpointGood(ctx context.Context, repoRoot string, checkpoint checkpointRefInfo, now time.Time) error {
 	return writeCheckpointMark(ctx, repoRoot, checkpoint, checkpointMarkStateGood, "", now)
+}
+
+func markCheckpointReview(ctx context.Context, repoRoot string, checkpoint checkpointRefInfo, now time.Time) error {
+	return writeCheckpointMark(ctx, repoRoot, checkpoint, checkpointMarkStateReview, "", now)
 }
 
 func writeCheckpointMark(ctx context.Context, repoRoot string, checkpoint checkpointRefInfo, state, reason string, now time.Time) error {
@@ -251,7 +256,7 @@ func parseCheckpointMark(checkpointRef, raw string) (checkpointMark, error) {
 		return checkpointMark{}, fmt.Errorf("invalid checkpoint mark for %s in %s: %w", checkpointRef, checkpointMarkNoteRef, err)
 	}
 	switch mark.Mark {
-	case checkpointMarkStateGood, checkpointMarkStateBad:
+	case checkpointMarkStateReview, checkpointMarkStateGood, checkpointMarkStateBad:
 		return mark, nil
 	default:
 		return checkpointMark{}, fmt.Errorf("invalid checkpoint mark state %q for %s in %s", mark.Mark, checkpointRef, checkpointMarkNoteRef)
@@ -260,6 +265,8 @@ func parseCheckpointMark(checkpointRef, raw string) (checkpointMark, error) {
 
 func checkpointMarkSummaryPrefix(useColor bool, mark checkpointMark) string {
 	switch mark.Mark {
+	case checkpointMarkStateReview:
+		return colorizeCheckpointMark(useColor, "[review]", checkpointMarkStateReview)
 	case checkpointMarkStateGood:
 		return colorizeCheckpointMark(useColor, "[good]", checkpointMarkStateGood)
 	case checkpointMarkStateBad:

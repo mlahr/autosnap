@@ -161,9 +161,10 @@ func TestMarkCommandValidation(t *testing.T) {
 		args []string
 		want string
 	}{
-		{name: "missing mode", args: []string{"mark", "last"}, want: "exactly one of --bad, --good, or --unmark"},
-		{name: "multiple modes", args: []string{"mark", "--bad", "--good", "last"}, want: "exactly one of --bad, --good, or --unmark"},
+		{name: "missing mode", args: []string{"mark", "last"}, want: "exactly one of --bad, --good, --review, or --unmark"},
+		{name: "multiple modes", args: []string{"mark", "--bad", "--review", "last"}, want: "exactly one of --bad, --good, --review, or --unmark"},
 		{name: "reason with good", args: []string{"mark", "--good", "--reason", "fixed", "last"}, want: "--reason can only be used with --bad"},
+		{name: "reason with review", args: []string{"mark", "--review", "--reason", "inspect", "last"}, want: "--reason can only be used with --bad"},
 		{name: "reason with unmark", args: []string{"mark", "--unmark", "--reason", "fixed", "last"}, want: "--reason can only be used with --bad"},
 	}
 
@@ -212,6 +213,9 @@ func TestCheckpointMarkSummaryPrefixColor(t *testing.T) {
 	if got := checkpointMarkSummaryPrefix(false, checkpointMark{Mark: checkpointMarkStateGood}); got != "[good]" {
 		t.Fatalf("expected plain good prefix, got %q", got)
 	}
+	if got := checkpointMarkSummaryPrefix(false, checkpointMark{Mark: checkpointMarkStateReview}); got != "[review]" {
+		t.Fatalf("expected plain review prefix, got %q", got)
+	}
 	if got := checkpointMarkSummaryPrefix(false, checkpointMark{}); got != "" {
 		t.Fatalf("expected empty unmarked prefix, got %q", got)
 	}
@@ -220,6 +224,9 @@ func TestCheckpointMarkSummaryPrefixColor(t *testing.T) {
 	}
 	if got := checkpointMarkSummaryPrefix(true, checkpointMark{Mark: checkpointMarkStateGood}); !strings.Contains(got, ansiGreen) || !strings.Contains(got, "[good]") {
 		t.Fatalf("expected green good prefix, got %q", got)
+	}
+	if got := checkpointMarkSummaryPrefix(true, checkpointMark{Mark: checkpointMarkStateReview}); !strings.Contains(got, ansiYellow) || !strings.Contains(got, "[review]") {
+		t.Fatalf("expected yellow review prefix, got %q", got)
 	}
 	if got := checkpointMarkSummaryPrefix(true, checkpointMark{}); got != "" {
 		t.Fatalf("expected empty colorized unmarked prefix, got %q", got)
@@ -2707,9 +2714,20 @@ func TestMarkCommandLabelsListShowAndJSONOutput(t *testing.T) {
 		}
 		createAutosnapTestCommitRef(t, repo, branchRef, "20260101T000000Z", "first checkpoint")
 		createAutosnapTestCommitRef(t, repo, branchRef, "20260101T000001Z", "second checkpoint")
+		createAutosnapTestCommitRef(t, repo, branchRef, "20260101T000002Z", "third checkpoint")
 
 		buf := &bytes.Buffer{}
 		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newMarkCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"mark", "--review", "last-1"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("mark review failed: %v", err)
+		}
+
+		buf.Reset()
+		root = &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
 		root.AddCommand(newMarkCommand())
 		root.SetOut(buf)
 		root.SetErr(buf)
@@ -2728,8 +2746,8 @@ func TestMarkCommandLabelsListShowAndJSONOutput(t *testing.T) {
 			t.Fatalf("list failed: %v", err)
 		}
 		output := buf.String()
-		if !strings.Contains(output, "first checkpoint") || strings.Contains(output, "[unmarked]") || !strings.Contains(output, "[bad] second checkpoint") {
-			t.Fatalf("expected list output to include compact good/bad labels, got %q", output)
+		if !strings.Contains(output, "first checkpoint") || strings.Contains(output, "[unmarked]") || !strings.Contains(output, "[review] second checkpoint") || !strings.Contains(output, "[bad] third checkpoint") {
+			t.Fatalf("expected list output to include compact review/bad labels, got %q", output)
 		}
 		if strings.Contains(output, "regression") {
 			t.Fatalf("expected list text output to omit bad reason, got %q", output)
@@ -2748,14 +2766,59 @@ func TestMarkCommandLabelsListShowAndJSONOutput(t *testing.T) {
 		if err := json.Unmarshal(buf.Bytes(), &rows); err != nil {
 			t.Fatalf("decode json list failed: %v output=%q", err, buf.String())
 		}
-		if len(rows) != 2 {
-			t.Fatalf("expected 2 json rows, got %d", len(rows))
+		if len(rows) != 3 {
+			t.Fatalf("expected 3 json rows, got %d", len(rows))
 		}
 		if rows[0]["mark"] != "unmarked" {
 			t.Fatalf("expected first checkpoint mark=unmarked, got %+v", rows[0])
 		}
-		if rows[1]["mark"] != "bad" || rows[1]["badReason"] != "regression" {
-			t.Fatalf("expected second checkpoint bad reason in json, got %+v", rows[1])
+		if rows[1]["mark"] != "review" {
+			t.Fatalf("expected second checkpoint mark=review, got %+v", rows[1])
+		}
+		if _, ok := rows[1]["badReason"]; ok {
+			t.Fatalf("expected review checkpoint to omit badReason, got %+v", rows[1])
+		}
+		if rows[2]["mark"] != "bad" || rows[2]["badReason"] != "regression" {
+			t.Fatalf("expected third checkpoint bad reason in json, got %+v", rows[2])
+		}
+
+		buf.Reset()
+		root = &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newListCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"list", "--format", "jsonl"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("jsonl list failed: %v", err)
+		}
+		if !strings.Contains(buf.String(), `"mark":"review"`) {
+			t.Fatalf("expected jsonl list to include review mark, got %q", buf.String())
+		}
+
+		buf.Reset()
+		root = &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newPendingCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"pending", "--explain"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("pending explain failed: %v", err)
+		}
+		if !strings.Contains(buf.String(), "[review] second checkpoint") {
+			t.Fatalf("expected pending output to include review mark, got %q", buf.String())
+		}
+
+		buf.Reset()
+		root = &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newShowCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"show", "last-1", "--name-only"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("show review failed: %v", err)
+		}
+		if !strings.Contains(buf.String(), "mark: review") {
+			t.Fatalf("expected show output to include review mark, got %q", buf.String())
 		}
 
 		buf.Reset()
@@ -2785,12 +2848,16 @@ func TestCheckpointMarksLoadsMarkedAndUnmarkedCheckpoints(t *testing.T) {
 		createAutosnapTestCommitRef(t, repo, branchRef, "20260101T000000Z", "first checkpoint")
 		badRef := createAutosnapTestCommitRef(t, repo, branchRef, "20260101T000001Z", "second checkpoint")
 		goodRef := createAutosnapTestCommitRef(t, repo, branchRef, "20260101T000002Z", "third checkpoint")
+		reviewRef := createAutosnapTestCommitRef(t, repo, branchRef, "20260101T000003Z", "fourth checkpoint")
 
 		if err := markCheckpointBad(context.Background(), repo, checkpointRefInfo{Ref: badRef, FullCommit: runGitOutput(t, repo, "rev-parse", badRef)}, "regression", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)); err != nil {
 			t.Fatalf("mark bad failed: %v", err)
 		}
 		if err := markCheckpointGood(context.Background(), repo, checkpointRefInfo{Ref: goodRef, FullCommit: runGitOutput(t, repo, "rev-parse", goodRef)}, time.Date(2026, 1, 1, 0, 0, 1, 0, time.UTC)); err != nil {
 			t.Fatalf("mark good failed: %v", err)
+		}
+		if err := markCheckpointReview(context.Background(), repo, checkpointRefInfo{Ref: reviewRef, FullCommit: runGitOutput(t, repo, "rev-parse", reviewRef)}, time.Date(2026, 1, 1, 0, 0, 2, 0, time.UTC)); err != nil {
+			t.Fatalf("mark review failed: %v", err)
 		}
 
 		refs, err := listCheckpointRefsForBranch(context.Background(), repo, branchRef)
@@ -2814,6 +2881,9 @@ func TestCheckpointMarksLoadsMarkedAndUnmarkedCheckpoints(t *testing.T) {
 		if marks[goodRef].Mark != checkpointMarkStateGood {
 			t.Fatalf("expected good checkpoint mark, got %+v", marks[goodRef])
 		}
+		if marks[reviewRef].Mark != checkpointMarkStateReview || marks[reviewRef].Reason != "" {
+			t.Fatalf("expected review checkpoint mark without reason, got %+v", marks[reviewRef])
+		}
 	})
 }
 
@@ -2829,7 +2899,7 @@ func TestCheckpointMarksAppliesCommitMarkToDuplicateCheckpointRefs(t *testing.T)
 		commit := runGitOutput(t, repo, "rev-parse", firstRef)
 		secondRef := snapshotRef(branchRef, "20260101T000001Z")
 		runGit(t, repo, "update-ref", secondRef, commit)
-		addGitNote(t, repo, checkpointMarkNoteRef, commit, `{"mark":"bad","reason":"same commit"}`)
+		addGitNote(t, repo, checkpointMarkNoteRef, commit, `{"mark":"review"}`)
 
 		refs, err := listCheckpointRefsForBranch(context.Background(), repo, branchRef)
 		if err != nil {
@@ -2843,11 +2913,11 @@ func TestCheckpointMarksAppliesCommitMarkToDuplicateCheckpointRefs(t *testing.T)
 		if err != nil {
 			t.Fatalf("checkpointMarks failed: %v", err)
 		}
-		if marks[firstRef].Mark != checkpointMarkStateBad || marks[secondRef].Mark != checkpointMarkStateBad {
+		if marks[firstRef].Mark != checkpointMarkStateReview || marks[secondRef].Mark != checkpointMarkStateReview {
 			t.Fatalf("expected both duplicate refs to use commit mark, got first=%+v second=%+v", marks[firstRef], marks[secondRef])
 		}
-		if marks[firstRef].Reason != "same commit" || marks[secondRef].Reason != "same commit" {
-			t.Fatalf("expected both duplicate refs to keep mark reason, got first=%+v second=%+v", marks[firstRef], marks[secondRef])
+		if marks[firstRef].Reason != "" || marks[secondRef].Reason != "" {
+			t.Fatalf("expected both duplicate review refs to omit reason, got first=%+v second=%+v", marks[firstRef], marks[secondRef])
 		}
 	})
 }
@@ -2878,7 +2948,7 @@ func TestCheckpointMarksRejectsInvalidMarkPayload(t *testing.T) {
 	})
 }
 
-func TestMarkCommandMarksRangeAndClearsWithGood(t *testing.T) {
+func TestMarkCommandMarksRangeAndReplacesWithReview(t *testing.T) {
 	requireIntegration(t)
 	repo := createTestRepo(t)
 	withWorkingDir(t, repo, func() {
@@ -2913,9 +2983,9 @@ func TestMarkCommandMarksRangeAndClearsWithGood(t *testing.T) {
 		root.AddCommand(newMarkCommand())
 		root.SetOut(buf)
 		root.SetErr(buf)
-		root.SetArgs([]string{"mark", "--good", "last"})
+		root.SetArgs([]string{"mark", "--review", "last"})
 		if err := root.Execute(); err != nil {
-			t.Fatalf("mark good failed: %v", err)
+			t.Fatalf("mark review failed: %v", err)
 		}
 
 		buf.Reset()
@@ -2925,11 +2995,11 @@ func TestMarkCommandMarksRangeAndClearsWithGood(t *testing.T) {
 		root.SetErr(buf)
 		root.SetArgs([]string{"list"})
 		if err := root.Execute(); err != nil {
-			t.Fatalf("list after good failed: %v", err)
+			t.Fatalf("list after review failed: %v", err)
 		}
 		output = buf.String()
-		if !strings.Contains(output, "[bad] second") || !strings.Contains(output, "[good] third") {
-			t.Fatalf("expected good mark to clear last checkpoint, got %q", output)
+		if !strings.Contains(output, "[bad] second") || !strings.Contains(output, "[review] third") {
+			t.Fatalf("expected review mark to replace bad mark on last checkpoint, got %q", output)
 		}
 
 		buf.Reset()
