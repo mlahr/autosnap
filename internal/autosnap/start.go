@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 
 	"syscall"
@@ -17,29 +18,43 @@ import (
 
 func newStartCommand() *cobra.Command {
 	var (
-		checkCommand string
-		msgSourceCmd string
-		idleSeconds  int
-		snapshotMode string
-		commitMode   string
-		watchMode    string
-		pollInterval time.Duration
-		logMaxBytes  int64
-		foreground   bool
-		daemon       bool
-		runToken     string
+		checkCommand          string
+		msgSourceCmd          string
+		idleSeconds           int
+		snapshotMode          string
+		commitMode            string
+		watchMode             string
+		pollInterval          time.Duration
+		logMaxBytes           int64
+		foreground            bool
+		daemon                bool
+		runToken              string
+		resolvedConfig        bool
+		startConfigFlagsValue string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "start",
 		Short: "Start the autosnap daemon and checkpoint on idle passing checks",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			startConfigFlags := configFlagNames(cmd)
+			if cmd.Flags().Changed("start-config-flags") {
+				parsedFlags, parseErr := parseStartConfigFlags(startConfigFlagsValue)
+				if parseErr != nil {
+					return parseErr
+				}
+				startConfigFlags = parsedFlags
+			}
+			if resolvedConfig && !cmd.Flags().Changed("start-config-flags") {
+				return fmt.Errorf("internal --resolved-config requires --start-config-flags")
+			}
+
 			repoRoot, branchDisplay, branchRef, err := detectRepository(context.Background())
 			if err != nil {
 				return err
 			}
 
-			cfg, _, err := resolveStartConfig(repoRoot, cmd, checkCommand, msgSourceCmd, idleSeconds, snapshotMode, commitMode, watchMode, pollInterval, logMaxBytes)
+			cfg, _, err := resolveStartConfigWithFile(repoRoot, cmd, checkCommand, msgSourceCmd, idleSeconds, snapshotMode, commitMode, watchMode, pollInterval, logMaxBytes, !resolvedConfig)
 			if err != nil {
 				return err
 			}
@@ -65,7 +80,8 @@ func newStartCommand() *cobra.Command {
 						return err
 					}
 				}
-				return startAutosnapDetached(repoRoot, checkCommand, msgSourceCmd, noteCommand, noteRef, idleSeconds, snapshotMode, commitMode, watchMode, pollInterval, logMaxBytes, runToken)
+				_, err := startAutosnapDetached(repoRoot, checkCommand, msgSourceCmd, noteCommand, noteRef, idleSeconds, snapshotMode, commitMode, watchMode, pollInterval, logMaxBytes, runToken, startConfigFlags)
+				return err
 			}
 
 			if runToken == "" {
@@ -97,23 +113,24 @@ func newStartCommand() *cobra.Command {
 				}
 
 				runState := autosnapRunState{
-					PID:             os.Getpid(),
-					RepoRoot:        repoRoot,
-					BranchRef:       branchRef,
-					BranchDisplay:   branchDisplay,
-					CheckCommand:    checkCommand,
-					MsgSourceCmd:    msgSourceCmd,
-					MsgSourceCmdSet: true,
-					NoteCommand:     noteCommand,
-					NoteRef:         noteRef,
-					IdleSeconds:     idleSeconds,
-					SnapshotMode:    snapshotMode,
-					CommitMode:      commitMode,
-					WatchMode:       watchMode,
-					PollInterval:    pollInterval,
-					LogMaxBytes:     logMaxBytes,
-					RunToken:        runToken,
-					StartedAt:       time.Now().UTC().Format(time.RFC3339),
+					PID:              os.Getpid(),
+					RepoRoot:         repoRoot,
+					BranchRef:        branchRef,
+					BranchDisplay:    branchDisplay,
+					CheckCommand:     checkCommand,
+					MsgSourceCmd:     msgSourceCmd,
+					MsgSourceCmdSet:  true,
+					NoteCommand:      noteCommand,
+					NoteRef:          noteRef,
+					IdleSeconds:      idleSeconds,
+					SnapshotMode:     snapshotMode,
+					CommitMode:       commitMode,
+					WatchMode:        watchMode,
+					PollInterval:     pollInterval,
+					LogMaxBytes:      logMaxBytes,
+					StartConfigFlags: append([]string{}, startConfigFlags...),
+					RunToken:         runToken,
+					StartedAt:        time.Now().UTC().Format(time.RFC3339),
 				}
 				if err := saveAutosnapRunState(runPath, runState); err != nil {
 					return err
@@ -148,35 +165,39 @@ func newStartCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&foreground, "foreground", false, "Run autosnap in the current terminal")
 	cmd.Flags().StringVar(&runToken, "run-token", "", "Internal: run identity token")
 	cmd.Flags().BoolVar(&daemon, "daemon", false, "Internal: run as background daemon")
+	cmd.Flags().BoolVar(&resolvedConfig, "resolved-config", false, "Internal: use fully resolved configuration flags")
+	cmd.Flags().StringVar(&startConfigFlagsValue, "start-config-flags", "", "Internal: original start configuration flags")
 	cmd.Flags().Lookup("run-token").Hidden = true
 	cmd.Flags().Lookup("daemon").Hidden = true
+	cmd.Flags().Lookup("resolved-config").Hidden = true
+	cmd.Flags().Lookup("start-config-flags").Hidden = true
 
 	return cmd
 }
 
-func startAutosnapDetached(repoRoot, checkCommand, msgSourceCmd, noteCommand, noteRef string, idleSeconds int, snapshotMode, commitMode, watchMode string, pollInterval time.Duration, logMaxBytes int64, runToken string) error {
+func startAutosnapDetached(repoRoot, checkCommand, msgSourceCmd, noteCommand, noteRef string, idleSeconds int, snapshotMode, commitMode, watchMode string, pollInterval time.Duration, logMaxBytes int64, runToken string, startConfigFlags []string) (int, error) {
 	logPath, err := backgroundLogPath(repoRoot)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
-		return err
+		return 0, err
 	}
 	if err := compactLogFile(logPath, logMaxBytes); err != nil {
-		return err
+		return 0, err
 	}
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer logFile.Close()
 
 	exe, err := os.Executable()
 	if err != nil {
-		return err
+		return 0, err
 	}
 
-	args := startDetachedArgs(exe, checkCommand, msgSourceCmd, noteCommand, noteRef, idleSeconds, snapshotMode, commitMode, watchMode, pollInterval, logMaxBytes, runToken)
+	args := startDetachedArgs(exe, checkCommand, msgSourceCmd, noteCommand, noteRef, idleSeconds, snapshotMode, commitMode, watchMode, pollInterval, logMaxBytes, runToken, startConfigFlags)
 
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Stdin = nil
@@ -188,21 +209,30 @@ func startAutosnapDetached(repoRoot, checkCommand, msgSourceCmd, noteCommand, no
 	}
 
 	if err := cmd.Start(); err != nil {
-		return err
+		return 0, err
 	}
 
 	fmt.Printf("autosnap started in background (pid=%d, log=%s)\n", cmd.Process.Pid, logPath)
-	return nil
+	return cmd.Process.Pid, nil
 }
 
-func startDetachedArgs(exe, checkCommand, msgSourceCmd, noteCommand, noteRef string, idleSeconds int, snapshotMode, commitMode, watchMode string, pollInterval time.Duration, logMaxBytes int64, runToken string) []string {
+func startDetachedArgs(exe, checkCommand, msgSourceCmd, noteCommand, noteRef string, idleSeconds int, snapshotMode, commitMode, watchMode string, pollInterval time.Duration, logMaxBytes int64, runToken string, startConfigFlags []string) []string {
 	args := []string{
 		exe,
 		"start",
 		"--foreground",
 		"--daemon",
+		"--resolved-config",
+		"--start-config-flags",
+		strings.Join(startConfigFlags, ","),
 		"--check",
 		checkCommand,
+		"--msg-source-cmd",
+		msgSourceCmd,
+		"--note-command",
+		noteCommand,
+		"--note-ref",
+		noteRef,
 		"--snapshot-mode",
 		snapshotMode,
 		"--commit-mode",
@@ -219,16 +249,26 @@ func startDetachedArgs(exe, checkCommand, msgSourceCmd, noteCommand, noteRef str
 		runToken,
 	}
 
-	if msgSourceCmd != "" {
-		args = append(args, "--msg-source-cmd", msgSourceCmd)
-	}
-	if noteCommand != "" {
-		args = append(args, "--note-command", noteCommand)
-	}
-	if noteRef != "" {
-		args = append(args, "--note-ref", noteRef)
-	}
 	return args
+}
+
+func parseStartConfigFlags(raw string) ([]string, error) {
+	requested := []string{}
+	if raw != "" {
+		requested = strings.Split(raw, ",")
+	}
+	set, err := configFlagSet(requested)
+	if err != nil {
+		return nil, err
+	}
+
+	names := make([]string, 0, len(set))
+	for _, name := range startConfigFlagNames {
+		if set[name] {
+			names = append(names, name)
+		}
+	}
+	return names, nil
 }
 
 func backgroundLogPath(repoRoot string) (string, error) {

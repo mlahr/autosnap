@@ -70,4 +70,10 @@ After editing `.autosnap.toml`, run:
 autosnap restart
 ```
 
-`restart` is the normal way to apply config edits to a running daemon.
+`restart` is the normal way to apply config edits to a running daemon. Its
+configuration precedence is: flags supplied to the original `autosnap start`,
+then the current `.autosnap.toml`, then built-in defaults. `restart` does not
+accept configuration flags. To change a flag override, run `autosnap stop` and
+then `autosnap start` with the new flags. `restart` appends its configuration
+source, preserved flag names, validated non-command settings, and process
+lifecycle steps to the daemon log.

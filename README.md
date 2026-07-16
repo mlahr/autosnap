@@ -41,6 +41,12 @@ After editing `.autosnap.toml`, restart the daemon:
 autosnap restart
 ```
 
+`restart` requires a running daemon. It reloads `.autosnap.toml` while preserving
+configuration flags supplied to the original `autosnap start`. To change those
+flags, run `autosnap stop` and then a new `autosnap start` command. Detailed
+restart progress is appended to the daemon log and is visible with
+`autosnap logs`.
+
 See [docs/quick-start.md](docs/quick-start.md) for the full first-run flow.
 
 ## Installation

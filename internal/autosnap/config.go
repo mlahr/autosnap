@@ -37,6 +37,24 @@ type autosnapWatchConfig struct {
 	PollInterval time.Duration `toml:"poll_interval"`
 }
 
+var startConfigFlagNames = []string{
+	"check",
+	"msg-source-cmd",
+	"note-command",
+	"note-ref",
+	"idle",
+	"snapshot-mode",
+	"commit-mode",
+	"watch-mode",
+	"poll-interval",
+	"log-max-bytes",
+}
+
+type autosnapConfigOverrides struct {
+	values autosnapConfig
+	set    map[string]bool
+}
+
 func defaultAutosnapConfig() autosnapConfig {
 	return autosnapConfig{
 		IdleSeconds:  60,
@@ -83,46 +101,73 @@ func loadAutosnapConfig(repoRoot string) (autosnapConfig, bool, error) {
 }
 
 func resolveStartConfig(repoRoot string, cmd *cobra.Command, checkCommand, msgSourceCmd string, idleSeconds int, snapshotMode, commitMode, watchMode string, pollInterval time.Duration, logMaxBytes int64) (autosnapConfig, bool, error) {
+	return resolveStartConfigWithFile(repoRoot, cmd, checkCommand, msgSourceCmd, idleSeconds, snapshotMode, commitMode, watchMode, pollInterval, logMaxBytes, true)
+}
+
+func resolveStartConfigWithFile(repoRoot string, cmd *cobra.Command, checkCommand, msgSourceCmd string, idleSeconds int, snapshotMode, commitMode, watchMode string, pollInterval time.Duration, logMaxBytes int64, loadFile bool) (autosnapConfig, bool, error) {
+	overrides := autosnapConfigOverrides{
+		values: autosnapConfig{
+			Check:        checkCommand,
+			MsgSourceCmd: msgSourceCmd,
+			NoteCommand:  noteCommandFlag(cmd),
+			NoteRef:      noteRefFlag(cmd),
+			IdleSeconds:  idleSeconds,
+			SnapshotMode: snapshotMode,
+			CommitMode:   commitMode,
+			LogMaxBytes:  logMaxBytes,
+			Watch: autosnapWatchConfig{
+				Mode:         watchMode,
+				PollInterval: pollInterval,
+			},
+		},
+		set: changedConfigFlags(cmd),
+	}
+	return resolveAutosnapConfig(repoRoot, overrides, loadFile)
+}
+
+func resolveAutosnapConfig(repoRoot string, overrides autosnapConfigOverrides, loadFile bool) (autosnapConfig, bool, error) {
 	cfg := defaultAutosnapConfig()
-	fileCfg, found, err := loadAutosnapConfig(repoRoot)
-	if err != nil {
-		return cfg, found, err
+	found := false
+	if loadFile {
+		fileCfg, configFound, err := loadAutosnapConfig(repoRoot)
+		if err != nil {
+			return cfg, configFound, err
+		}
+		found = configFound
+		if found {
+			mergeAutosnapConfig(&cfg, fileCfg)
+		}
 	}
 
-	if found {
-		mergeAutosnapConfig(&cfg, fileCfg)
+	if overrides.set["check"] {
+		cfg.Check = overrides.values.Check
 	}
-
-	flags := cmd.Flags()
-	if flags.Changed("check") {
-		cfg.Check = checkCommand
+	if overrides.set["msg-source-cmd"] {
+		cfg.MsgSourceCmd = overrides.values.MsgSourceCmd
 	}
-	if flags.Changed("msg-source-cmd") {
-		cfg.MsgSourceCmd = msgSourceCmd
+	if overrides.set["note-command"] {
+		cfg.NoteCommand = overrides.values.NoteCommand
 	}
-	if flags.Changed("note-command") {
-		cfg.NoteCommand = noteCommandFlag(cmd)
+	if overrides.set["note-ref"] {
+		cfg.NoteRef = overrides.values.NoteRef
 	}
-	if flags.Changed("note-ref") {
-		cfg.NoteRef = noteRefFlag(cmd)
+	if overrides.set["idle"] {
+		cfg.IdleSeconds = overrides.values.IdleSeconds
 	}
-	if flags.Changed("idle") {
-		cfg.IdleSeconds = idleSeconds
+	if overrides.set["snapshot-mode"] {
+		cfg.SnapshotMode = overrides.values.SnapshotMode
 	}
-	if flags.Changed("snapshot-mode") {
-		cfg.SnapshotMode = snapshotMode
+	if overrides.set["commit-mode"] {
+		cfg.CommitMode = overrides.values.CommitMode
 	}
-	if flags.Changed("commit-mode") {
-		cfg.CommitMode = commitMode
+	if overrides.set["watch-mode"] {
+		cfg.Watch.Mode = overrides.values.Watch.Mode
 	}
-	if flags.Changed("watch-mode") {
-		cfg.Watch.Mode = watchMode
+	if overrides.set["poll-interval"] {
+		cfg.Watch.PollInterval = overrides.values.Watch.PollInterval
 	}
-	if flags.Changed("poll-interval") {
-		cfg.Watch.PollInterval = pollInterval
-	}
-	if flags.Changed("log-max-bytes") {
-		cfg.LogMaxBytes = logMaxBytes
+	if overrides.set["log-max-bytes"] {
+		cfg.LogMaxBytes = overrides.values.LogMaxBytes
 	}
 
 	cfg.Check = strings.TrimSpace(cfg.Check)
@@ -133,13 +178,13 @@ func resolveStartConfig(repoRoot string, cmd *cobra.Command, checkCommand, msgSo
 	cfg.CommitMode = strings.TrimSpace(cfg.CommitMode)
 	cfg.Watch.Mode = strings.TrimSpace(cfg.Watch.Mode)
 
-	if err := validateStartConfig(cfg, flags.Changed("idle"), flags.Changed("poll-interval"), flags.Changed("log-max-bytes")); err != nil {
+	if err := validateStartConfig(cfg, overrides.set["idle"], overrides.set["poll-interval"], overrides.set["log-max-bytes"]); err != nil {
 		return cfg, found, err
 	}
 
 	normalizedSnapshotMode, err := normalizeSnapshotMode(cfg.SnapshotMode)
 	if err != nil {
-		if flags.Changed("snapshot-mode") {
+		if overrides.set["snapshot-mode"] {
 			return cfg, found, fmt.Errorf("invalid --snapshot-mode %q (expected both, staged, working)", cfg.SnapshotMode)
 		}
 		return cfg, found, fmt.Errorf("invalid snapshot_mode %q (expected both, staged, working)", cfg.SnapshotMode)
@@ -148,7 +193,7 @@ func resolveStartConfig(repoRoot string, cmd *cobra.Command, checkCommand, msgSo
 
 	normalizedCommitMode, err := normalizeCommitMode(cfg.CommitMode)
 	if err != nil {
-		if flags.Changed("commit-mode") {
+		if overrides.set["commit-mode"] {
 			return cfg, found, fmt.Errorf("invalid --commit-mode %q (expected checkpoint, direct, sync)", cfg.CommitMode)
 		}
 		return cfg, found, fmt.Errorf("invalid commit_mode %q (expected checkpoint, direct, sync)", cfg.CommitMode)
@@ -160,7 +205,7 @@ func resolveStartConfig(repoRoot string, cmd *cobra.Command, checkCommand, msgSo
 
 	normalizedWatchMode, err := normalizeWatchMode(cfg.Watch.Mode)
 	if err != nil {
-		if flags.Changed("watch-mode") {
+		if overrides.set["watch-mode"] {
 			return cfg, found, fmt.Errorf("invalid --watch-mode %q (expected recursive, poll, auto)", cfg.Watch.Mode)
 		}
 		return cfg, found, fmt.Errorf("invalid watch.mode %q (expected recursive, poll, auto)", cfg.Watch.Mode)
@@ -168,6 +213,46 @@ func resolveStartConfig(repoRoot string, cmd *cobra.Command, checkCommand, msgSo
 	cfg.Watch.Mode = normalizedWatchMode
 
 	return cfg, found, nil
+}
+
+func changedConfigFlags(cmd *cobra.Command) map[string]bool {
+	changed := make(map[string]bool)
+	for _, name := range startConfigFlagNames {
+		if cmd.Flags().Changed(name) {
+			changed[name] = true
+		}
+	}
+	return changed
+}
+
+func configFlagNames(cmd *cobra.Command) []string {
+	changed := changedConfigFlags(cmd)
+	names := make([]string, 0, len(changed))
+	for _, name := range startConfigFlagNames {
+		if changed[name] {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+func configFlagSet(names []string) (map[string]bool, error) {
+	allowed := make(map[string]bool, len(startConfigFlagNames))
+	for _, name := range startConfigFlagNames {
+		allowed[name] = true
+	}
+
+	set := make(map[string]bool, len(names))
+	for _, name := range names {
+		if !allowed[name] {
+			return nil, fmt.Errorf("unknown recorded start configuration flag %q", name)
+		}
+		if set[name] {
+			return nil, fmt.Errorf("duplicate recorded start configuration flag %q", name)
+		}
+		set[name] = true
+	}
+	return set, nil
 }
 
 func mergeAutosnapConfig(dst *autosnapConfig, src autosnapConfig) {

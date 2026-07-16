@@ -19,23 +19,24 @@ import (
 var readProcessCommandLine = defaultReadProcessCommandLine
 
 type autosnapRunState struct {
-	PID             int           `json:"pid"`
-	RepoRoot        string        `json:"repoRoot"`
-	BranchRef       string        `json:"branchRef"`
-	BranchDisplay   string        `json:"branchDisplay"`
-	CheckCommand    string        `json:"checkCommand"`
-	MsgSourceCmd    string        `json:"msgSourceCmd"`
-	MsgSourceCmdSet bool          `json:"msgSourceCmdSet,omitempty"`
-	NoteCommand     string        `json:"noteCommand,omitempty"`
-	NoteRef         string        `json:"noteRef,omitempty"`
-	SnapshotMode    string        `json:"snapshotMode"`
-	CommitMode      string        `json:"commitMode"`
-	WatchMode       string        `json:"watchMode"`
-	PollInterval    time.Duration `json:"pollInterval"`
-	LogMaxBytes     int64         `json:"logMaxBytes"`
-	RunToken        string        `json:"runToken"`
-	IdleSeconds     int           `json:"idleSeconds"`
-	StartedAt       string        `json:"startedAt"`
+	PID              int           `json:"pid"`
+	RepoRoot         string        `json:"repoRoot"`
+	BranchRef        string        `json:"branchRef"`
+	BranchDisplay    string        `json:"branchDisplay"`
+	CheckCommand     string        `json:"checkCommand"`
+	MsgSourceCmd     string        `json:"msgSourceCmd"`
+	MsgSourceCmdSet  bool          `json:"msgSourceCmdSet,omitempty"`
+	NoteCommand      string        `json:"noteCommand,omitempty"`
+	NoteRef          string        `json:"noteRef,omitempty"`
+	SnapshotMode     string        `json:"snapshotMode"`
+	CommitMode       string        `json:"commitMode"`
+	WatchMode        string        `json:"watchMode"`
+	PollInterval     time.Duration `json:"pollInterval"`
+	LogMaxBytes      int64         `json:"logMaxBytes"`
+	StartConfigFlags []string      `json:"startConfigFlags"`
+	RunToken         string        `json:"runToken"`
+	IdleSeconds      int           `json:"idleSeconds"`
+	StartedAt        string        `json:"startedAt"`
 }
 
 func runStatePath(repoRoot string) (string, error) {

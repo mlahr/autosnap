@@ -77,8 +77,12 @@ After editing `.autosnap.toml`, restart the daemon:
 autosnap restart
 ```
 
-`restart` is the normal way to apply config changes. If a daemon is already
-running, it stops and starts again with the updated configuration.
+`restart` requires a running daemon. It validates the current configuration,
+stops the daemon, and starts it again. Configuration flags supplied to the
+original `autosnap start` remain overrides; all other settings are reloaded from
+`.autosnap.toml`. To change the preserved flags, run `autosnap stop` followed by
+a new `autosnap start` command. Detailed restart progress is appended to the
+daemon log and is visible with `autosnap logs`.
 
 ## 6. Troubleshoot With Logs
 

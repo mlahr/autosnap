@@ -27,7 +27,7 @@ autosnap [flags]
 * [autosnap pick](autosnap_pick.md)	 - Apply a checkpoint's incremental patch
 * [autosnap promote](autosnap_promote.md)	 - Promote a checkpoint to a normal branch commit
 * [autosnap prune](autosnap_prune.md)	 - Prune old autosnap checkpoints
-* [autosnap restart](autosnap_restart.md)	 - Restart the autosnap daemon
+* [autosnap restart](autosnap_restart.md)	 - Restart the autosnap daemon with the current configuration
 * [autosnap restore](autosnap_restore.md)	 - Restore checkpoint changes into the worktree
 * [autosnap show](autosnap_show.md)	 - Show checkpoint details
 * [autosnap start](autosnap_start.md)	 - Start the autosnap daemon and checkpoint on idle passing checks

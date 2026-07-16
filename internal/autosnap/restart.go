@@ -3,6 +3,9 @@ package autosnap
 import (
 	"context"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -10,23 +13,17 @@ import (
 )
 
 func newRestartCommand() *cobra.Command {
-	var (
-		checkCommand string
-		msgSourceCmd string
-		idleSeconds  int
-		snapshotMode string
-		commitMode   string
-		watchMode    string
-		pollInterval time.Duration
-		logMaxBytes  int64
-	)
-
-	cmd := &cobra.Command{
+	return &cobra.Command{
 		Use:   "restart",
-		Short: "Restart the autosnap daemon",
+		Short: "Restart the autosnap daemon with the current configuration",
+		Long: `Restart the running autosnap daemon with the current .autosnap.toml.
+
+Configuration flags supplied to the original autosnap start remain overrides.
+To change those overrides, run autosnap stop and then autosnap start with the
+new flags. Detailed restart progress is appended to the autosnap daemon log.`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := context.Background()
-			repoRoot, _, _, err := detectRepository(ctx)
+			repoRoot, _, _, err := detectRepository(context.Background())
 			if err != nil {
 				return err
 			}
@@ -39,158 +36,142 @@ func newRestartCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			active := runState.PID != 0 && isAutosnapRunActive(runState)
-
-			cfg, err := resolveRestartConfig(repoRoot, cmd, runState, active, checkCommand, msgSourceCmd, idleSeconds, snapshotMode, commitMode, watchMode, pollInterval, logMaxBytes)
-			if err != nil {
+			if err := validateRestartRunState(runState); err != nil {
 				return err
 			}
 
-			if _, err := stopAutosnapRun(repoRoot, cmd.OutOrStdout()); err != nil {
+			logFile, logPath, err := openRestartLog(repoRoot)
+			if err != nil {
+				return err
+			}
+			defer logFile.Close()
+			if err := writeRestartLog(logFile, "restart requested; active_pid=%d", runState.PID); err != nil {
+				return err
+			}
+			if err := writeRestartLog(logFile, "loading configuration; path=%s; preserved_start_flags=%s", autosnapConfigPath(repoRoot), formatStartConfigFlags(runState.StartConfigFlags)); err != nil {
+				return err
+			}
+
+			cfg, configFound, err := resolveRestartConfig(repoRoot, runState)
+			if err != nil {
+				_ = writeRestartLog(logFile, "configuration validation failed; error=%v", err)
+				return err
+			}
+			configSource := "built-in defaults"
+			if configFound {
+				configSource = autosnapConfigPath(repoRoot)
+			}
+			if err := writeRestartLog(logFile, "configuration validated; source=%s; check=configured; msg_source_cmd=%s; notes=%s; idle_seconds=%d; snapshot_mode=%s; commit_mode=%s; watch_mode=%s; poll_interval=%s; log_max_bytes=%d", configSource, enabledState(cfg.MsgSourceCmd != ""), enabledState(cfg.NoteCommand != ""), cfg.IdleSeconds, cfg.SnapshotMode, cfg.CommitMode, cfg.Watch.Mode, cfg.Watch.PollInterval, cfg.LogMaxBytes); err != nil {
 				return err
 			}
 
 			runToken, err := newRunToken()
 			if err != nil {
+				_ = writeRestartLog(logFile, "run token generation failed; error=%v", err)
 				return err
 			}
-			return startAutosnapDetached(repoRoot, cfg.Check, cfg.MsgSourceCmd, cfg.NoteCommand, cfg.NoteRef, cfg.IdleSeconds, cfg.SnapshotMode, cfg.CommitMode, cfg.Watch.Mode, cfg.Watch.PollInterval, cfg.LogMaxBytes, runToken)
+			if err := writeRestartLog(logFile, "stopping daemon; pid=%d", runState.PID); err != nil {
+				return err
+			}
+
+			if _, err := stopAutosnapRun(repoRoot, cmd.OutOrStdout()); err != nil {
+				_ = writeRestartLog(logFile, "daemon stop failed; pid=%d; error=%v", runState.PID, err)
+				return err
+			}
+			writeRestartLogAfterStop(cmd.ErrOrStderr(), logFile, logPath, "daemon stopped; pid=%d", runState.PID)
+			writeRestartLogAfterStop(cmd.ErrOrStderr(), logFile, logPath, "starting replacement daemon")
+
+			replacementPID, err := startAutosnapDetached(repoRoot, cfg.Check, cfg.MsgSourceCmd, cfg.NoteCommand, cfg.NoteRef, cfg.IdleSeconds, cfg.SnapshotMode, cfg.CommitMode, cfg.Watch.Mode, cfg.Watch.PollInterval, cfg.LogMaxBytes, runToken, runState.StartConfigFlags)
+			if err != nil {
+				writeRestartLogAfterStop(cmd.ErrOrStderr(), logFile, logPath, "replacement daemon start failed; error=%v", err)
+				return err
+			}
+			writeRestartLogAfterStop(cmd.ErrOrStderr(), logFile, logPath, "replacement daemon started; pid=%d", replacementPID)
+			return nil
 		},
 	}
-
-	cmd.Flags().StringVar(&checkCommand, "check", "", "Shell command to run after idle")
-	cmd.Flags().StringVar(&msgSourceCmd, "msg-source-cmd", "", "Shell command that returns the checkpoint commit message (multiline supported)")
-	cmd.Flags().String("note-command", "", "Shell command that returns the checkpoint git note content")
-	cmd.Flags().String("note-ref", "", "Git notes ref for checkpoint notes")
-	cmd.Flags().IntVar(&idleSeconds, "idle", 60, "Seconds without changes before running the check")
-	cmd.Flags().StringVar(&snapshotMode, "snapshot-mode", snapshotModeBoth, "Snapshot source: both, staged, working")
-	cmd.Flags().StringVar(&commitMode, "commit-mode", commitModeCheckpoint, "Commit target: checkpoint, direct, sync")
-	cmd.Flags().StringVar(&watchMode, "watch-mode", watchModeRecursive, "Watch strategy: recursive, poll, auto")
-	cmd.Flags().DurationVar(&pollInterval, "poll-interval", defaultPollInterval, "Polling interval for poll or auto watch mode")
-	cmd.Flags().Int64Var(&logMaxBytes, "log-max-bytes", defaultLogMaxBytes, "Maximum autosnap daemon log size in bytes")
-
-	return cmd
 }
 
-func resolveRestartConfig(repoRoot string, cmd *cobra.Command, runState autosnapRunState, useRunState bool, checkCommand, msgSourceCmd string, idleSeconds int, snapshotMode, commitMode, watchMode string, pollInterval time.Duration, logMaxBytes int64) (autosnapConfig, error) {
-	if !useRunState {
-		cfg, _, err := resolveStartConfig(repoRoot, cmd, checkCommand, msgSourceCmd, idleSeconds, snapshotMode, commitMode, watchMode, pollInterval, logMaxBytes)
-		return cfg, err
+func validateRestartRunState(runState autosnapRunState) error {
+	if runState.PID == 0 || !isAutosnapRunActive(runState) {
+		return fmt.Errorf("autosnap daemon is not running; use 'autosnap start'")
 	}
+	if runState.StartConfigFlags == nil {
+		return fmt.Errorf("cannot restart daemon started by an older autosnap version; run 'autosnap stop' then 'autosnap start'")
+	}
+	return nil
+}
 
-	cfg := defaultAutosnapConfig()
-	fileCfg, found, err := loadAutosnapConfig(repoRoot)
+func resolveRestartConfig(repoRoot string, runState autosnapRunState) (autosnapConfig, bool, error) {
+	set, err := configFlagSet(runState.StartConfigFlags)
 	if err != nil {
-		return cfg, err
+		return autosnapConfig{}, false, err
 	}
-	if found {
-		mergeAutosnapConfig(&cfg, fileCfg)
+	overrides := autosnapConfigOverrides{
+		values: autosnapConfig{
+			Check:        runState.CheckCommand,
+			MsgSourceCmd: runState.MsgSourceCmd,
+			NoteCommand:  runState.NoteCommand,
+			NoteRef:      runState.NoteRef,
+			IdleSeconds:  runState.IdleSeconds,
+			SnapshotMode: runState.SnapshotMode,
+			CommitMode:   runState.CommitMode,
+			LogMaxBytes:  runState.LogMaxBytes,
+			Watch: autosnapWatchConfig{
+				Mode:         runState.WatchMode,
+				PollInterval: runState.PollInterval,
+			},
+		},
+		set: set,
 	}
+	return resolveAutosnapConfig(repoRoot, overrides, true)
+}
 
-	if strings.TrimSpace(runState.CheckCommand) != "" {
-		cfg.Check = runState.CheckCommand
-	}
-	if runState.MsgSourceCmdSet {
-		cfg.MsgSourceCmd = runState.MsgSourceCmd
-	}
-	if strings.TrimSpace(runState.NoteCommand) != "" {
-		cfg.NoteCommand = runState.NoteCommand
-	}
-	if strings.TrimSpace(runState.NoteRef) != "" {
-		cfg.NoteRef = runState.NoteRef
-	}
-	if runState.IdleSeconds != 0 {
-		cfg.IdleSeconds = runState.IdleSeconds
-	}
-	if strings.TrimSpace(runState.SnapshotMode) != "" {
-		cfg.SnapshotMode = runState.SnapshotMode
-	}
-	if strings.TrimSpace(runState.CommitMode) != "" {
-		cfg.CommitMode = runState.CommitMode
-	}
-	if strings.TrimSpace(runState.WatchMode) != "" {
-		cfg.Watch.Mode = runState.WatchMode
-	}
-	if runState.PollInterval != 0 {
-		cfg.Watch.PollInterval = runState.PollInterval
-	}
-	if runState.LogMaxBytes != 0 {
-		cfg.LogMaxBytes = runState.LogMaxBytes
-	}
-
-	flags := cmd.Flags()
-	if flags.Changed("check") {
-		cfg.Check = checkCommand
-	}
-	if flags.Changed("msg-source-cmd") {
-		cfg.MsgSourceCmd = msgSourceCmd
-	}
-	if flags.Changed("note-command") {
-		cfg.NoteCommand = noteCommandFlag(cmd)
-	}
-	if flags.Changed("note-ref") {
-		cfg.NoteRef = noteRefFlag(cmd)
-	}
-	if flags.Changed("idle") {
-		cfg.IdleSeconds = idleSeconds
-	}
-	if flags.Changed("snapshot-mode") {
-		cfg.SnapshotMode = snapshotMode
-	}
-	if flags.Changed("commit-mode") {
-		cfg.CommitMode = commitMode
-	}
-	if flags.Changed("watch-mode") {
-		cfg.Watch.Mode = watchMode
-	}
-	if flags.Changed("poll-interval") {
-		cfg.Watch.PollInterval = pollInterval
-	}
-	if flags.Changed("log-max-bytes") {
-		cfg.LogMaxBytes = logMaxBytes
-	}
-
-	cfg.Check = strings.TrimSpace(cfg.Check)
-	cfg.MsgSourceCmd = strings.TrimSpace(cfg.MsgSourceCmd)
-	cfg.NoteCommand = strings.TrimSpace(cfg.NoteCommand)
-	cfg.NoteRef = strings.TrimSpace(cfg.NoteRef)
-	cfg.SnapshotMode = strings.TrimSpace(cfg.SnapshotMode)
-	cfg.CommitMode = strings.TrimSpace(cfg.CommitMode)
-	cfg.Watch.Mode = strings.TrimSpace(cfg.Watch.Mode)
-
-	if err := validateStartConfig(cfg, flags.Changed("idle"), flags.Changed("poll-interval"), flags.Changed("log-max-bytes")); err != nil {
-		return cfg, err
-	}
-
-	normalizedSnapshotMode, err := normalizeSnapshotMode(cfg.SnapshotMode)
+func openRestartLog(repoRoot string) (*os.File, string, error) {
+	logPath, err := backgroundLogPath(repoRoot)
 	if err != nil {
-		if flags.Changed("snapshot-mode") {
-			return cfg, fmt.Errorf("invalid --snapshot-mode %q (expected both, staged, working)", cfg.SnapshotMode)
-		}
-		return cfg, fmt.Errorf("invalid snapshot_mode %q (expected both, staged, working)", cfg.SnapshotMode)
+		return nil, "", err
 	}
-	cfg.SnapshotMode = normalizedSnapshotMode
-
-	normalizedCommitMode, err := normalizeCommitMode(cfg.CommitMode)
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		return nil, "", err
+	}
+	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
-		if flags.Changed("commit-mode") {
-			return cfg, fmt.Errorf("invalid --commit-mode %q (expected checkpoint, direct, sync)", cfg.CommitMode)
-		}
-		return cfg, fmt.Errorf("invalid commit_mode %q (expected checkpoint, direct, sync)", cfg.CommitMode)
+		return nil, "", fmt.Errorf("open restart log: %w", err)
 	}
-	cfg.CommitMode = normalizedCommitMode
-	if isDirectCommitMode(cfg.CommitMode) && cfg.SnapshotMode != snapshotModeBoth {
-		return cfg, fmt.Errorf("commit_mode %s requires snapshot_mode both", cfg.CommitMode)
-	}
+	return file, logPath, nil
+}
 
-	normalizedWatchMode, err := normalizeWatchMode(cfg.Watch.Mode)
-	if err != nil {
-		if flags.Changed("watch-mode") {
-			return cfg, fmt.Errorf("invalid --watch-mode %q (expected recursive, poll, auto)", cfg.Watch.Mode)
-		}
-		return cfg, fmt.Errorf("invalid watch.mode %q (expected recursive, poll, auto)", cfg.Watch.Mode)
+func writeRestartLog(out io.Writer, format string, args ...any) error {
+	allArgs := make([]any, 0, len(args)+1)
+	allArgs = append(allArgs, time.Now().Format(time.RFC3339Nano))
+	allArgs = append(allArgs, args...)
+	if _, err := fmt.Fprintf(out, "[%s] restart: "+format+"\n", allArgs...); err != nil {
+		return fmt.Errorf("write restart log: %w", err)
 	}
-	cfg.Watch.Mode = normalizedWatchMode
+	return nil
+}
 
-	return cfg, nil
+func writeRestartLogAfterStop(stderr io.Writer, logFile io.Writer, logPath, format string, args ...any) {
+	if err := writeRestartLog(logFile, format, args...); err != nil {
+		fmt.Fprintf(stderr, "warning: %v (log=%s)\n", err, logPath)
+	}
+}
+
+func formatStartConfigFlags(names []string) string {
+	if len(names) == 0 {
+		return "none"
+	}
+	formatted := make([]string, len(names))
+	for i, name := range names {
+		formatted[i] = "--" + name
+	}
+	return strings.Join(formatted, ",")
+}
+
+func enabledState(enabled bool) string {
+	if enabled {
+		return "enabled"
+	}
+	return "disabled"
 }
