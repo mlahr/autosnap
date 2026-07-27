@@ -41,8 +41,11 @@ func newCheckpointCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := validateCheckpointCommitMessageSources(commitMsg, cfg.MsgSourceCmd); err != nil {
-				return err
+			// An explicit positional message has priority over both the configured
+			// and command-line message source. In particular, do not execute a
+			// configured shell command when the user supplied COMMIT_MSG.
+			if commitMsg != "" {
+				cfg.MsgSourceCmd = ""
 			}
 
 			statePath, err := stateFilePath(repoRoot)
