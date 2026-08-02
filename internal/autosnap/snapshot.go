@@ -38,20 +38,21 @@ const (
 )
 
 type snapshotRunner struct {
-	ctx             context.Context
-	repoRoot        string
-	branchRef       string
-	checkCmd        string
-	msgSourceCmd    string
-	commitMsg       string
-	noteCommand     string
-	noteRef         string
-	failOnNoteError bool
-	snapshotMode    string
-	commitMode      string
-	watchMode       string
-	pollInterval    time.Duration
-	idle            time.Duration
+	ctx                   context.Context
+	repoRoot              string
+	branchRef             string
+	checkCmd              string
+	msgSourceCmd          string
+	commitMsg             string
+	noteCommand           string
+	noteRef               string
+	postCheckpointCommand string
+	failOnNoteError       bool
+	snapshotMode          string
+	commitMode            string
+	watchMode             string
+	pollInterval          time.Duration
+	idle                  time.Duration
 
 	statePath string
 	state     autosnapState
@@ -465,6 +466,7 @@ func (r *snapshotRunner) runCheckUnlocked() (checkpointRunResult, error) {
 			}
 			logf("note attachment failed: %v\n", err)
 		}
+		r.runPostCheckpointCommand(recordedCommit, recordedCommit, commandEnv)
 	default:
 		ref, commit, err := createCheckpointChecked(r.ctx, r.repoRoot, branchRef, position.Head, r.checkCmd, r.idle, tree, commitMessage)
 		if err != nil {
@@ -489,6 +491,7 @@ func (r *snapshotRunner) runCheckUnlocked() (checkpointRunResult, error) {
 			}
 			logf("note attachment failed: %v\n", err)
 		}
+		r.runPostCheckpointCommand(commit, ref, commandEnv)
 
 		commitShort := commit
 		if len(commitShort) > 7 {
@@ -531,6 +534,26 @@ func (r *snapshotRunner) attachNote(commit string, env map[string]string) error 
 		return err
 	}
 	return nil
+}
+
+func (r *snapshotRunner) runPostCheckpointCommand(commit, ref string, env map[string]string) {
+	if strings.TrimSpace(r.postCheckpointCommand) == "" {
+		return
+	}
+	commandEnv := make(map[string]string, len(env)+2)
+	for key, value := range env {
+		commandEnv[key] = value
+	}
+	commandEnv["AUTOSNAP_CHECKPOINT_COMMIT"] = commit
+	commandEnv["AUTOSNAP_CHECKPOINT_REF"] = ref
+	_, exitCode, err := runShellOutputEnvLabel(r.ctx, r.repoRoot, "post-checkpoint-command", r.postCheckpointCommand, commandEnv)
+	if err != nil {
+		logf("post-checkpoint-command failed: %v\n", err)
+		return
+	}
+	if exitCode != 0 {
+		logf("post-checkpoint-command exited with code %d\n", exitCode)
+	}
 }
 
 func resolvePreviousCheckpoint(ctx context.Context, repoRoot, branchRef string, state autosnapState) (string, string) {

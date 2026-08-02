@@ -1261,6 +1261,7 @@ commit_mode = "sync"
 msg_source_cmd = "printf msg"
 note_command = "printf note"
 note_ref = "refs/notes/diffcog"
+post_checkpoint_command = "printf post"
 log_max_bytes = 2048
 
 [watch]
@@ -1278,7 +1279,7 @@ poll_interval = "2s"
 	if !found {
 		t.Fatalf("expected config to be found")
 	}
-	if cfg.Check != "go test ./..." || cfg.IdleSeconds != 15 || cfg.SnapshotMode != snapshotModeStaged || cfg.CommitMode != commitModeSync || cfg.MsgSourceCmd != "printf msg" || cfg.NoteCommand != "printf note" || cfg.NoteRef != "refs/notes/diffcog" || cfg.LogMaxBytes != 2048 || cfg.Watch.Mode != watchModeAuto || cfg.Watch.PollInterval != 2*time.Second {
+	if cfg.Check != "go test ./..." || cfg.IdleSeconds != 15 || cfg.SnapshotMode != snapshotModeStaged || cfg.CommitMode != commitModeSync || cfg.MsgSourceCmd != "printf msg" || cfg.NoteCommand != "printf note" || cfg.NoteRef != "refs/notes/diffcog" || cfg.PostCheckpointCommand != "printf post" || cfg.LogMaxBytes != 2048 || cfg.Watch.Mode != watchModeAuto || cfg.Watch.PollInterval != 2*time.Second {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
 }
@@ -1321,6 +1322,9 @@ poll_interval = "2s"
 	if err := cmd.Flags().Set("note-ref", "refs/notes/diffcog"); err != nil {
 		t.Fatalf("set note-ref flag failed: %v", err)
 	}
+	if err := cmd.Flags().Set("post-checkpoint-command", "printf post"); err != nil {
+		t.Fatalf("set post-checkpoint-command flag failed: %v", err)
+	}
 
 	cfg, found, err := resolveStartConfig(repo, cmd, "make test", "", 30, snapshotModeBoth, commitModeCheckpoint, watchModeAuto, defaultPollInterval, 8192)
 	if err != nil {
@@ -1329,7 +1333,7 @@ poll_interval = "2s"
 	if !found {
 		t.Fatalf("expected config to be found")
 	}
-	if cfg.Check != "make test" || cfg.IdleSeconds != 30 || cfg.CommitMode != commitModeCheckpoint || cfg.Watch.Mode != watchModeAuto || cfg.LogMaxBytes != 8192 || cfg.NoteCommand != "printf note" || cfg.NoteRef != "refs/notes/diffcog" {
+	if cfg.Check != "make test" || cfg.IdleSeconds != 30 || cfg.CommitMode != commitModeCheckpoint || cfg.Watch.Mode != watchModeAuto || cfg.LogMaxBytes != 8192 || cfg.NoteCommand != "printf note" || cfg.NoteRef != "refs/notes/diffcog" || cfg.PostCheckpointCommand != "printf post" {
 		t.Fatalf("expected flags to override config, got %+v", cfg)
 	}
 	if cfg.SnapshotMode != snapshotModeStaged || cfg.Watch.PollInterval != 2*time.Second {
@@ -1782,6 +1786,7 @@ func TestConfigInitAndShowCommands(t *testing.T) {
 		"commit_mode: checkpoint",
 		"note_command: ",
 		"note_ref: ",
+		"post_checkpoint_command: ",
 		"log_max_bytes: 10485760",
 		"watch.mode: recursive",
 		"watch.poll_interval: 5s",
@@ -1809,7 +1814,7 @@ func TestStartCommandAcceptsConfigCheck(t *testing.T) {
 }
 
 func TestStartDetachedArgsForwardWatchOptions(t *testing.T) {
-	args := startDetachedArgs("/bin/autosnap", "make build", "printf msg", "printf note", "refs/notes/diffcog", 30, snapshotModeBoth, commitModeCheckpoint, watchModeAuto, 2*time.Second, 4096, "token", []string{"check", "idle"})
+	args := startDetachedArgs("/bin/autosnap", "make build", "printf msg", "printf note", "refs/notes/diffcog", "printf post", 30, snapshotModeBoth, commitModeCheckpoint, watchModeAuto, 2*time.Second, 4096, "token", []string{"check", "idle"})
 	joined := strings.Join(args, "\n")
 	for _, want := range []string{
 		"--resolved-config",
@@ -1821,6 +1826,7 @@ func TestStartDetachedArgsForwardWatchOptions(t *testing.T) {
 		"--msg-source-cmd\nprintf msg",
 		"--note-command\nprintf note",
 		"--note-ref\nrefs/notes/diffcog",
+		"--post-checkpoint-command\nprintf post",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("expected detached args to contain %q, got %v", want, args)
@@ -1829,8 +1835,8 @@ func TestStartDetachedArgsForwardWatchOptions(t *testing.T) {
 }
 
 func TestStartDetachedArgsForwardEmptyOptionalValues(t *testing.T) {
-	args := startDetachedArgs("/bin/autosnap", "make build", "", "", "", 30, snapshotModeBoth, commitModeCheckpoint, watchModeRecursive, defaultPollInterval, defaultLogMaxBytes, "token", []string{})
-	for _, name := range []string{"--msg-source-cmd", "--note-command", "--note-ref"} {
+	args := startDetachedArgs("/bin/autosnap", "make build", "", "", "", "", 30, snapshotModeBoth, commitModeCheckpoint, watchModeRecursive, defaultPollInterval, defaultLogMaxBytes, "token", []string{})
+	for _, name := range []string{"--msg-source-cmd", "--note-command", "--note-ref", "--post-checkpoint-command"} {
 		index := slices.Index(args, name)
 		if index < 0 || index+1 >= len(args) || args[index+1] != "" {
 			t.Fatalf("expected %s to forward an explicit empty value, got %v", name, args)
@@ -5293,6 +5299,80 @@ commit:%s
 			if !strings.Contains(note, want) {
 				t.Fatalf("expected note to contain %q, got %q", want, note)
 			}
+		}
+	})
+}
+
+func TestRunCheckExecutesPostCheckpointCommandAfterNoteAttachment(t *testing.T) {
+	t.Parallel()
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		ctx := context.Background()
+		repoRoot, _, branchRef, err := detectRepository(ctx)
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		statePath, err := stateFilePath(repoRoot)
+		if err != nil {
+			t.Fatalf("stateFilePath failed: %v", err)
+		}
+		runner, err := newSnapshotRunner(ctx, repoRoot, branchRef, "true", "", snapshotModeBoth, time.Second, statePath)
+		if err != nil {
+			t.Fatalf("newSnapshotRunner failed: %v", err)
+		}
+		runner.noteCommand = "touch note-attached && printf note"
+		runner.noteRef = "refs/notes/diffcog"
+		runner.postCheckpointCommand = `test -f note-attached && printf 'commit:%s\nref:%s\nbranch:%s\n' "$AUTOSNAP_CHECKPOINT_COMMIT" "$AUTOSNAP_CHECKPOINT_REF" "$AUTOSNAP_BRANCH_REF" > post-checkpoint.txt`
+
+		if err := os.WriteFile(filepath.Join(repoRoot, "first.txt"), []byte("first"), 0o644); err != nil {
+			t.Fatalf("write first file failed: %v", err)
+		}
+		runner.runCheck()
+
+		output, err := os.ReadFile(filepath.Join(repoRoot, "post-checkpoint.txt"))
+		if err != nil {
+			t.Fatalf("read post-checkpoint output failed: %v", err)
+		}
+		commit := runGitOutput(t, repoRoot, "rev-parse", runner.state.LastCheckpointRef)
+		for _, want := range []string{
+			"commit:" + commit,
+			"ref:" + runner.state.LastCheckpointRef,
+			"branch:" + branchRef,
+		} {
+			if !strings.Contains(string(output), want) {
+				t.Fatalf("expected post-checkpoint output to contain %q, got %q", want, output)
+			}
+		}
+	})
+}
+
+func TestCheckpointCommandPostCheckpointFailureKeepsCheckpoint(t *testing.T) {
+	t.Parallel()
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("post failure"), 0o644); err != nil {
+			t.Fatalf("write file failed: %v", err)
+		}
+
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newCheckpointCommand())
+		root.SetArgs([]string{"checkpoint", "--check", "true", "--post-checkpoint-command", "false"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("expected post-checkpoint failure to be non-fatal, got %v", err)
+		}
+
+		checkpoints, err := listCheckpointRefsForBranch(context.Background(), repo, branchRef)
+		if err != nil {
+			t.Fatalf("list checkpoints failed: %v", err)
+		}
+		if len(checkpoints) != 1 {
+			t.Fatalf("expected one checkpoint despite post-checkpoint failure, got %d", len(checkpoints))
 		}
 	})
 }

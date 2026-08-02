@@ -26,6 +26,7 @@ commit_mode = "checkpoint"
 msg_source_cmd = ""
 note_command = ""
 note_ref = ""
+post_checkpoint_command = ""
 ```
 
 Start the daemon:

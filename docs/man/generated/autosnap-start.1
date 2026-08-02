@@ -1,5 +1,5 @@
 .nh
-.TH "AUTOSNAP" "1" "Jul 2026" "autosnap" "autosnap manual"
+.TH "AUTOSNAP" "1" "Aug 2026" "autosnap" "autosnap manual"
 
 .SH NAME
 autosnap-start - Start the autosnap daemon and checkpoint on idle passing checks
@@ -52,6 +52,10 @@ Start the autosnap daemon and checkpoint on idle passing checks
 .PP
 \fB--poll-interval\fP=5s
 	Polling interval for poll or auto watch mode
+
+.PP
+\fB--post-checkpoint-command\fP=""
+	Shell command to run after creating a checkpoint
 
 .PP
 \fB--snapshot-mode\fP="both"

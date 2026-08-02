@@ -24,6 +24,7 @@ commit_mode = "checkpoint"
 msg_source_cmd = ""
 note_command = ""
 note_ref = ""
+post_checkpoint_command = ""
 log_max_bytes = 10485760
 
 [watch]
@@ -61,6 +62,15 @@ output as a Git note on each checkpoint commit, for example under
 `refs/notes/diffcog`. `note_command` receives `AUTOSNAP_DIFF_BASE`,
 `AUTOSNAP_PREVIOUS_CHECKPOINT_REF`, `AUTOSNAP_BRANCH_REF`, `AUTOSNAP_HEAD`, and
 the note-only `AUTOSNAP_CHECKPOINT_COMMIT`.
+
+`post_checkpoint_command` is empty by default. When set, Autosnap runs it from
+the repository root after a checkpoint or direct/sync commit is created, its
+state is saved, and any configured Git note is attached. Its stdout and stderr
+are logged. A non-zero exit status is logged but does not remove the created
+checkpoint or make `autosnap checkpoint` fail. It receives the normal command
+context variables plus `AUTOSNAP_CHECKPOINT_COMMIT` and
+`AUTOSNAP_CHECKPOINT_REF`. The latter is an autosnap ref in checkpoint mode and
+the recorded commit ID in direct/sync modes.
 
 ## Applying Changes
 

@@ -60,6 +60,7 @@ func newCheckpointCommand() *cobra.Command {
 			runner.commitMsg = commitMsg
 			runner.noteCommand = cfg.NoteCommand
 			runner.noteRef = cfg.NoteRef
+			runner.postCheckpointCommand = cfg.PostCheckpointCommand
 			runner.failOnNoteError = true
 
 			result, err := runner.runCheckWithLock(timeout)
@@ -77,6 +78,7 @@ func newCheckpointCommand() *cobra.Command {
 	cmd.Flags().StringVar(&msgSourceCmd, "msg-source-cmd", "", "Shell command that returns the checkpoint commit message (multiline supported)")
 	cmd.Flags().String("note-command", "", "Shell command that returns the checkpoint git note content")
 	cmd.Flags().String("note-ref", "", "Git notes ref for checkpoint notes")
+	cmd.Flags().String("post-checkpoint-command", "", "Shell command to run after creating a checkpoint")
 	cmd.Flags().StringVar(&snapshotMode, "snapshot-mode", snapshotModeBoth, "Snapshot source: both, staged, working")
 	cmd.Flags().StringVar(&commitMode, "commit-mode", commitModeCheckpoint, "Commit target: checkpoint, direct, sync")
 	cmd.Flags().DurationVar(&timeout, "timeout", 0, "Maximum time to wait for another checkpoint operation to finish (0 waits indefinitely)")

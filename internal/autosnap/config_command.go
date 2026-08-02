@@ -92,6 +92,7 @@ func writeResolvedAutosnapConfig(repoRoot string, out io.Writer) error {
 	fmt.Fprintf(out, "msg_source_cmd: %s\n", cfg.MsgSourceCmd)
 	fmt.Fprintf(out, "note_command: %s\n", cfg.NoteCommand)
 	fmt.Fprintf(out, "note_ref: %s\n", cfg.NoteRef)
+	fmt.Fprintf(out, "post_checkpoint_command: %s\n", cfg.PostCheckpointCommand)
 	fmt.Fprintf(out, "log_max_bytes: %d\n", cfg.LogMaxBytes)
 	fmt.Fprintf(out, "watch.mode: %s\n", cfg.Watch.Mode)
 	fmt.Fprintf(out, "watch.poll_interval: %s\n", cfg.Watch.PollInterval)

@@ -61,7 +61,7 @@ new flags. Detailed restart progress is appended to the autosnap daemon log.`,
 			if configFound {
 				configSource = autosnapConfigPath(repoRoot)
 			}
-			if err := writeRestartLog(logFile, "configuration validated; source=%s; check=configured; msg_source_cmd=%s; notes=%s; idle_seconds=%d; snapshot_mode=%s; commit_mode=%s; watch_mode=%s; poll_interval=%s; log_max_bytes=%d", configSource, enabledState(cfg.MsgSourceCmd != ""), enabledState(cfg.NoteCommand != ""), cfg.IdleSeconds, cfg.SnapshotMode, cfg.CommitMode, cfg.Watch.Mode, cfg.Watch.PollInterval, cfg.LogMaxBytes); err != nil {
+			if err := writeRestartLog(logFile, "configuration validated; source=%s; check=configured; msg_source_cmd=%s; notes=%s; post_checkpoint_command=%s; idle_seconds=%d; snapshot_mode=%s; commit_mode=%s; watch_mode=%s; poll_interval=%s; log_max_bytes=%d", configSource, enabledState(cfg.MsgSourceCmd != ""), enabledState(cfg.NoteCommand != ""), enabledState(cfg.PostCheckpointCommand != ""), cfg.IdleSeconds, cfg.SnapshotMode, cfg.CommitMode, cfg.Watch.Mode, cfg.Watch.PollInterval, cfg.LogMaxBytes); err != nil {
 				return err
 			}
 
@@ -81,7 +81,7 @@ new flags. Detailed restart progress is appended to the autosnap daemon log.`,
 			writeRestartLogAfterStop(cmd.ErrOrStderr(), logFile, logPath, "daemon stopped; pid=%d", runState.PID)
 			writeRestartLogAfterStop(cmd.ErrOrStderr(), logFile, logPath, "starting replacement daemon")
 
-			replacementPID, err := startAutosnapDetached(repoRoot, cfg.Check, cfg.MsgSourceCmd, cfg.NoteCommand, cfg.NoteRef, cfg.IdleSeconds, cfg.SnapshotMode, cfg.CommitMode, cfg.Watch.Mode, cfg.Watch.PollInterval, cfg.LogMaxBytes, runToken, runState.StartConfigFlags)
+			replacementPID, err := startAutosnapDetached(repoRoot, cfg.Check, cfg.MsgSourceCmd, cfg.NoteCommand, cfg.NoteRef, cfg.PostCheckpointCommand, cfg.IdleSeconds, cfg.SnapshotMode, cfg.CommitMode, cfg.Watch.Mode, cfg.Watch.PollInterval, cfg.LogMaxBytes, runToken, runState.StartConfigFlags)
 			if err != nil {
 				writeRestartLogAfterStop(cmd.ErrOrStderr(), logFile, logPath, "replacement daemon start failed; error=%v", err)
 				return err
@@ -109,14 +109,15 @@ func resolveRestartConfig(repoRoot string, runState autosnapRunState) (autosnapC
 	}
 	overrides := autosnapConfigOverrides{
 		values: autosnapConfig{
-			Check:        runState.CheckCommand,
-			MsgSourceCmd: runState.MsgSourceCmd,
-			NoteCommand:  runState.NoteCommand,
-			NoteRef:      runState.NoteRef,
-			IdleSeconds:  runState.IdleSeconds,
-			SnapshotMode: runState.SnapshotMode,
-			CommitMode:   runState.CommitMode,
-			LogMaxBytes:  runState.LogMaxBytes,
+			Check:                 runState.CheckCommand,
+			MsgSourceCmd:          runState.MsgSourceCmd,
+			NoteCommand:           runState.NoteCommand,
+			NoteRef:               runState.NoteRef,
+			PostCheckpointCommand: runState.PostCheckpointCommand,
+			IdleSeconds:           runState.IdleSeconds,
+			SnapshotMode:          runState.SnapshotMode,
+			CommitMode:            runState.CommitMode,
+			LogMaxBytes:           runState.LogMaxBytes,
 			Watch: autosnapWatchConfig{
 				Mode:         runState.WatchMode,
 				PollInterval: runState.PollInterval,

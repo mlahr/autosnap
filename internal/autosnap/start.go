@@ -68,6 +68,7 @@ func newStartCommand() *cobra.Command {
 			logMaxBytes = cfg.LogMaxBytes
 			noteCommand := cfg.NoteCommand
 			noteRef := cfg.NoteRef
+			postCheckpointCommand := cfg.PostCheckpointCommand
 
 			if err := ensureNoActiveRunForRepo(repoRoot); err != nil {
 				return err
@@ -80,7 +81,7 @@ func newStartCommand() *cobra.Command {
 						return err
 					}
 				}
-				_, err := startAutosnapDetached(repoRoot, checkCommand, msgSourceCmd, noteCommand, noteRef, idleSeconds, snapshotMode, commitMode, watchMode, pollInterval, logMaxBytes, runToken, startConfigFlags)
+				_, err := startAutosnapDetached(repoRoot, checkCommand, msgSourceCmd, noteCommand, noteRef, postCheckpointCommand, idleSeconds, snapshotMode, commitMode, watchMode, pollInterval, logMaxBytes, runToken, startConfigFlags)
 				return err
 			}
 
@@ -105,6 +106,7 @@ func newStartCommand() *cobra.Command {
 			}
 			runner.noteCommand = noteCommand
 			runner.noteRef = noteRef
+			runner.postCheckpointCommand = postCheckpointCommand
 
 			if daemon {
 				runPath, err := runStatePath(repoRoot)
@@ -113,24 +115,25 @@ func newStartCommand() *cobra.Command {
 				}
 
 				runState := autosnapRunState{
-					PID:              os.Getpid(),
-					RepoRoot:         repoRoot,
-					BranchRef:        branchRef,
-					BranchDisplay:    branchDisplay,
-					CheckCommand:     checkCommand,
-					MsgSourceCmd:     msgSourceCmd,
-					MsgSourceCmdSet:  true,
-					NoteCommand:      noteCommand,
-					NoteRef:          noteRef,
-					IdleSeconds:      idleSeconds,
-					SnapshotMode:     snapshotMode,
-					CommitMode:       commitMode,
-					WatchMode:        watchMode,
-					PollInterval:     pollInterval,
-					LogMaxBytes:      logMaxBytes,
-					StartConfigFlags: append([]string{}, startConfigFlags...),
-					RunToken:         runToken,
-					StartedAt:        time.Now().UTC().Format(time.RFC3339),
+					PID:                   os.Getpid(),
+					RepoRoot:              repoRoot,
+					BranchRef:             branchRef,
+					BranchDisplay:         branchDisplay,
+					CheckCommand:          checkCommand,
+					MsgSourceCmd:          msgSourceCmd,
+					MsgSourceCmdSet:       true,
+					NoteCommand:           noteCommand,
+					NoteRef:               noteRef,
+					PostCheckpointCommand: postCheckpointCommand,
+					IdleSeconds:           idleSeconds,
+					SnapshotMode:          snapshotMode,
+					CommitMode:            commitMode,
+					WatchMode:             watchMode,
+					PollInterval:          pollInterval,
+					LogMaxBytes:           logMaxBytes,
+					StartConfigFlags:      append([]string{}, startConfigFlags...),
+					RunToken:              runToken,
+					StartedAt:             time.Now().UTC().Format(time.RFC3339),
 				}
 				if err := saveAutosnapRunState(runPath, runState); err != nil {
 					return err
@@ -156,6 +159,7 @@ func newStartCommand() *cobra.Command {
 	cmd.Flags().StringVar(&msgSourceCmd, "msg-source-cmd", "", "Shell command that returns the checkpoint commit message (multiline supported)")
 	cmd.Flags().String("note-command", "", "Shell command that returns the checkpoint git note content")
 	cmd.Flags().String("note-ref", "", "Git notes ref for checkpoint notes")
+	cmd.Flags().String("post-checkpoint-command", "", "Shell command to run after creating a checkpoint")
 	cmd.Flags().IntVar(&idleSeconds, "idle", 60, "Seconds without changes before running the check")
 	cmd.Flags().StringVar(&snapshotMode, "snapshot-mode", snapshotModeBoth, "Snapshot source: both, staged, working")
 	cmd.Flags().StringVar(&commitMode, "commit-mode", commitModeCheckpoint, "Commit target: checkpoint, direct, sync")
@@ -175,7 +179,7 @@ func newStartCommand() *cobra.Command {
 	return cmd
 }
 
-func startAutosnapDetached(repoRoot, checkCommand, msgSourceCmd, noteCommand, noteRef string, idleSeconds int, snapshotMode, commitMode, watchMode string, pollInterval time.Duration, logMaxBytes int64, runToken string, startConfigFlags []string) (int, error) {
+func startAutosnapDetached(repoRoot, checkCommand, msgSourceCmd, noteCommand, noteRef, postCheckpointCommand string, idleSeconds int, snapshotMode, commitMode, watchMode string, pollInterval time.Duration, logMaxBytes int64, runToken string, startConfigFlags []string) (int, error) {
 	logPath, err := backgroundLogPath(repoRoot)
 	if err != nil {
 		return 0, err
@@ -197,7 +201,7 @@ func startAutosnapDetached(repoRoot, checkCommand, msgSourceCmd, noteCommand, no
 		return 0, err
 	}
 
-	args := startDetachedArgs(exe, checkCommand, msgSourceCmd, noteCommand, noteRef, idleSeconds, snapshotMode, commitMode, watchMode, pollInterval, logMaxBytes, runToken, startConfigFlags)
+	args := startDetachedArgs(exe, checkCommand, msgSourceCmd, noteCommand, noteRef, postCheckpointCommand, idleSeconds, snapshotMode, commitMode, watchMode, pollInterval, logMaxBytes, runToken, startConfigFlags)
 
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Stdin = nil
@@ -216,7 +220,7 @@ func startAutosnapDetached(repoRoot, checkCommand, msgSourceCmd, noteCommand, no
 	return cmd.Process.Pid, nil
 }
 
-func startDetachedArgs(exe, checkCommand, msgSourceCmd, noteCommand, noteRef string, idleSeconds int, snapshotMode, commitMode, watchMode string, pollInterval time.Duration, logMaxBytes int64, runToken string, startConfigFlags []string) []string {
+func startDetachedArgs(exe, checkCommand, msgSourceCmd, noteCommand, noteRef, postCheckpointCommand string, idleSeconds int, snapshotMode, commitMode, watchMode string, pollInterval time.Duration, logMaxBytes int64, runToken string, startConfigFlags []string) []string {
 	args := []string{
 		exe,
 		"start",
@@ -233,6 +237,8 @@ func startDetachedArgs(exe, checkCommand, msgSourceCmd, noteCommand, noteRef str
 		noteCommand,
 		"--note-ref",
 		noteRef,
+		"--post-checkpoint-command",
+		postCheckpointCommand,
 		"--snapshot-mode",
 		snapshotMode,
 		"--commit-mode",

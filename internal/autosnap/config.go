@@ -19,15 +19,16 @@ const (
 )
 
 type autosnapConfig struct {
-	Check        string              `toml:"check"`
-	IdleSeconds  int                 `toml:"idle_seconds"`
-	SnapshotMode string              `toml:"snapshot_mode"`
-	CommitMode   string              `toml:"commit_mode"`
-	MsgSourceCmd string              `toml:"msg_source_cmd"`
-	NoteCommand  string              `toml:"note_command"`
-	NoteRef      string              `toml:"note_ref"`
-	LogMaxBytes  int64               `toml:"log_max_bytes"`
-	Watch        autosnapWatchConfig `toml:"watch"`
+	Check                 string              `toml:"check"`
+	IdleSeconds           int                 `toml:"idle_seconds"`
+	SnapshotMode          string              `toml:"snapshot_mode"`
+	CommitMode            string              `toml:"commit_mode"`
+	MsgSourceCmd          string              `toml:"msg_source_cmd"`
+	NoteCommand           string              `toml:"note_command"`
+	NoteRef               string              `toml:"note_ref"`
+	PostCheckpointCommand string              `toml:"post_checkpoint_command"`
+	LogMaxBytes           int64               `toml:"log_max_bytes"`
+	Watch                 autosnapWatchConfig `toml:"watch"`
 
 	logMaxBytesSet bool
 }
@@ -42,6 +43,7 @@ var startConfigFlagNames = []string{
 	"msg-source-cmd",
 	"note-command",
 	"note-ref",
+	"post-checkpoint-command",
 	"idle",
 	"snapshot-mode",
 	"commit-mode",
@@ -82,6 +84,11 @@ func noteRefFlag(cmd *cobra.Command) string {
 	return value
 }
 
+func postCheckpointCommandFlag(cmd *cobra.Command) string {
+	value, _ := cmd.Flags().GetString("post-checkpoint-command")
+	return value
+}
+
 func loadAutosnapConfig(repoRoot string) (autosnapConfig, bool, error) {
 	cfg := autosnapConfig{}
 	path := autosnapConfigPath(repoRoot)
@@ -107,14 +114,15 @@ func resolveStartConfig(repoRoot string, cmd *cobra.Command, checkCommand, msgSo
 func resolveStartConfigWithFile(repoRoot string, cmd *cobra.Command, checkCommand, msgSourceCmd string, idleSeconds int, snapshotMode, commitMode, watchMode string, pollInterval time.Duration, logMaxBytes int64, loadFile bool) (autosnapConfig, bool, error) {
 	overrides := autosnapConfigOverrides{
 		values: autosnapConfig{
-			Check:        checkCommand,
-			MsgSourceCmd: msgSourceCmd,
-			NoteCommand:  noteCommandFlag(cmd),
-			NoteRef:      noteRefFlag(cmd),
-			IdleSeconds:  idleSeconds,
-			SnapshotMode: snapshotMode,
-			CommitMode:   commitMode,
-			LogMaxBytes:  logMaxBytes,
+			Check:                 checkCommand,
+			MsgSourceCmd:          msgSourceCmd,
+			NoteCommand:           noteCommandFlag(cmd),
+			NoteRef:               noteRefFlag(cmd),
+			PostCheckpointCommand: postCheckpointCommandFlag(cmd),
+			IdleSeconds:           idleSeconds,
+			SnapshotMode:          snapshotMode,
+			CommitMode:            commitMode,
+			LogMaxBytes:           logMaxBytes,
 			Watch: autosnapWatchConfig{
 				Mode:         watchMode,
 				PollInterval: pollInterval,
@@ -151,6 +159,9 @@ func resolveAutosnapConfig(repoRoot string, overrides autosnapConfigOverrides, l
 	if overrides.set["note-ref"] {
 		cfg.NoteRef = overrides.values.NoteRef
 	}
+	if overrides.set["post-checkpoint-command"] {
+		cfg.PostCheckpointCommand = overrides.values.PostCheckpointCommand
+	}
 	if overrides.set["idle"] {
 		cfg.IdleSeconds = overrides.values.IdleSeconds
 	}
@@ -174,6 +185,7 @@ func resolveAutosnapConfig(repoRoot string, overrides autosnapConfigOverrides, l
 	cfg.MsgSourceCmd = strings.TrimSpace(cfg.MsgSourceCmd)
 	cfg.NoteCommand = strings.TrimSpace(cfg.NoteCommand)
 	cfg.NoteRef = strings.TrimSpace(cfg.NoteRef)
+	cfg.PostCheckpointCommand = strings.TrimSpace(cfg.PostCheckpointCommand)
 	cfg.SnapshotMode = strings.TrimSpace(cfg.SnapshotMode)
 	cfg.CommitMode = strings.TrimSpace(cfg.CommitMode)
 	cfg.Watch.Mode = strings.TrimSpace(cfg.Watch.Mode)
@@ -277,6 +289,9 @@ func mergeAutosnapConfig(dst *autosnapConfig, src autosnapConfig) {
 	if src.NoteRef != "" {
 		dst.NoteRef = src.NoteRef
 	}
+	if src.PostCheckpointCommand != "" {
+		dst.PostCheckpointCommand = src.PostCheckpointCommand
+	}
 	if src.logMaxBytesSet {
 		dst.LogMaxBytes = src.LogMaxBytes
 	}
@@ -336,6 +351,7 @@ commit_mode = "checkpoint"
 msg_source_cmd = ""
 note_command = ""
 note_ref = ""
+post_checkpoint_command = ""
 log_max_bytes = 10485760
 
 [watch]

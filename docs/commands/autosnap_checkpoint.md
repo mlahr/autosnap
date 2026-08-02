@@ -11,14 +11,15 @@ autosnap checkpoint [COMMIT_MSG] [flags]
 ### Options
 
 ```
-      --check string            Shell command to run before checkpointing
-      --commit-mode string      Commit target: checkpoint, direct, sync (default "checkpoint")
-  -h, --help                    help for checkpoint
-      --msg-source-cmd string   Shell command that returns the checkpoint commit message (multiline supported)
-      --note-command string     Shell command that returns the checkpoint git note content
-      --note-ref string         Git notes ref for checkpoint notes
-      --snapshot-mode string    Snapshot source: both, staged, working (default "both")
-      --timeout duration        Maximum time to wait for another checkpoint operation to finish (0 waits indefinitely)
+      --check string                     Shell command to run before checkpointing
+      --commit-mode string               Commit target: checkpoint, direct, sync (default "checkpoint")
+  -h, --help                             help for checkpoint
+      --msg-source-cmd string            Shell command that returns the checkpoint commit message (multiline supported)
+      --note-command string              Shell command that returns the checkpoint git note content
+      --note-ref string                  Git notes ref for checkpoint notes
+      --post-checkpoint-command string   Shell command to run after creating a checkpoint
+      --snapshot-mode string             Snapshot source: both, staged, working (default "both")
+      --timeout duration                 Maximum time to wait for another checkpoint operation to finish (0 waits indefinitely)
 ```
 
 ### SEE ALSO
