@@ -317,36 +317,85 @@ func showAutosnapHooksStatus(ctx context.Context, out io.Writer) error {
 		fmt.Fprintln(out, "core.hooksPath: default")
 	}
 	for _, target := range autosnapHookTargets(hooksDir) {
-		fmt.Fprintf(out, "%s: %s\n", target.name, hookTargetStatus(target))
+		report := inspectHookTarget(target)
+		fmt.Fprintf(out, "%s: %s\n", target.name, report.status)
+		if report.reason != "" {
+			fmt.Fprintf(out, "  reason: %s\n", report.reason)
+		}
+		if report.resolution != "" {
+			fmt.Fprintf(out, "  resolution: %s\n", report.resolution)
+		}
 	}
 	return nil
 }
 
+type hookStatusReport struct {
+	status     string
+	reason     string
+	resolution string
+}
+
 func hookTargetStatus(target hookTarget) string {
+	return inspectHookTarget(target).status
+}
+
+func inspectHookTarget(target hookTarget) hookStatusReport {
 	exists, err := hookPathExists(target.path)
 	if err != nil {
-		return "conflicting"
+		return hookStatusReport{
+			status:     "error",
+			reason:     fmt.Sprintf("cannot inspect %s: %v", target.path, err),
+			resolution: "correct the reported filesystem error, then rerun 'autosnap hooks status'",
+		}
 	}
 	if !exists {
 		if _, backupErr := os.Lstat(target.backupPath); backupErr == nil {
-			return "conflicting (orphaned backup)"
+			return hookStatusReport{
+				status:     "conflicting (orphaned backup)",
+				reason:     fmt.Sprintf("backup %s exists, but managed hook %s does not", target.backupPath, target.path),
+				resolution: "restore the backup as the hook, or move it aside after review; then rerun 'autosnap hooks install'",
+			}
+		} else if !os.IsNotExist(backupErr) {
+			return hookStatusReport{
+				status:     "error",
+				reason:     fmt.Sprintf("cannot inspect backup %s: %v", target.backupPath, backupErr),
+				resolution: "correct the reported filesystem error, then rerun 'autosnap hooks status'",
+			}
 		}
-		return "absent"
+		return hookStatusReport{status: "absent"}
 	}
 	raw, err := os.ReadFile(target.path)
 	if err != nil {
-		return "conflicting"
+		return hookStatusReport{
+			status:     "error",
+			reason:     fmt.Sprintf("cannot read %s: %v", target.path, err),
+			resolution: "correct the reported filesystem error, then rerun 'autosnap hooks status'",
+		}
 	}
 	if !validManagedHook(raw) {
 		if bytes.Contains(raw, []byte(managedHookMarker)) {
-			return "modified"
+			return hookStatusReport{
+				status:     "modified",
+				reason:     fmt.Sprintf("%s contains the autosnap marker, but its content does not match its integrity hash", target.path),
+				resolution: "review the local modifications and manually restore or remove the hook; autosnap will not overwrite it",
+			}
 		}
-		return "conflicting"
+		return hookStatusReport{
+			status:     "conflicting (existing hook)",
+			reason:     fmt.Sprintf("%s exists and is not managed by autosnap", target.path),
+			resolution: "run 'autosnap hooks install --force' to back up and chain the existing hook, or remove it after review and install normally",
+		}
 	}
 	if _, err := os.Lstat(target.backupPath); err == nil {
-		return "installed (chained)"
+		return hookStatusReport{status: "installed (chained)"}
+	} else if !os.IsNotExist(err) {
+		return hookStatusReport{
+			status:     "error",
+			reason:     fmt.Sprintf("managed hook is installed, but backup %s cannot be inspected: %v", target.backupPath, err),
+			resolution: "correct the reported filesystem error, then rerun 'autosnap hooks status'",
+		}
 	}
-	return "installed"
+	return hookStatusReport{status: "installed"}
 }
 
 func uninstallAutosnapHooks(ctx context.Context, out io.Writer) error {

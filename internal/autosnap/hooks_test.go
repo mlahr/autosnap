@@ -143,6 +143,17 @@ func TestHooksInstallRequiresForceToBackUpAndChain(t *testing.T) {
 	})
 
 	withWorkingDir(t, repo, func() {
+		var statusOut bytes.Buffer
+		if err := showAutosnapHooksStatus(context.Background(), &statusOut); err != nil {
+			t.Fatalf("hook status failed: %v", err)
+		}
+		status := statusOut.String()
+		if !strings.Contains(status, "pre-commit: conflicting (existing hook)\n") ||
+			!strings.Contains(status, "/.git/hooks/pre-commit exists and is not managed by autosnap\n") ||
+			!strings.Contains(status, "resolution: run 'autosnap hooks install --force' to back up and chain the existing hook") {
+			t.Fatalf("expected precise existing-hook diagnosis, got:\n%s", status)
+		}
+
 		if err := installAutosnapHooks(context.Background(), os.Stdout, os.Stderr, false); err == nil || !strings.Contains(err.Error(), "--force") {
 			t.Fatalf("expected existing hook to require force, got %v", err)
 		}
@@ -304,8 +315,9 @@ func TestDanglingHookSymlinkRequiresForceAndIsRestored(t *testing.T) {
 	})
 
 	withWorkingDir(t, repo, func() {
-		if got := hookTargetStatus(target); got != "conflicting" {
-			t.Fatalf("expected dangling symlink conflict, got %q", got)
+		report := inspectHookTarget(target)
+		if report.status != "error" || !strings.Contains(report.reason, "cannot read") || !strings.Contains(report.reason, target.path) {
+			t.Fatalf("expected dangling symlink read error, got %+v", report)
 		}
 		if err := installAutosnapHooks(context.Background(), io.Discard, io.Discard, false); err == nil || !strings.Contains(err.Error(), "--force") {
 			t.Fatalf("expected dangling symlink to require force, got %v", err)

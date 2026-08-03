@@ -31,6 +31,19 @@ Use `autosnap hooks install --force` only after reviewing the reported path.
 Autosnap then backs up and chains existing hooks. It never overwrites an
 existing autosnap backup.
 
+`autosnap hooks status` distinguishes these problem states:
+
+- `conflicting (existing hook)`: the hook exists but is not managed by autosnap;
+  review it, then use `--force` to preserve and chain it, or remove it and install
+  normally;
+- `conflicting (orphaned backup)`: an autosnap backup exists without its managed
+  hook; restore that backup as the hook or move it aside after review;
+- `modified`: a hook has autosnap's management marker but fails its integrity
+  check; review and manually restore or remove it because autosnap will not
+  overwrite it;
+- `error`: autosnap could not inspect or read a hook or backup; correct the
+  reported filesystem error before installing.
+
 If `.autosnap.toml` is untracked, installation succeeds with a warning because
 new linked worktrees may not contain that configuration file.
 
