@@ -189,8 +189,8 @@ func resolveHooksDirectory(ctx context.Context, repoRoot string) (string, bool, 
 }
 
 func autosnapHookTargets(hooksDir string) []hookTarget {
-	targets := make([]hookTarget, 0, 2)
-	for _, name := range []string{"post-checkout", "pre-commit"} {
+	targets := make([]hookTarget, 0, 3)
+	for _, name := range []string{"post-checkout", "pre-commit", "post-commit"} {
 		path := filepath.Join(hooksDir, name)
 		targets = append(targets, hookTarget{name: name, path: path, backupPath: path + hookBackupSuffix})
 	}

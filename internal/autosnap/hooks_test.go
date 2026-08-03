@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -25,6 +26,18 @@ func TestManagedHookIntegrityAndShellQuoting(t *testing.T) {
 	tampered[len(tampered)-2] = '1'
 	if validManagedHook(tampered) {
 		t.Fatalf("expected modified hook to fail integrity validation")
+	}
+}
+
+func TestAutosnapHookTargetsIncludePostCommit(t *testing.T) {
+	targets := autosnapHookTargets("/tmp/hooks")
+	names := make([]string, 0, len(targets))
+	for _, target := range targets {
+		names = append(names, target.name)
+	}
+	want := []string{"post-checkout", "pre-commit", "post-commit"}
+	if !slices.Equal(names, want) {
+		t.Fatalf("unexpected hook targets: got %v want %v", names, want)
 	}
 }
 
@@ -80,7 +93,7 @@ func TestHooksInstallStatusAndUninstall(t *testing.T) {
 		if err := showAutosnapHooksStatus(context.Background(), &out); err != nil {
 			t.Fatalf("hook status failed: %v", err)
 		}
-		if strings.Count(out.String(), ": installed\n") != 2 {
+		if strings.Count(out.String(), ": installed\n") != 3 {
 			t.Fatalf("unexpected installed status:\n%s", out.String())
 		}
 
