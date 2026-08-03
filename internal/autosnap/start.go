@@ -70,18 +70,36 @@ func newStartCommand() *cobra.Command {
 			noteRef := cfg.NoteRef
 			postCheckpointCommand := cfg.PostCheckpointCommand
 
-			if err := ensureNoActiveRunForRepo(repoRoot); err != nil {
-				return err
-			}
-
 			if !foreground {
+				lockPath, err := daemonStartLockPath(repoRoot)
+				if err != nil {
+					return err
+				}
+				lock, err := acquireFileLock(context.Background(), lockPath, daemonStartLockTimeout, "daemon start")
+				if err != nil {
+					return err
+				}
+				defer lock.Close()
+				if err := ensureNoActiveRunForRepo(repoRoot); err != nil {
+					return err
+				}
 				if runToken == "" {
 					runToken, err = newRunToken()
 					if err != nil {
 						return err
 					}
 				}
-				_, err := startAutosnapDetached(repoRoot, checkCommand, msgSourceCmd, noteCommand, noteRef, postCheckpointCommand, idleSeconds, snapshotMode, commitMode, watchMode, pollInterval, logMaxBytes, runToken, startConfigFlags)
+				process, err := startAutosnapDetached(repoRoot, checkCommand, msgSourceCmd, noteCommand, noteRef, postCheckpointCommand, idleSeconds, snapshotMode, commitMode, watchMode, pollInterval, logMaxBytes, runToken, startConfigFlags)
+				if err != nil {
+					return err
+				}
+				if err := awaitStartedDaemon(context.Background(), repoRoot, runToken, process, daemonReadyTimeout); err != nil {
+					return err
+				}
+				return nil
+			}
+
+			if err := ensureNoActiveRunForRepo(repoRoot); err != nil {
 				return err
 			}
 
@@ -108,13 +126,15 @@ func newStartCommand() *cobra.Command {
 			runner.noteRef = noteRef
 			runner.postCheckpointCommand = postCheckpointCommand
 
+			var runPath string
+			var runState autosnapRunState
 			if daemon {
-				runPath, err := runStatePath(repoRoot)
+				runPath, err = runStatePath(repoRoot)
 				if err != nil {
 					return err
 				}
 
-				runState := autosnapRunState{
+				runState = autosnapRunState{
 					PID:                   os.Getpid(),
 					RepoRoot:              repoRoot,
 					BranchRef:             branchRef,
@@ -135,11 +155,7 @@ func newStartCommand() *cobra.Command {
 					RunToken:              runToken,
 					StartedAt:             time.Now().UTC().Format(time.RFC3339),
 				}
-				if err := saveAutosnapRunState(runPath, runState); err != nil {
-					return err
-				}
 				defer removeAutosnapRunState(runPath)
-				startLogCompactor(ctx, repoRoot, logMaxBytes, defaultLogCleanupInterval)
 			}
 
 			logf("autosnap watching %s\n", repoRoot)
@@ -147,7 +163,17 @@ func newStartCommand() *cobra.Command {
 			logf("snapshot-mode: %s commit-mode: %s\n", snapshotMode, commitMode)
 			logf("watch-mode: %s poll-interval: %s\n", watchMode, pollInterval)
 
-			if err := runner.start(); err != nil {
+			ready := func() error {
+				if !daemon {
+					return nil
+				}
+				if err := saveAutosnapRunState(runPath, runState); err != nil {
+					return err
+				}
+				startLogCompactor(ctx, repoRoot, logMaxBytes, defaultLogCleanupInterval)
+				return nil
+			}
+			if err := runner.start(ready); err != nil {
 				cancel()
 				return err
 			}
@@ -179,26 +205,26 @@ func newStartCommand() *cobra.Command {
 	return cmd
 }
 
-func startAutosnapDetached(repoRoot, checkCommand, msgSourceCmd, noteCommand, noteRef, postCheckpointCommand string, idleSeconds int, snapshotMode, commitMode, watchMode string, pollInterval time.Duration, logMaxBytes int64, runToken string, startConfigFlags []string) (int, error) {
+func startAutosnapDetached(repoRoot, checkCommand, msgSourceCmd, noteCommand, noteRef, postCheckpointCommand string, idleSeconds int, snapshotMode, commitMode, watchMode string, pollInterval time.Duration, logMaxBytes int64, runToken string, startConfigFlags []string) (*os.Process, error) {
 	logPath, err := backgroundLogPath(repoRoot)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
-		return 0, err
+		return nil, err
 	}
 	if err := compactLogFile(logPath, logMaxBytes); err != nil {
-		return 0, err
+		return nil, err
 	}
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	defer logFile.Close()
 
 	exe, err := os.Executable()
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 
 	args := startDetachedArgs(exe, checkCommand, msgSourceCmd, noteCommand, noteRef, postCheckpointCommand, idleSeconds, snapshotMode, commitMode, watchMode, pollInterval, logMaxBytes, runToken, startConfigFlags)
@@ -213,11 +239,11 @@ func startAutosnapDetached(repoRoot, checkCommand, msgSourceCmd, noteCommand, no
 	}
 
 	if err := cmd.Start(); err != nil {
-		return 0, err
+		return nil, err
 	}
 
 	fmt.Printf("autosnap started in background (pid=%d, log=%s)\n", cmd.Process.Pid, logPath)
-	return cmd.Process.Pid, nil
+	return cmd.Process, nil
 }
 
 func startDetachedArgs(exe, checkCommand, msgSourceCmd, noteCommand, noteRef, postCheckpointCommand string, idleSeconds int, snapshotMode, commitMode, watchMode string, pollInterval time.Duration, logMaxBytes int64, runToken string, startConfigFlags []string) []string {

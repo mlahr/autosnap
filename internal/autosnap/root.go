@@ -21,6 +21,8 @@ func NewRootCommand() *cobra.Command {
 	}
 
 	root.AddCommand(newStartCommand())
+	root.AddCommand(newEnsureRunningCommand())
+	root.AddCommand(newHooksCommand())
 	root.AddCommand(newBranchCommand())
 	root.AddCommand(newCheckpointCommand())
 	root.AddCommand(newStatusCommand())

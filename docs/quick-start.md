@@ -51,7 +51,36 @@ Keep these defaults unless you have a specific reason to change them:
 - `snapshot_mode = "both"`
 - `commit_mode = "checkpoint"`
 
-## 3. Start The Daemon
+## 3. Start The Daemon Automatically
+
+Install repository-local Git hooks when autosnap should start automatically for
+this worktree and future linked worktrees:
+
+```bash
+autosnap hooks install
+```
+
+The command validates `.autosnap.toml`, installs `post-checkout` and
+`pre-commit`, and starts autosnap for the current worktree. Git invokes
+`post-checkout` after populating a new linked worktree, so a tracked
+`.autosnap.toml` is available before startup. An untracked config works in the
+current worktree, but autosnap warns that future worktrees may not contain it.
+
+Existing hooks and a configured `core.hooksPath` are left untouched unless you
+explicitly pass `--force`. In that mode, autosnap backs up and chains existing
+hooks. Autosnap startup failures from an installed hook are warnings and do not
+fail the Git operation.
+
+Check or remove the installation with:
+
+```bash
+autosnap hooks status
+autosnap hooks uninstall
+```
+
+Uninstalling hooks does not stop daemons that are already running.
+
+## 4. Start The Daemon Manually
 
 ```bash
 autosnap start
@@ -61,7 +90,17 @@ The daemon runs in the background for the current repository. When files change,
 autosnap waits for the worktree to become idle, runs the configured check, and
 saves a checkpoint if the check passes and the captured tree changed.
 
-## 4. Check Status
+`ensure-running` is the idempotent equivalent for scripts and editor
+integrations:
+
+```bash
+autosnap ensure-running
+```
+
+It starts autosnap from `.autosnap.toml` only when the current worktree daemon
+is not already active.
+
+## 5. Check Status
 
 ```bash
 autosnap status
@@ -70,7 +109,7 @@ autosnap status
 Use this to confirm whether the daemon is running and what happened on the last
 check.
 
-## 5. Apply Config Changes
+## 6. Apply Config Changes
 
 After editing `.autosnap.toml`, restart the daemon:
 
@@ -85,7 +124,7 @@ original `autosnap start` remain overrides; all other settings are reloaded from
 a new `autosnap start` command. Detailed restart progress is appended to the
 daemon log and is visible with `autosnap logs`.
 
-## 6. Troubleshoot With Logs
+## 7. Troubleshoot With Logs
 
 ```bash
 autosnap logs

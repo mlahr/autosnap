@@ -16,6 +16,12 @@ autosnap pending --explain
 You continue to decide what belongs in normal Git commits. autosnap preserves
 passing checkpoints along the way.
 
+To make startup automatic, run `autosnap hooks install` once. Its
+`post-checkout` hook starts autosnap after Git creates or checks out a worktree,
+and its `pre-commit` hook retries startup if the daemon stopped later. Hook
+startup errors are warnings; any pre-existing hook chained during a forced
+installation retains its original exit status.
+
 After you manually commit work, use:
 
 ```bash

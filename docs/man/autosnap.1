@@ -32,10 +32,18 @@ snapshot_mode = "both"
 commit_mode = "checkpoint"
 .fi
 .PP
-Then start the daemon:
+Install managed Git hooks for automatic startup:
+.PP
+.nf
+autosnap hooks install
+.fi
+.PP
+The post-checkout hook runs after Git populates a linked worktree. To start the
+current worktree manually or from another integration, use:
 .PP
 .nf
 autosnap start
+autosnap ensure-running
 autosnap status
 .fi
 .PP
@@ -94,6 +102,9 @@ Common commands:
 .nf
 autosnap config init
 autosnap start
+autosnap ensure-running
+autosnap hooks install
+autosnap hooks status
 autosnap status
 autosnap logs
 autosnap pending

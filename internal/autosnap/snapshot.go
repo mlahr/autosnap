@@ -126,24 +126,35 @@ func newSnapshotRunnerWithWatch(ctx context.Context, repoRoot, branchRef, checkC
 	}, nil
 }
 
-func (r *snapshotRunner) start() error {
+func (r *snapshotRunner) start(ready func() error) error {
+	readyCalled := false
+	callReady := func() error {
+		if readyCalled || ready == nil {
+			return nil
+		}
+		if err := ready(); err != nil {
+			return err
+		}
+		readyCalled = true
+		return nil
+	}
 	switch r.watchMode {
 	case watchModePoll:
-		return r.startPolling()
+		return r.startPolling(callReady)
 	case watchModeAuto:
-		err := r.startRecursive()
+		err := r.startRecursive(callReady)
 		if isWatchLimitError(err) {
 			logf("recursive watcher hit file limit; falling back to polling every %s\n", r.pollInterval)
 			r.closeWatcher()
-			return r.startPolling()
+			return r.startPolling(callReady)
 		}
 		return err
 	default:
-		return r.startRecursive()
+		return r.startRecursive(callReady)
 	}
 }
 
-func (r *snapshotRunner) startRecursive() error {
+func (r *snapshotRunner) startRecursive(ready func() error) error {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return err
@@ -159,6 +170,9 @@ func (r *snapshotRunner) startRecursive() error {
 	r.lastChange = time.Now()
 	r.scheduleTimerLocked(r.idle)
 	r.mu.Unlock()
+	if err := ready(); err != nil {
+		return err
+	}
 
 	for {
 		select {
@@ -181,7 +195,7 @@ func (r *snapshotRunner) startRecursive() error {
 	}
 }
 
-func (r *snapshotRunner) startPolling() error {
+func (r *snapshotRunner) startPolling(ready func() error) error {
 	r.mu.Lock()
 	r.lastChange = time.Now()
 	r.scheduleTimerLocked(r.idle)
@@ -190,6 +204,9 @@ func (r *snapshotRunner) startPolling() error {
 	lastSignature, err := r.pollChangeSignature()
 	if err != nil {
 		logf("unable to read initial poll state: %v\n", err)
+	}
+	if err := ready(); err != nil {
+		return err
 	}
 
 	ticker := time.NewTicker(r.pollInterval)

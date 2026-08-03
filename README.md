@@ -36,6 +36,18 @@ autosnap start
 autosnap status
 ```
 
+To start autosnap automatically in this worktree and linked worktrees, install
+the managed Git hooks:
+
+```bash
+autosnap hooks install
+autosnap hooks status
+```
+
+The `post-checkout` hook runs after a new worktree has been populated, when its
+tracked `.autosnap.toml` is available. `autosnap ensure-running` provides the
+same idempotent startup behavior for scripts and editor integrations.
+
 After editing `.autosnap.toml`, restart the daemon:
 
 ```bash

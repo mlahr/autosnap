@@ -9,6 +9,31 @@ autosnap status
 `status` is the routine command for checking whether the daemon is active and
 what happened on the last check.
 
+To start only when needed:
+
+```bash
+autosnap ensure-running
+```
+
+`ensure-running` requires a valid `.autosnap.toml` in the current worktree.
+
+## Why Did Hook Installation Refuse?
+
+`autosnap hooks install` refuses to overwrite an existing Git hook or install
+through a configured `core.hooksPath`. Inspect the effective state with:
+
+```bash
+autosnap hooks status
+git config --get core.hooksPath
+```
+
+Use `autosnap hooks install --force` only after reviewing the reported path.
+Autosnap then backs up and chains existing hooks. It never overwrites an
+existing autosnap backup.
+
+If `.autosnap.toml` is untracked, installation succeeds with a warning because
+new linked worktrees may not contain that configuration file.
+
 ## Why Was No Checkpoint Created?
 
 Use logs:

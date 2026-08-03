@@ -20,6 +20,8 @@ autosnap [flags]
 * [autosnap checkpoint](autosnap_checkpoint.md)	 - Create a checkpoint immediately
 * [autosnap config](autosnap_config.md)	 - Manage autosnap configuration
 * [autosnap docs](autosnap_docs.md)	 - Show installed documentation locations
+* [autosnap ensure-running](autosnap_ensure-running.md)	 - Start the autosnap daemon unless it is already running
+* [autosnap hooks](autosnap_hooks.md)	 - Manage autosnap Git hooks
 * [autosnap list](autosnap_list.md)	 - List checkpoints
 * [autosnap logs](autosnap_logs.md)	 - Show autosnap daemon logs
 * [autosnap mark](autosnap_mark.md)	 - Mark checkpoints unmarked, review, good, or bad

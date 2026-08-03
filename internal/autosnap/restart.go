@@ -27,6 +27,15 @@ new flags. Detailed restart progress is appended to the autosnap daemon log.`,
 			if err != nil {
 				return err
 			}
+			lockPath, err := daemonStartLockPath(repoRoot)
+			if err != nil {
+				return err
+			}
+			lock, err := acquireFileLock(context.Background(), lockPath, daemonStartLockTimeout, "daemon start")
+			if err != nil {
+				return err
+			}
+			defer lock.Close()
 
 			runPath, err := runStatePath(repoRoot)
 			if err != nil {
@@ -81,12 +90,16 @@ new flags. Detailed restart progress is appended to the autosnap daemon log.`,
 			writeRestartLogAfterStop(cmd.ErrOrStderr(), logFile, logPath, "daemon stopped; pid=%d", runState.PID)
 			writeRestartLogAfterStop(cmd.ErrOrStderr(), logFile, logPath, "starting replacement daemon")
 
-			replacementPID, err := startAutosnapDetached(repoRoot, cfg.Check, cfg.MsgSourceCmd, cfg.NoteCommand, cfg.NoteRef, cfg.PostCheckpointCommand, cfg.IdleSeconds, cfg.SnapshotMode, cfg.CommitMode, cfg.Watch.Mode, cfg.Watch.PollInterval, cfg.LogMaxBytes, runToken, runState.StartConfigFlags)
+			replacementProcess, err := startAutosnapDetached(repoRoot, cfg.Check, cfg.MsgSourceCmd, cfg.NoteCommand, cfg.NoteRef, cfg.PostCheckpointCommand, cfg.IdleSeconds, cfg.SnapshotMode, cfg.CommitMode, cfg.Watch.Mode, cfg.Watch.PollInterval, cfg.LogMaxBytes, runToken, runState.StartConfigFlags)
 			if err != nil {
 				writeRestartLogAfterStop(cmd.ErrOrStderr(), logFile, logPath, "replacement daemon start failed; error=%v", err)
 				return err
 			}
-			writeRestartLogAfterStop(cmd.ErrOrStderr(), logFile, logPath, "replacement daemon started; pid=%d", replacementPID)
+			if err := awaitStartedDaemon(context.Background(), repoRoot, runToken, replacementProcess, daemonReadyTimeout); err != nil {
+				writeRestartLogAfterStop(cmd.ErrOrStderr(), logFile, logPath, "replacement daemon did not become ready; pid=%d; error=%v", replacementProcess.Pid, err)
+				return err
+			}
+			writeRestartLogAfterStop(cmd.ErrOrStderr(), logFile, logPath, "replacement daemon started; pid=%d", replacementProcess.Pid)
 			return nil
 		},
 	}
