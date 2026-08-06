@@ -672,7 +672,7 @@ func (r *snapshotRunner) watchDirectoryTree(root string) error {
 func (r *snapshotRunner) pollChangeSignature() (string, error) {
 	result, err := runGitCommand(r.ctx, r.repoRoot, nil, "status", "--porcelain=v1", "-z", "--untracked-files=all")
 	if err != nil {
-		return "", err
+		return "", gitCommandError(err, result)
 	}
 
 	mode, err := normalizeSnapshotMode(r.snapshotMode)
