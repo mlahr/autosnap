@@ -28,9 +28,11 @@ type autosnapConfig struct {
 	NoteRef               string              `toml:"note_ref"`
 	PostCheckpointCommand string              `toml:"post_checkpoint_command"`
 	LogMaxBytes           int64               `toml:"log_max_bytes"`
+	ReadyTimeout          time.Duration       `toml:"ready_timeout"`
 	Watch                 autosnapWatchConfig `toml:"watch"`
 
-	logMaxBytesSet bool
+	logMaxBytesSet  bool
+	readyTimeoutSet bool
 }
 
 type autosnapWatchConfig struct {
@@ -63,6 +65,7 @@ func defaultAutosnapConfig() autosnapConfig {
 		SnapshotMode: snapshotModeBoth,
 		CommitMode:   commitModeCheckpoint,
 		LogMaxBytes:  defaultLogMaxBytes,
+		ReadyTimeout: defaultDaemonReadyTimeout,
 		Watch: autosnapWatchConfig{
 			Mode:         watchModeRecursive,
 			PollInterval: defaultPollInterval,
@@ -104,6 +107,7 @@ func loadAutosnapConfig(repoRoot string) (autosnapConfig, bool, error) {
 		return cfg, true, fmt.Errorf("parse %s: %w", path, err)
 	}
 	cfg.logMaxBytesSet = meta.IsDefined("log_max_bytes")
+	cfg.readyTimeoutSet = meta.IsDefined("ready_timeout")
 	return cfg, true, nil
 }
 
@@ -295,6 +299,10 @@ func mergeAutosnapConfig(dst *autosnapConfig, src autosnapConfig) {
 	if src.logMaxBytesSet {
 		dst.LogMaxBytes = src.LogMaxBytes
 	}
+	if src.readyTimeoutSet {
+		dst.ReadyTimeout = src.ReadyTimeout
+		dst.readyTimeoutSet = true
+	}
 	if src.Watch.Mode != "" {
 		dst.Watch.Mode = src.Watch.Mode
 	}
@@ -325,6 +333,9 @@ func validateStartConfig(cfg autosnapConfig, idleFromFlag bool, pollIntervalFrom
 		}
 		return errors.New("log_max_bytes must be greater than 0")
 	}
+	if cfg.ReadyTimeout <= 0 {
+		return errors.New("ready_timeout must be greater than 0")
+	}
 	if cfg.NoteCommand != "" && cfg.NoteRef == "" {
 		return errors.New("note_ref is required when note_command is set")
 	}
@@ -353,6 +364,7 @@ note_command = ""
 note_ref = ""
 post_checkpoint_command = ""
 log_max_bytes = 10485760
+ready_timeout = "30s"
 
 [watch]
 mode = "recursive"

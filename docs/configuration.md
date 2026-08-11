@@ -26,6 +26,7 @@ note_command = ""
 note_ref = ""
 post_checkpoint_command = ""
 log_max_bytes = 10485760
+ready_timeout = "30s"
 
 [watch]
 mode = "recursive"
@@ -39,6 +40,10 @@ poll_interval = "5s"
 
 `idle_seconds` controls how long autosnap waits after the last file change before
 running the check.
+
+`ready_timeout` controls how long `autosnap start`, `autosnap ensure-running`, and
+`autosnap restart` wait for the daemon to finish startup. Recursive watcher setup
+can take longer in large worktrees.
 
 `watch.mode` controls how autosnap detects changes:
 

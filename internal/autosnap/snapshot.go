@@ -59,6 +59,8 @@ type snapshotRunner struct {
 
 	watcher *fsnotify.Watcher
 
+	watchDirectoryTreeFn func(string) error
+
 	mu               sync.Mutex
 	timer            *time.Timer
 	checking         bool
@@ -162,9 +164,17 @@ func (r *snapshotRunner) startRecursive(ready func() error) error {
 	r.watcher = watcher
 	defer watcher.Close()
 
-	if err := r.watchDirectoryTree(r.repoRoot); err != nil {
+	watchStartedAt := time.Now()
+	logf("recursive watcher registration started\n")
+	registerDirectories := r.watchDirectoryTree
+	if r.watchDirectoryTreeFn != nil {
+		registerDirectories = r.watchDirectoryTreeFn
+	}
+	if err := registerDirectories(r.repoRoot); err != nil {
+		logf("recursive watcher registration failed after %s: %v\n", time.Since(watchStartedAt).Round(time.Millisecond), err)
 		return err
 	}
+	logf("recursive watcher registered in %s\n", time.Since(watchStartedAt).Round(time.Millisecond))
 
 	r.mu.Lock()
 	r.lastChange = time.Now()

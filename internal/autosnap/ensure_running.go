@@ -13,8 +13,8 @@ import (
 )
 
 const (
-	daemonStartLockTimeout = 5 * time.Second
-	daemonReadyTimeout     = 5 * time.Second
+	daemonStartLockTimeout    = 5 * time.Second
+	defaultDaemonReadyTimeout = 30 * time.Second
 )
 
 func newEnsureRunningCommand() *cobra.Command {
@@ -82,7 +82,7 @@ func ensureAutosnapRunning(ctx context.Context, repoRoot string, out io.Writer) 
 	if err != nil {
 		return err
 	}
-	if err := awaitStartedDaemon(ctx, repoRoot, runToken, process, daemonReadyTimeout); err != nil {
+	if err := awaitStartedDaemon(ctx, repoRoot, runToken, process, cfg.ReadyTimeout); err != nil {
 		return err
 	}
 	fmt.Fprintf(out, "autosnap ensured running (pid=%d)\n", process.Pid)

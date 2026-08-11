@@ -70,7 +70,7 @@ new flags. Detailed restart progress is appended to the autosnap daemon log.`,
 			if configFound {
 				configSource = autosnapConfigPath(repoRoot)
 			}
-			if err := writeRestartLog(logFile, "configuration validated; source=%s; check=configured; msg_source_cmd=%s; notes=%s; post_checkpoint_command=%s; idle_seconds=%d; snapshot_mode=%s; commit_mode=%s; watch_mode=%s; poll_interval=%s; log_max_bytes=%d", configSource, enabledState(cfg.MsgSourceCmd != ""), enabledState(cfg.NoteCommand != ""), enabledState(cfg.PostCheckpointCommand != ""), cfg.IdleSeconds, cfg.SnapshotMode, cfg.CommitMode, cfg.Watch.Mode, cfg.Watch.PollInterval, cfg.LogMaxBytes); err != nil {
+			if err := writeRestartLog(logFile, "configuration validated; source=%s; check=configured; msg_source_cmd=%s; notes=%s; post_checkpoint_command=%s; idle_seconds=%d; snapshot_mode=%s; commit_mode=%s; watch_mode=%s; poll_interval=%s; log_max_bytes=%d; ready_timeout=%s", configSource, enabledState(cfg.MsgSourceCmd != ""), enabledState(cfg.NoteCommand != ""), enabledState(cfg.PostCheckpointCommand != ""), cfg.IdleSeconds, cfg.SnapshotMode, cfg.CommitMode, cfg.Watch.Mode, cfg.Watch.PollInterval, cfg.LogMaxBytes, cfg.ReadyTimeout); err != nil {
 				return err
 			}
 
@@ -95,7 +95,7 @@ new flags. Detailed restart progress is appended to the autosnap daemon log.`,
 				writeRestartLogAfterStop(cmd.ErrOrStderr(), logFile, logPath, "replacement daemon start failed; error=%v", err)
 				return err
 			}
-			if err := awaitStartedDaemon(context.Background(), repoRoot, runToken, replacementProcess, daemonReadyTimeout); err != nil {
+			if err := awaitStartedDaemon(context.Background(), repoRoot, runToken, replacementProcess, cfg.ReadyTimeout); err != nil {
 				writeRestartLogAfterStop(cmd.ErrOrStderr(), logFile, logPath, "replacement daemon did not become ready; pid=%d; error=%v", replacementProcess.Pid, err)
 				return err
 			}

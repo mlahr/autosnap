@@ -69,6 +69,7 @@ note_command = "printf note"
 note_ref = "refs/notes/diffcog"
 post_checkpoint_command = "printf post"
 log_max_bytes = 2048
+ready_timeout = "12s"
 
 [watch]
 mode = "auto"
@@ -85,8 +86,20 @@ poll_interval = "2s"
 	if !found {
 		t.Fatalf("expected config to be found")
 	}
-	if cfg.Check != "go test ./..." || cfg.IdleSeconds != 15 || cfg.SnapshotMode != snapshotModeStaged || cfg.CommitMode != commitModeSync || cfg.MsgSourceCmd != "printf msg" || cfg.NoteCommand != "printf note" || cfg.NoteRef != "refs/notes/diffcog" || cfg.PostCheckpointCommand != "printf post" || cfg.LogMaxBytes != 2048 || cfg.Watch.Mode != watchModeAuto || cfg.Watch.PollInterval != 2*time.Second {
+	if cfg.Check != "go test ./..." || cfg.IdleSeconds != 15 || cfg.SnapshotMode != snapshotModeStaged || cfg.CommitMode != commitModeSync || cfg.MsgSourceCmd != "printf msg" || cfg.NoteCommand != "printf note" || cfg.NoteRef != "refs/notes/diffcog" || cfg.PostCheckpointCommand != "printf post" || cfg.LogMaxBytes != 2048 || cfg.ReadyTimeout != 12*time.Second || cfg.Watch.Mode != watchModeAuto || cfg.Watch.PollInterval != 2*time.Second {
 		t.Fatalf("unexpected config: %+v", cfg)
+	}
+}
+
+func TestResolveStartConfigRejectsInvalidReadyTimeout(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.WriteFile(autosnapConfigPath(repo), []byte("check = \"true\"\nready_timeout = \"0s\"\n"), 0o644); err != nil {
+		t.Fatalf("write config failed: %v", err)
+	}
+
+	_, _, err := resolveStartConfig(repo, newStartCommand(), "", "", 60, snapshotModeBoth, commitModeCheckpoint, watchModeRecursive, defaultPollInterval, defaultLogMaxBytes)
+	if err == nil || !strings.Contains(err.Error(), "ready_timeout must be greater than 0") {
+		t.Fatalf("expected invalid ready timeout error, got %v", err)
 	}
 }
 
@@ -594,6 +607,7 @@ func TestConfigInitAndShowCommands(t *testing.T) {
 		"note_ref: ",
 		"post_checkpoint_command: ",
 		"log_max_bytes: 10485760",
+		"ready_timeout: 30s",
 		"watch.mode: recursive",
 		"watch.poll_interval: 5s",
 	} {

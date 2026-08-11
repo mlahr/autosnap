@@ -29,6 +29,7 @@ note_command = ""
 note_ref = ""
 post_checkpoint_command = ""
 log_max_bytes = 10485760
+ready_timeout = "30s"
 
 [watch]
 mode = "recursive"

@@ -93,7 +93,7 @@ func newStartCommand() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				if err := awaitStartedDaemon(context.Background(), repoRoot, runToken, process, daemonReadyTimeout); err != nil {
+				if err := awaitStartedDaemon(context.Background(), repoRoot, runToken, process, cfg.ReadyTimeout); err != nil {
 					return err
 				}
 				return nil
