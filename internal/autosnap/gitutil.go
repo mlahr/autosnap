@@ -275,3 +275,26 @@ func isGitIgnored(ctx context.Context, repoRoot string, relPath string) (bool, e
 	}
 	return true, nil
 }
+
+func gitIgnoredPaths(ctx context.Context, repoRoot string, relPaths []string) (map[string]bool, error) {
+	ignored := make(map[string]bool)
+	if len(relPaths) == 0 {
+		return ignored, nil
+	}
+
+	input := strings.Join(relPaths, "\x00") + "\x00"
+	result, err := runGitCommandWithInput(ctx, repoRoot, nil, input, "check-ignore", "--no-index", "--stdin", "-z")
+	if err != nil {
+		if result.ExitCode == 1 {
+			return ignored, nil
+		}
+		return nil, err
+	}
+
+	for _, relPath := range strings.Split(result.Stdout, "\x00") {
+		if relPath != "" {
+			ignored[filepath.ToSlash(relPath)] = true
+		}
+	}
+	return ignored, nil
+}

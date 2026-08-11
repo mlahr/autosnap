@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -60,6 +61,7 @@ type snapshotRunner struct {
 	watcher *fsnotify.Watcher
 
 	watchDirectoryTreeFn func(string) error
+	gitIgnoredPathsFn    func([]string) (map[string]bool, error)
 
 	mu               sync.Mutex
 	timer            *time.Timer
@@ -657,8 +659,18 @@ func (r *snapshotRunner) currentBranchRef() (string, error) {
 }
 
 func (r *snapshotRunner) watchDirectoryTree(root string) error {
-	return filepath.WalkDir(root, func(name string, d os.DirEntry, err error) error {
+	type directory struct {
+		name string
+		rel  string
+	}
+
+	var directories []directory
+	var pathsToCheck []string
+	if err := filepath.WalkDir(root, func(name string, d os.DirEntry, err error) error {
 		if err != nil {
+			return nil
+		}
+		if !d.IsDir() {
 			return nil
 		}
 		rel, err := filepath.Rel(r.repoRoot, name)
@@ -666,17 +678,75 @@ func (r *snapshotRunner) watchDirectoryTree(root string) error {
 			return nil
 		}
 		rel = filepath.ToSlash(rel)
-		if r.shouldIgnorePath(rel) {
-			if d.IsDir() {
+		if ignored, known := r.locallyIgnoredPath(rel); known {
+			if ignored {
 				return filepath.SkipDir
 			}
-			return nil
+		} else {
+			pathsToCheck = append(pathsToCheck, rel)
 		}
-		if !d.IsDir() {
-			return nil
+		directories = append(directories, directory{name: name, rel: rel})
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	ignoredPaths := map[string]bool{}
+	var err error
+	if r.gitIgnoredPathsFn != nil {
+		ignoredPaths, err = r.gitIgnoredPathsFn(pathsToCheck)
+	} else {
+		ignoredPaths, err = gitIgnoredPaths(context.Background(), r.repoRoot, pathsToCheck)
+	}
+	if err == nil {
+		for _, rel := range pathsToCheck {
+			r.setIgnoredInCache(rel, ignoredPaths[rel])
 		}
-		return r.watcher.Add(name)
-	})
+	} else {
+		ignoredPaths = map[string]bool{}
+	}
+
+	for _, directory := range directories {
+		if pathOrParentIgnored(directory.rel, ignoredPaths) {
+			continue
+		}
+		if err := r.watcher.Add(directory.name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *snapshotRunner) locallyIgnoredPath(relPath string) (bool, bool) {
+	if relPath == "." {
+		return false, true
+	}
+	if ignored, ok := r.getIgnoredFromCache(relPath); ok {
+		return ignored, true
+	}
+
+	segments := strings.Split(relPath, "/")
+	for _, segment := range segments {
+		if _, ok := ignoredPathSegments[segment]; ok {
+			r.setIgnoredInCache(relPath, true)
+			return true, true
+		}
+	}
+	if matchAutosnapIgnoreRules(r.watchIgnoreRules, relPath) {
+		r.setIgnoredInCache(relPath, true)
+		return true, true
+	}
+	return false, false
+}
+
+func pathOrParentIgnored(relPath string, ignoredPaths map[string]bool) bool {
+	for relPath != "." && relPath != "" {
+		if ignoredPaths[relPath] {
+			return true
+		}
+		relPath = path.Dir(relPath)
+	}
+	return false
 }
 
 func (r *snapshotRunner) pollChangeSignature() (string, error) {
