@@ -2,19 +2,24 @@
 .TH "AUTOSNAP" "1" "Aug 2026" "autosnap" "autosnap manual"
 
 .SH NAME
-autosnap-mark - Mark checkpoints unmarked, review, good, or bad
+autosnap-mark - Mark checkpoints with an arbitrary label
 
 
 .SH SYNOPSIS
-\fBautosnap mark (--bad|--good|--review|--unmark)  [flags]\fP
+\fBautosnap mark (--label LABEL|--bad|--good|--review|--unmark)  [flags]\fP
 
 
 .SH DESCRIPTION
-Mark one checkpoint or an inclusive checkpoint range unmarked, review, good, or bad.
+Mark one checkpoint or an inclusive checkpoint range with an arbitrary label.
 
 .PP
 A range A..B marks checkpoints from A through B, inclusive. Ranges are
 inclusive autosnap checkpoint intervals, not general Git revision ranges.
+
+.PP
+Labels must be 1-32 characters matching [A-Za-z0-9][A-Za-z0-9_-]*. The label
+unmarked is reserved. Use --reason with --label or --bad to record why a
+checkpoint was marked.
 
 .PP
 The checkpoint argument can be an explicit autosnap ref, a checkpoint commit hash,
@@ -40,8 +45,12 @@ first
 	help for mark
 
 .PP
+\fB--label\fP=""
+	Arbitrary mark label
+
+.PP
 \fB--reason\fP=""
-	Human-readable reason for a bad mark
+	Human-readable reason for the mark
 
 .PP
 \fB--review\fP[=false]

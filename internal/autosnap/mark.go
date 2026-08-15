@@ -16,16 +16,21 @@ func newMarkCommand() *cobra.Command {
 		good   bool
 		review bool
 		unmark bool
+		label  string
 		reason string
 	)
 
 	cmd := &cobra.Command{
-		Use:   "mark (--bad|--good|--review|--unmark) <checkpoint-or-range>",
-		Short: "Mark checkpoints unmarked, review, good, or bad",
-		Long: strings.TrimSpace(`Mark one checkpoint or an inclusive checkpoint range unmarked, review, good, or bad.
+		Use:   "mark (--label LABEL|--bad|--good|--review|--unmark) <checkpoint-or-range>",
+		Short: "Mark checkpoints with an arbitrary label",
+		Long: strings.TrimSpace(`Mark one checkpoint or an inclusive checkpoint range with an arbitrary label.
 
 A range A..B marks checkpoints from A through B, inclusive. Ranges are
 inclusive autosnap checkpoint intervals, not general Git revision ranges.
+
+Labels must be 1-32 characters matching [A-Za-z0-9][A-Za-z0-9_-]*. The label
+unmarked is reserved. Use --reason with --label or --bad to record why a
+checkpoint was marked.
 
 The checkpoint argument can be an explicit autosnap ref, a checkpoint commit hash,
 or one of these current-branch history selectors:
@@ -34,11 +39,20 @@ or one of these current-branch history selectors:
   first+N
   last
   last-N`),
-		Args: cobra.ExactArgs(1),
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) != 1 {
+				return fmt.Errorf("mark requires exactly one checkpoint-or-range argument\n\nExamples:\n  autosnap mark --label review last\n  autosnap mark --bad last")
+			}
+			return nil
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			out := cmd.OutOrStdout()
 			ctx := context.Background()
 			modeCount := 0
+			labelProvided := cmd.Flags().Changed("label")
+			if labelProvided {
+				modeCount++
+			}
 			if bad {
 				modeCount++
 			}
@@ -52,10 +66,17 @@ or one of these current-branch history selectors:
 				modeCount++
 			}
 			if modeCount != 1 {
-				return fmt.Errorf("mark requires exactly one of --bad, --good, --review, or --unmark")
+				return fmt.Errorf("mark requires exactly one of --label, --bad, --good, --review, or --unmark")
 			}
-			if !bad && strings.TrimSpace(reason) != "" {
-				return fmt.Errorf("--reason can only be used with --bad")
+			if labelProvided {
+				var err error
+				label, err = validateCheckpointMarkLabel(label)
+				if err != nil {
+					return err
+				}
+			}
+			if !bad && !labelProvided && strings.TrimSpace(reason) != "" {
+				return fmt.Errorf("--reason can only be used with --label or --bad")
 			}
 
 			repoRoot, _, branchRef, err := detectRepository(ctx)
@@ -72,6 +93,10 @@ or one of these current-branch history selectors:
 
 			for _, ref := range refs {
 				switch {
+				case labelProvided:
+					if err := writeCheckpointMark(ctx, repoRoot, ref, label, reason, time.Now().UTC()); err != nil {
+						return fmt.Errorf("failed to mark checkpoint %q: %w", ref.Ref, err)
+					}
 				case bad:
 					if err := markCheckpointBad(ctx, repoRoot, ref, reason, time.Now().UTC()); err != nil {
 						return fmt.Errorf("failed to mark checkpoint %q bad: %w", ref.Ref, err)
@@ -93,6 +118,8 @@ or one of these current-branch history selectors:
 
 			state := "unmarked"
 			switch {
+			case labelProvided:
+				state = label
 			case bad:
 				state = "bad"
 			case good:
@@ -113,6 +140,7 @@ or one of these current-branch history selectors:
 	cmd.Flags().BoolVar(&good, "good", false, "Mark selected checkpoints good")
 	cmd.Flags().BoolVar(&review, "review", false, "Mark selected checkpoints for review")
 	cmd.Flags().BoolVar(&unmark, "unmark", false, "Remove explicit review, good, or bad marks from selected checkpoints")
-	cmd.Flags().StringVar(&reason, "reason", "", "Human-readable reason for a bad mark")
+	cmd.Flags().StringVar(&label, "label", "", "Arbitrary mark label")
+	cmd.Flags().StringVar(&reason, "reason", "", "Human-readable reason for the mark")
 	return cmd
 }

@@ -141,11 +141,14 @@ func TestMarkCommandValidation(t *testing.T) {
 		args []string
 		want string
 	}{
-		{name: "missing mode", args: []string{"mark", "last"}, want: "exactly one of --bad, --good, --review, or --unmark"},
-		{name: "multiple modes", args: []string{"mark", "--bad", "--review", "last"}, want: "exactly one of --bad, --good, --review, or --unmark"},
-		{name: "reason with good", args: []string{"mark", "--good", "--reason", "fixed", "last"}, want: "--reason can only be used with --bad"},
-		{name: "reason with review", args: []string{"mark", "--review", "--reason", "inspect", "last"}, want: "--reason can only be used with --bad"},
-		{name: "reason with unmark", args: []string{"mark", "--unmark", "--reason", "fixed", "last"}, want: "--reason can only be used with --bad"},
+		{name: "missing mode", args: []string{"mark", "last"}, want: "exactly one of --label, --bad, --good, --review, or --unmark"},
+		{name: "multiple modes", args: []string{"mark", "--bad", "--review", "last"}, want: "exactly one of --label, --bad, --good, --review, or --unmark"},
+		{name: "reason with good", args: []string{"mark", "--good", "--reason", "fixed", "last"}, want: "--reason can only be used with --label or --bad"},
+		{name: "reason with review", args: []string{"mark", "--review", "--reason", "inspect", "last"}, want: "--reason can only be used with --label or --bad"},
+		{name: "reason with unmark", args: []string{"mark", "--unmark", "--reason", "fixed", "last"}, want: "--reason can only be used with --label or --bad"},
+		{name: "missing checkpoint argument", args: []string{"mark"}, want: "mark requires exactly one checkpoint-or-range argument"},
+		{name: "too many checkpoint arguments", args: []string{"mark", "last", "first"}, want: "mark requires exactly one checkpoint-or-range argument"},
+		{name: "invalid label", args: []string{"mark", "--label", "needs space", "last"}, want: "invalid mark label"},
 	}
 
 	for _, tt := range tests {

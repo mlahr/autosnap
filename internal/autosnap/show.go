@@ -104,18 +104,12 @@ autosnap show --name-only refs/autosnapshots/main/20260605T120000Z`),
 				if ranged {
 					markLabel = "end mark"
 				}
-				switch mark.Mark {
-				case checkpointMarkStateReview:
-					fmt.Fprintf(out, "%s: review\n", markLabel)
-				case checkpointMarkStateBad:
-					fmt.Fprintf(out, "%s: bad\n", markLabel)
-					if strings.TrimSpace(mark.Reason) != "" {
-						fmt.Fprintf(out, "%s reason: %s\n", markLabel, strings.TrimSpace(mark.Reason))
-					}
-				case checkpointMarkStateGood:
-					fmt.Fprintf(out, "%s: good\n", markLabel)
-				default:
-					fmt.Fprintf(out, "%s: unmarked\n", markLabel)
+				if mark.Mark == "" {
+					mark.Mark = checkpointMarkStateUnmarked
+				}
+				fmt.Fprintf(out, "%s: %s\n", markLabel, mark.Mark)
+				if strings.TrimSpace(mark.Reason) != "" {
+					fmt.Fprintf(out, "%s reason: %s\n", markLabel, strings.TrimSpace(mark.Reason))
 				}
 			}
 

@@ -24,7 +24,7 @@ autosnap [flags]
 * [autosnap hooks](autosnap_hooks.md)	 - Manage autosnap Git hooks
 * [autosnap list](autosnap_list.md)	 - List checkpoints
 * [autosnap logs](autosnap_logs.md)	 - Show autosnap daemon logs
-* [autosnap mark](autosnap_mark.md)	 - Mark checkpoints unmarked, review, good, or bad
+* [autosnap mark](autosnap_mark.md)	 - Mark checkpoints with an arbitrary label
 * [autosnap pending](autosnap_pending.md)	 - List checkpoints after the latest checkpoint matching branch tip
 * [autosnap pick](autosnap_pick.md)	 - Apply a checkpoint's incremental patch
 * [autosnap promote](autosnap_promote.md)	 - Promote a checkpoint to a normal branch commit

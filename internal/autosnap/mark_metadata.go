@@ -36,6 +36,29 @@ func markCheckpointReview(ctx context.Context, repoRoot string, checkpoint check
 	return writeCheckpointMark(ctx, repoRoot, checkpoint, checkpointMarkStateReview, "", now)
 }
 
+func validateCheckpointMarkLabel(label string) (string, error) {
+	label = strings.TrimSpace(label)
+	if label == "" {
+		return "", fmt.Errorf("mark label cannot be empty")
+	}
+	if label == checkpointMarkStateUnmarked {
+		return "", fmt.Errorf("mark label %q is reserved", label)
+	}
+	if len(label) > 32 {
+		return "", fmt.Errorf("mark label %q exceeds the 32-character limit", label)
+	}
+	for i, r := range label {
+		valid := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9'
+		if i > 0 {
+			valid = valid || r == '_' || r == '-'
+		}
+		if !valid || (i == 0 && (r == '_' || r == '-')) {
+			return "", fmt.Errorf("invalid mark label %q: use 1-32 characters matching [A-Za-z0-9][A-Za-z0-9_-]*", label)
+		}
+	}
+	return label, nil
+}
+
 func writeCheckpointMark(ctx context.Context, repoRoot string, checkpoint checkpointRefInfo, state, reason string, now time.Time) error {
 	payload := checkpointMark{
 		Mark:     state,
@@ -255,12 +278,10 @@ func parseCheckpointMark(checkpointRef, raw string) (checkpointMark, error) {
 	if err := json.Unmarshal([]byte(raw), &mark); err != nil {
 		return checkpointMark{}, fmt.Errorf("invalid checkpoint mark for %s in %s: %w", checkpointRef, checkpointMarkNoteRef, err)
 	}
-	switch mark.Mark {
-	case checkpointMarkStateReview, checkpointMarkStateGood, checkpointMarkStateBad:
-		return mark, nil
-	default:
-		return checkpointMark{}, fmt.Errorf("invalid checkpoint mark state %q for %s in %s", mark.Mark, checkpointRef, checkpointMarkNoteRef)
+	if _, err := validateCheckpointMarkLabel(mark.Mark); err != nil {
+		return checkpointMark{}, fmt.Errorf("invalid checkpoint mark state %q for %s in %s: %w", mark.Mark, checkpointRef, checkpointMarkNoteRef, err)
 	}
+	return mark, nil
 }
 
 func checkpointMarkSummaryPrefix(useColor bool, mark checkpointMark) string {
@@ -272,7 +293,10 @@ func checkpointMarkSummaryPrefix(useColor bool, mark checkpointMark) string {
 	case checkpointMarkStateBad:
 		return colorizeCheckpointMark(useColor, "[bad]", checkpointMarkStateBad)
 	default:
-		return ""
+		if mark.Mark == "" || mark.Mark == checkpointMarkStateUnmarked {
+			return ""
+		}
+		return "[" + mark.Mark + "]"
 	}
 }
 

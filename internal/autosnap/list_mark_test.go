@@ -209,11 +209,11 @@ func TestMarkCommandLabelsListShowAndJSONOutput(t *testing.T) {
 		if rows[1]["mark"] != "review" {
 			t.Fatalf("expected second checkpoint mark=review, got %+v", rows[1])
 		}
-		if _, ok := rows[1]["badReason"]; ok {
-			t.Fatalf("expected review checkpoint to omit badReason, got %+v", rows[1])
+		if _, ok := rows[1]["reason"]; ok {
+			t.Fatalf("expected review checkpoint to omit reason, got %+v", rows[1])
 		}
-		if rows[2]["mark"] != "bad" || rows[2]["badReason"] != "regression" {
-			t.Fatalf("expected third checkpoint bad reason in json, got %+v", rows[2])
+		if rows[2]["mark"] != "bad" || rows[2]["reason"] != "regression" {
+			t.Fatalf("expected third checkpoint reason in json, got %+v", rows[2])
 		}
 
 		buf.Reset()
@@ -267,6 +267,55 @@ func TestMarkCommandLabelsListShowAndJSONOutput(t *testing.T) {
 		output = buf.String()
 		if !strings.Contains(output, "mark: bad") || !strings.Contains(output, "mark reason: regression") {
 			t.Fatalf("expected show output to include bad mark and reason, got %q", output)
+		}
+	})
+}
+
+func TestMarkCommandSupportsArbitraryLabelAndReason(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		createCheckpointRangeScenario(t, repo)
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newMarkCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"mark", "--label", "needs-review", "last", "--reason", "inspect renderer"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("mark arbitrary label failed: %v", err)
+		}
+
+		buf.Reset()
+		root = &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newListCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"list", "--format", "json"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("list json failed: %v", err)
+		}
+		var rows []map[string]any
+		if err := json.Unmarshal(buf.Bytes(), &rows); err != nil {
+			t.Fatalf("decode list json failed: %v", err)
+		}
+		last := rows[len(rows)-1]
+		if last["mark"] != "needs-review" || last["reason"] != "inspect renderer" {
+			t.Fatalf("expected arbitrary mark and reason, got %+v", last)
+		}
+
+		buf.Reset()
+		root = &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newListCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"list"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("list text failed: %v", err)
+		}
+		if !strings.Contains(buf.String(), "[needs-review]") || strings.Contains(buf.String(), ansiYellow) {
+			t.Fatalf("expected uncolored arbitrary mark in text output, got %q", buf.String())
 		}
 	})
 }
