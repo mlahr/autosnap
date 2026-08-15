@@ -37,39 +37,3 @@ func TestColorizeWorktreeMatchMarker(t *testing.T) {
 		t.Fatalf("expected blue index marker, got %q", out)
 	}
 }
-
-func TestColorizePatchStatusPadded(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name   string
-		status checkpointPatchStatus
-		want   string
-	}{
-		{
-			name:   "included",
-			status: checkpointPatchStatusIncluded,
-			want:   "\x1b[32mincluded\x1b[0m",
-		},
-		{
-			name:   "missing",
-			status: checkpointPatchStatusMissing,
-			want:   "\x1b[36mmissing\x1b[0m ",
-		},
-		{
-			name:   "conflict",
-			status: checkpointPatchStatusConflict,
-			want:   "\x1b[33mconflict\x1b[0m",
-		},
-	}
-
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			if got := colorizePatchStatusPadded(true, tt.status, 8); got != tt.want {
-				t.Fatalf("expected patch status color %q, got %q", tt.want, got)
-			}
-		})
-	}
-}

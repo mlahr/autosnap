@@ -72,6 +72,14 @@ func streamExplainPendingCheckpointRefs(ctx context.Context, repoRoot string, re
 		rows[i].worktreeMatch = worktreeMatches[cp.Ref]
 		rows[i].mark = marks[cp.Ref]
 	}
+	columns := checkpointTextColumns{
+		BranchWidth:        checkpointTextBranchWidth(checkpoints, allBranches),
+		CommitWidth:        checkpointTextCommitWidth(checkpoints),
+		MarkWidth:          checkpointTextMarkWidth(checkpoints, marks),
+		TimestampWidth:     checkpointTextTimestampWidth(checkpoints),
+		IncludeStatus:      true,
+		IncludePatchStatus: includePatchStatus,
+	}
 
 	classifiedCh := make(chan classifiedCheckpointRef)
 	errCh := make(chan error, 1)
@@ -102,7 +110,7 @@ func streamExplainPendingCheckpointRefs(ctx context.Context, repoRoot string, re
 			if err := classifyPatchStatus(next); err != nil {
 				return err
 			}
-			printPendingExplainRow(out, rows[next].checkpoint, rows[next].status, rows[next].patchStatus, rows[next].worktreeMatch, rows[next].mark, allBranches, useColor, includePatchStatus)
+			printPendingExplainRow(out, rows[next].checkpoint, rows[next].status, rows[next].patchStatus, rows[next].worktreeMatch, rows[next].mark, columns, useColor)
 			if includeNotes {
 				if err := writeCheckpointTextNote(ctx, repoRoot, out, noteRef, rows[next].checkpoint.Ref); err != nil {
 					return err
@@ -141,7 +149,7 @@ func streamExplainPendingCheckpointRefs(ctx context.Context, repoRoot string, re
 		if err := classifyPatchStatus(next); err != nil {
 			return err
 		}
-		printPendingExplainRow(out, rows[next].checkpoint, rows[next].status, rows[next].patchStatus, rows[next].worktreeMatch, rows[next].mark, allBranches, useColor, includePatchStatus)
+		printPendingExplainRow(out, rows[next].checkpoint, rows[next].status, rows[next].patchStatus, rows[next].worktreeMatch, rows[next].mark, columns, useColor)
 		if includeNotes {
 			if err := writeCheckpointTextNote(ctx, repoRoot, out, noteRef, rows[next].checkpoint.Ref); err != nil {
 				return err
@@ -168,27 +176,17 @@ func streamExplainPendingCheckpointRefs(ctx context.Context, repoRoot string, re
 	return nil
 }
 
-func printPendingExplainRow(out io.Writer, cp checkpointInfo, status checkpointPendingStatus, patchStatus checkpointPatchStatus, match checkpointWorktreeMatch, mark checkpointMark, allBranches bool, useColor bool, includePatchStatus bool) {
-	displayTimestamp := formatCheckpointTimestampForList(cp.Timestamp)
-	marker := colorizeWorktreeMatchMarker(useColor, match)
-	commit := colorizeCheckpointID(useColor, cp.Commit)
-	markText := checkpointMarkSummaryPrefix(useColor, mark)
-	summary := colorizeCommitMessage(useColor, cp.Summary)
-	statusText := colorizePendingStatusPadded(useColor, status, 8)
-	if !includePatchStatus {
-		if allBranches {
-			fmt.Fprintf(out, "%s %s %s %s %s %s %s\n", cp.Branch, displayTimestamp, statusText, commit, marker, markText, summary)
-			return
-		}
-		fmt.Fprintf(out, "%s %s %s %s %s %s\n", displayTimestamp, statusText, commit, marker, markText, summary)
-		return
-	}
-	patchStatusText := colorizePatchStatusPadded(useColor, patchStatus, 8)
-	if allBranches {
-		fmt.Fprintf(out, "%s %s %s %s %s %s %s %s\n", cp.Branch, displayTimestamp, statusText, patchStatusText, commit, marker, markText, summary)
-		return
-	}
-	fmt.Fprintf(out, "%s %s %s %s %s %s %s\n", displayTimestamp, statusText, patchStatusText, commit, marker, markText, summary)
+func printPendingExplainRow(out io.Writer, cp checkpointInfo, status checkpointPendingStatus, patchStatus checkpointPatchStatus, match checkpointWorktreeMatch, mark checkpointMark, columns checkpointTextColumns, useColor bool) {
+	fmt.Fprintln(out, formatCheckpointTextRow(checkpointTextRow{
+		Branch:      cp.Branch,
+		Timestamp:   formatCheckpointTimestampForList(cp.Timestamp),
+		Status:      status,
+		PatchStatus: patchStatus,
+		Commit:      cp.Commit,
+		Match:       match,
+		Mark:        mark,
+		Summary:     cp.Summary,
+	}, columns, useColor))
 }
 
 func writePendingExplainJSON(ctx context.Context, repoRoot string, refs []checkpointRefInfo, branch string, allBranches bool, out io.Writer, debugLog pendingDebugLogger, opts checkpointJSONLOptions) error {

@@ -149,17 +149,21 @@ or one of these current-branch history selectors:
 				return nil
 			}
 
+			columns := checkpointTextColumns{
+				BranchWidth:    checkpointTextBranchWidth(checkpoints, allBranches),
+				CommitWidth:    checkpointTextCommitWidth(checkpoints),
+				MarkWidth:      checkpointTextMarkWidth(checkpoints, marks),
+				TimestampWidth: checkpointTextTimestampWidth(checkpoints),
+			}
 			for _, cp := range checkpoints {
-				displayTimestamp := formatCheckpointTimestampForList(cp.Timestamp)
-				marker := colorizeWorktreeMatchMarker(useColor, worktreeMatches[cp.Ref])
-				ref := colorizeCheckpointID(useColor, cp.Commit)
-				mark := checkpointMarkSummaryPrefix(useColor, marks[cp.Ref])
-				summary := colorizeCommitMessage(useColor, cp.Summary)
-				if allBranches {
-					fmt.Fprintf(out, "%s %s %s %s %s %s\n", cp.Branch, displayTimestamp, ref, marker, mark, summary)
-				} else {
-					fmt.Fprintf(out, "%s %s %s %s %s\n", displayTimestamp, ref, marker, mark, summary)
-				}
+				fmt.Fprintln(out, formatCheckpointTextRow(checkpointTextRow{
+					Branch:    cp.Branch,
+					Timestamp: formatCheckpointTimestampForList(cp.Timestamp),
+					Commit:    cp.Commit,
+					Match:     worktreeMatches[cp.Ref],
+					Mark:      marks[cp.Ref],
+					Summary:   cp.Summary,
+				}, columns, useColor))
 				if includeNotes {
 					if err := writeCheckpointTextNote(ctx, repoRoot, out, resolvedNoteRef, cp.Ref); err != nil {
 						return err

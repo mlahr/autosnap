@@ -189,33 +189,6 @@ func TestBranchCopyCommandValidation(t *testing.T) {
 	}
 }
 
-func TestCheckpointMarkSummaryPrefixColor(t *testing.T) {
-	if got := checkpointMarkSummaryPrefix(false, checkpointMark{Mark: checkpointMarkStateBad}); got != "[bad]" {
-		t.Fatalf("expected plain bad prefix, got %q", got)
-	}
-	if got := checkpointMarkSummaryPrefix(false, checkpointMark{Mark: checkpointMarkStateGood}); got != "[good]" {
-		t.Fatalf("expected plain good prefix, got %q", got)
-	}
-	if got := checkpointMarkSummaryPrefix(false, checkpointMark{Mark: checkpointMarkStateReview}); got != "[review]" {
-		t.Fatalf("expected plain review prefix, got %q", got)
-	}
-	if got := checkpointMarkSummaryPrefix(false, checkpointMark{}); got != "" {
-		t.Fatalf("expected empty unmarked prefix, got %q", got)
-	}
-	if got := checkpointMarkSummaryPrefix(true, checkpointMark{Mark: checkpointMarkStateBad}); !strings.Contains(got, ansiRed) || !strings.Contains(got, "[bad]") {
-		t.Fatalf("expected red bad prefix, got %q", got)
-	}
-	if got := checkpointMarkSummaryPrefix(true, checkpointMark{Mark: checkpointMarkStateGood}); !strings.Contains(got, ansiGreen) || !strings.Contains(got, "[good]") {
-		t.Fatalf("expected green good prefix, got %q", got)
-	}
-	if got := checkpointMarkSummaryPrefix(true, checkpointMark{Mark: checkpointMarkStateReview}); !strings.Contains(got, ansiYellow) || !strings.Contains(got, "[review]") {
-		t.Fatalf("expected yellow review prefix, got %q", got)
-	}
-	if got := checkpointMarkSummaryPrefix(true, checkpointMark{}); got != "" {
-		t.Fatalf("expected empty colorized unmarked prefix, got %q", got)
-	}
-}
-
 func TestDocsCommandShowsInstalledDocumentationLocations(t *testing.T) {
 	buf := &bytes.Buffer{}
 	root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}

@@ -180,17 +180,21 @@ func newPendingCommand() *cobra.Command {
 				return nil
 			}
 
+			columns := checkpointTextColumns{
+				BranchWidth:    checkpointTextBranchWidth(pending, allBranches),
+				CommitWidth:    checkpointTextCommitWidth(pending),
+				MarkWidth:      checkpointTextMarkWidth(pending, marks),
+				TimestampWidth: checkpointTextTimestampWidth(pending),
+			}
 			for _, cp := range pending {
-				displayTimestamp := formatCheckpointTimestampForList(cp.Timestamp)
-				marker := colorizeWorktreeMatchMarker(useColor, worktreeMatches[cp.Ref])
-				commit := colorizeCheckpointID(useColor, cp.Commit)
-				mark := checkpointMarkSummaryPrefix(useColor, marks[cp.Ref])
-				summary := colorizeCommitMessage(useColor, cp.Summary)
-				if allBranches {
-					fmt.Fprintf(out, "%s %s %s %s %s %s\n", cp.Branch, displayTimestamp, commit, marker, mark, summary)
-				} else {
-					fmt.Fprintf(out, "%s %s %s %s %s\n", displayTimestamp, commit, marker, mark, summary)
-				}
+				fmt.Fprintln(out, formatCheckpointTextRow(checkpointTextRow{
+					Branch:    cp.Branch,
+					Timestamp: formatCheckpointTimestampForList(cp.Timestamp),
+					Commit:    cp.Commit,
+					Match:     worktreeMatches[cp.Ref],
+					Mark:      marks[cp.Ref],
+					Summary:   cp.Summary,
+				}, columns, useColor))
 				if includeNotes {
 					if err := writeCheckpointTextNote(ctx, repoRoot, out, resolvedNoteRef, cp.Ref); err != nil {
 						return err

@@ -283,27 +283,3 @@ func parseCheckpointMark(checkpointRef, raw string) (checkpointMark, error) {
 	}
 	return mark, nil
 }
-
-func checkpointMarkSummaryPrefix(useColor bool, mark checkpointMark) string {
-	switch mark.Mark {
-	case checkpointMarkStateReview:
-		return colorizeCheckpointMark(useColor, "[review]", checkpointMarkStateReview)
-	case checkpointMarkStateGood:
-		return colorizeCheckpointMark(useColor, "[good]", checkpointMarkStateGood)
-	case checkpointMarkStateBad:
-		return colorizeCheckpointMark(useColor, "[bad]", checkpointMarkStateBad)
-	default:
-		if mark.Mark == "" || mark.Mark == checkpointMarkStateUnmarked {
-			return ""
-		}
-		return "[" + mark.Mark + "]"
-	}
-}
-
-func checkpointMarkSummary(useColor bool, mark checkpointMark, summary string) string {
-	prefix := checkpointMarkSummaryPrefix(useColor, mark)
-	if prefix == "" {
-		return colorizeCommitMessage(useColor, summary)
-	}
-	return prefix + " " + colorizeCommitMessage(useColor, summary)
-}

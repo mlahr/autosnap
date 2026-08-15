@@ -1,9 +1,5 @@
 package autosnap
 
-import (
-	"strings"
-)
-
 const (
 	ansiReset      = "\x1b[0m"
 	ansiRed        = "\x1b[31m"
@@ -78,21 +74,6 @@ func colorizePendingStatus(enabled bool, status checkpointPendingStatus) string 
 	}
 }
 
-func colorizePendingStatusPadded(enabled bool, status checkpointPendingStatus, width int) string {
-	raw := string(status)
-	padding := 0
-	if len(raw) < width {
-		padding = width - len(raw)
-	}
-
-	statusText := colorizePendingStatus(enabled, status)
-	if statusText == raw {
-		return raw + strings.Repeat(" ", padding)
-	}
-
-	return statusText + strings.Repeat(" ", padding)
-}
-
 func colorizePatchStatus(enabled bool, status checkpointPatchStatus) string {
 	if !enabled {
 		return string(status)
@@ -108,22 +89,4 @@ func colorizePatchStatus(enabled bool, status checkpointPatchStatus) string {
 	default:
 		return string(status)
 	}
-}
-
-func colorizePatchStatusPadded(enabled bool, status checkpointPatchStatus, width int) string {
-	if status == "" {
-		status = checkpointPatchStatusConflict
-	}
-	raw := string(status)
-	padding := 0
-	if len(raw) < width {
-		padding = width - len(raw)
-	}
-
-	statusText := colorizePatchStatus(enabled, status)
-	if statusText == raw {
-		return raw + strings.Repeat(" ", padding)
-	}
-
-	return statusText + strings.Repeat(" ", padding)
 }

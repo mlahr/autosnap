@@ -180,8 +180,8 @@ func TestMarkCommandLabelsListShowAndJSONOutput(t *testing.T) {
 			t.Fatalf("list failed: %v", err)
 		}
 		output := buf.String()
-		if !strings.Contains(output, "first checkpoint") || strings.Contains(output, "[unmarked]") || !strings.Contains(output, "[review] second checkpoint") || !strings.Contains(output, "[bad] third checkpoint") {
-			t.Fatalf("expected list output to include compact review/bad labels, got %q", output)
+		if !strings.Contains(output, "first checkpoint") || strings.Contains(output, "[unmarked]") || !strings.Contains(output, "review") || !strings.Contains(output, "second checkpoint") || !strings.Contains(output, "bad") || !strings.Contains(output, "third checkpoint") {
+			t.Fatalf("expected list output to include separate review/bad label columns, got %q", output)
 		}
 		if strings.Contains(output, "regression") {
 			t.Fatalf("expected list text output to omit bad reason, got %q", output)
@@ -238,8 +238,8 @@ func TestMarkCommandLabelsListShowAndJSONOutput(t *testing.T) {
 		if err := root.Execute(); err != nil {
 			t.Fatalf("pending explain failed: %v", err)
 		}
-		if !strings.Contains(buf.String(), "[review] second checkpoint") {
-			t.Fatalf("expected pending output to include review mark, got %q", buf.String())
+		if !strings.Contains(buf.String(), "review") || !strings.Contains(buf.String(), "second checkpoint") {
+			t.Fatalf("expected pending output to include separate review mark column, got %q", buf.String())
 		}
 
 		buf.Reset()
@@ -314,8 +314,8 @@ func TestMarkCommandSupportsArbitraryLabelAndReason(t *testing.T) {
 		if err := root.Execute(); err != nil {
 			t.Fatalf("list text failed: %v", err)
 		}
-		if !strings.Contains(buf.String(), "[needs-review]") || strings.Contains(buf.String(), ansiYellow) {
-			t.Fatalf("expected uncolored arbitrary mark in text output, got %q", buf.String())
+		if !strings.Contains(buf.String(), "needs-review") || strings.Contains(buf.String(), ansiYellow) {
+			t.Fatalf("expected full uncolored arbitrary mark in text output, got %q", buf.String())
 		}
 	})
 }
@@ -457,7 +457,7 @@ func TestMarkCommandMarksRangeAndReplacesWithReview(t *testing.T) {
 			t.Fatalf("list failed: %v", err)
 		}
 		output := buf.String()
-		if !strings.Contains(output, "first") || strings.Contains(output, "[unmarked]") || !strings.Contains(output, "[bad] second") || !strings.Contains(output, "[bad] third") {
+		if !strings.Contains(output, "first") || strings.Contains(output, "[unmarked]") || !strings.Contains(output, "bad") || !strings.Contains(output, "second") || !strings.Contains(output, "third") {
 			t.Fatalf("expected range mark labels in list output, got %q", output)
 		}
 
@@ -481,7 +481,7 @@ func TestMarkCommandMarksRangeAndReplacesWithReview(t *testing.T) {
 			t.Fatalf("list after review failed: %v", err)
 		}
 		output = buf.String()
-		if !strings.Contains(output, "[bad] second") || !strings.Contains(output, "[review] third") {
+		if !strings.Contains(output, "bad") || !strings.Contains(output, "second") || !strings.Contains(output, "review") || !strings.Contains(output, "third") {
 			t.Fatalf("expected review mark to replace bad mark on last checkpoint, got %q", output)
 		}
 
@@ -505,7 +505,7 @@ func TestMarkCommandMarksRangeAndReplacesWithReview(t *testing.T) {
 			t.Fatalf("list after unmark failed: %v", err)
 		}
 		output = buf.String()
-		if !strings.Contains(output, "[bad] second") || !strings.Contains(output, "third") || strings.Contains(output, "[unmarked]") {
+		if !strings.Contains(output, "bad") || !strings.Contains(output, "second") || !strings.Contains(output, "third") || strings.Contains(output, "[unmarked]") {
 			t.Fatalf("expected unmark to clear last checkpoint, got %q", output)
 		}
 	})
@@ -721,10 +721,10 @@ func TestListCommandShowsWorktreeMatchMarkers(t *testing.T) {
 		}
 
 		output := buf.String()
-		if !strings.Contains(output, "**  worktree checkpoint") {
+		if !strings.Contains(output, "**") || !strings.Contains(output, "worktree checkpoint") {
 			t.Fatalf("expected worktree match marker in list output, got %q", output)
 		}
-		if !strings.Contains(output, "*   index checkpoint") {
+		if !strings.Contains(output, "*") || !strings.Contains(output, "index checkpoint") {
 			t.Fatalf("expected index match marker in list output, got %q", output)
 		}
 	})

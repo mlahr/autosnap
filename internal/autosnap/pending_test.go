@@ -135,10 +135,10 @@ func TestPendingCommandShowsWorktreeMatchMarkers(t *testing.T) {
 		}
 
 		output := buf.String()
-		if !strings.Contains(output, "**  worktree checkpoint") {
+		if !strings.Contains(output, "**") || !strings.Contains(output, "worktree checkpoint") {
 			t.Fatalf("expected worktree match marker in pending output, got %q", output)
 		}
-		if !strings.Contains(output, "*   index checkpoint") {
+		if !strings.Contains(output, "*") || !strings.Contains(output, "index checkpoint") {
 			t.Fatalf("expected index match marker in pending output, got %q", output)
 		}
 	})
@@ -186,10 +186,10 @@ func TestPendingExplainCommandShowsWorktreeMatchMarkers(t *testing.T) {
 		}
 
 		output := buf.String()
-		if !strings.Contains(output, "pending  ") || !strings.Contains(output, "**  worktree checkpoint") {
+		if !strings.Contains(output, "pending  ") || !strings.Contains(output, "**") || !strings.Contains(output, "worktree checkpoint") {
 			t.Fatalf("expected worktree match marker in pending explain output, got %q", output)
 		}
-		if !strings.Contains(output, "pending  ") || !strings.Contains(output, "*   index checkpoint") {
+		if !strings.Contains(output, "pending  ") || !strings.Contains(output, "*") || !strings.Contains(output, "index checkpoint") {
 			t.Fatalf("expected index match marker in pending explain output, got %q", output)
 		}
 	})
