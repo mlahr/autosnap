@@ -153,11 +153,12 @@ or one of these current-branch history selectors:
 				displayTimestamp := formatCheckpointTimestampForList(cp.Timestamp)
 				marker := colorizeWorktreeMatchMarker(useColor, worktreeMatches[cp.Ref])
 				ref := colorizeCheckpointID(useColor, cp.Commit)
-				summary := checkpointMarkSummary(useColor, marks[cp.Ref], cp.Summary)
+				mark := checkpointMarkSummaryPrefix(useColor, marks[cp.Ref])
+				summary := colorizeCommitMessage(useColor, cp.Summary)
 				if allBranches {
-					fmt.Fprintf(out, "%s %s %s %s %s\n", cp.Branch, displayTimestamp, ref, marker, summary)
+					fmt.Fprintf(out, "%s %s %s %s %s %s\n", cp.Branch, displayTimestamp, ref, marker, mark, summary)
 				} else {
-					fmt.Fprintf(out, "%s %s %s %s\n", displayTimestamp, ref, marker, summary)
+					fmt.Fprintf(out, "%s %s %s %s %s\n", displayTimestamp, ref, marker, mark, summary)
 				}
 				if includeNotes {
 					if err := writeCheckpointTextNote(ctx, repoRoot, out, resolvedNoteRef, cp.Ref); err != nil {

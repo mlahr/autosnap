@@ -172,22 +172,23 @@ func printPendingExplainRow(out io.Writer, cp checkpointInfo, status checkpointP
 	displayTimestamp := formatCheckpointTimestampForList(cp.Timestamp)
 	marker := colorizeWorktreeMatchMarker(useColor, match)
 	commit := colorizeCheckpointID(useColor, cp.Commit)
-	summary := checkpointMarkSummary(useColor, mark, cp.Summary)
+	markText := checkpointMarkSummaryPrefix(useColor, mark)
+	summary := colorizeCommitMessage(useColor, cp.Summary)
 	statusText := colorizePendingStatusPadded(useColor, status, 8)
 	if !includePatchStatus {
 		if allBranches {
-			fmt.Fprintf(out, "%s %s %s %s %s %s\n", cp.Branch, displayTimestamp, statusText, commit, marker, summary)
+			fmt.Fprintf(out, "%s %s %s %s %s %s %s\n", cp.Branch, displayTimestamp, statusText, commit, marker, markText, summary)
 			return
 		}
-		fmt.Fprintf(out, "%s %s %s %s %s\n", displayTimestamp, statusText, commit, marker, summary)
+		fmt.Fprintf(out, "%s %s %s %s %s %s\n", displayTimestamp, statusText, commit, marker, markText, summary)
 		return
 	}
 	patchStatusText := colorizePatchStatusPadded(useColor, patchStatus, 8)
 	if allBranches {
-		fmt.Fprintf(out, "%s %s %s %s %s %s %s\n", cp.Branch, displayTimestamp, statusText, patchStatusText, commit, marker, summary)
+		fmt.Fprintf(out, "%s %s %s %s %s %s %s %s\n", cp.Branch, displayTimestamp, statusText, patchStatusText, commit, marker, markText, summary)
 		return
 	}
-	fmt.Fprintf(out, "%s %s %s %s %s %s\n", displayTimestamp, statusText, patchStatusText, commit, marker, summary)
+	fmt.Fprintf(out, "%s %s %s %s %s %s %s\n", displayTimestamp, statusText, patchStatusText, commit, marker, markText, summary)
 }
 
 func writePendingExplainJSON(ctx context.Context, repoRoot string, refs []checkpointRefInfo, branch string, allBranches bool, out io.Writer, debugLog pendingDebugLogger, opts checkpointJSONLOptions) error {

@@ -184,11 +184,12 @@ func newPendingCommand() *cobra.Command {
 				displayTimestamp := formatCheckpointTimestampForList(cp.Timestamp)
 				marker := colorizeWorktreeMatchMarker(useColor, worktreeMatches[cp.Ref])
 				commit := colorizeCheckpointID(useColor, cp.Commit)
-				summary := checkpointMarkSummary(useColor, marks[cp.Ref], cp.Summary)
+				mark := checkpointMarkSummaryPrefix(useColor, marks[cp.Ref])
+				summary := colorizeCommitMessage(useColor, cp.Summary)
 				if allBranches {
-					fmt.Fprintf(out, "%s %s %s %s %s\n", cp.Branch, displayTimestamp, commit, marker, summary)
+					fmt.Fprintf(out, "%s %s %s %s %s %s\n", cp.Branch, displayTimestamp, commit, marker, mark, summary)
 				} else {
-					fmt.Fprintf(out, "%s %s %s %s\n", displayTimestamp, commit, marker, summary)
+					fmt.Fprintf(out, "%s %s %s %s %s\n", displayTimestamp, commit, marker, mark, summary)
 				}
 				if includeNotes {
 					if err := writeCheckpointTextNote(ctx, repoRoot, out, resolvedNoteRef, cp.Ref); err != nil {

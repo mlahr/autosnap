@@ -721,10 +721,10 @@ func TestListCommandShowsWorktreeMatchMarkers(t *testing.T) {
 		}
 
 		output := buf.String()
-		if !strings.Contains(output, "** worktree checkpoint") {
+		if !strings.Contains(output, "**  worktree checkpoint") {
 			t.Fatalf("expected worktree match marker in list output, got %q", output)
 		}
-		if !strings.Contains(output, "*  index checkpoint") {
+		if !strings.Contains(output, "*   index checkpoint") {
 			t.Fatalf("expected index match marker in list output, got %q", output)
 		}
 	})
