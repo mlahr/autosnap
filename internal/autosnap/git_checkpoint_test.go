@@ -133,6 +133,41 @@ func TestDetectRepository(t *testing.T) {
 	})
 }
 
+func TestDetachedBranchIdentityUsesStableShortHash(t *testing.T) {
+	display, ref := detachedBranchIdentity("93465563f9feaf3be6bed58388a1c2d93ee4b941")
+	if display != "detached@9346556" {
+		t.Fatalf("expected detached display name detached@9346556, got %q", display)
+	}
+	if ref != "detached-9346556" {
+		t.Fatalf("expected detached ref detached-9346556, got %q", ref)
+	}
+}
+
+func TestDetachedRepositoryUsesSameBranchRefAsCurrentGitPosition(t *testing.T) {
+	t.Parallel()
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		runGit(t, repo, "checkout", "--detach", "HEAD")
+
+		_, branchDisplay, detectedRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		position, err := currentGitPosition(context.Background(), repo)
+		if err != nil {
+			t.Fatalf("currentGitPosition failed: %v", err)
+		}
+
+		if branchDisplay != "detached@"+strings.TrimPrefix(detectedRef, "detached-") {
+			t.Fatalf("expected detached display %q to match ref %q", branchDisplay, detectedRef)
+		}
+		if detectedRef != position.BranchRef {
+			t.Fatalf("expected detected branch ref %q to match checkpoint branch ref %q", detectedRef, position.BranchRef)
+		}
+	})
+}
+
 func TestGetLatestAndListCheckpointForBranch(t *testing.T) {
 	requireIntegration(t)
 	repo := createTestRepo(t)

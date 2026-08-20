@@ -51,6 +51,45 @@ func TestPendingCommandCurrentBranch(t *testing.T) {
 	})
 }
 
+func TestPendingCommandCurrentDetachedHead(t *testing.T) {
+	t.Parallel()
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		runGit(t, repo, "checkout", "--detach", "HEAD")
+		position, err := currentGitPosition(context.Background(), repo)
+		if err != nil {
+			t.Fatalf("currentGitPosition failed: %v", err)
+		}
+
+		if err := os.WriteFile(filepath.Join(repo, "detached-pending.txt"), []byte("pending\n"), 0o644); err != nil {
+			t.Fatalf("write detached pending file failed: %v", err)
+		}
+		runGit(t, repo, "add", "detached-pending.txt")
+		createAutosnapTestCommitRefFromIndex(t, repo, position.BranchRef, "20260102T000000Z", "detached pending checkpoint")
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newPendingCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"pending", "--explain", "--patch-status"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("pending command failed: %v", err)
+		}
+
+		output := buf.String()
+		if strings.Contains(output, "no checkpoints") {
+			t.Fatalf("expected detached checkpoint output, got %q", output)
+		}
+		for _, want := range []string{"pending", "included", "detached pending checkpoint"} {
+			if !strings.Contains(output, want) {
+				t.Fatalf("expected pending output to contain %q, got %q", want, output)
+			}
+		}
+	})
+}
+
 func TestPendingCommandJSONLOutput(t *testing.T) {
 	t.Parallel()
 	requireIntegration(t)

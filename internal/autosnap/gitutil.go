@@ -212,6 +212,19 @@ func streamPrefix(stream string) string {
 
 var detectRepositoryStartDir = func() string { return "." }
 
+const detachedHeadShortLength = 7
+
+func detachedBranchIdentity(head string) (string, string) {
+	shortHead := strings.TrimSpace(head)
+	if shortHead == "" {
+		return "detached", "detached"
+	}
+	if len(shortHead) > detachedHeadShortLength {
+		shortHead = shortHead[:detachedHeadShortLength]
+	}
+	return "detached@" + shortHead, "detached-" + shortHead
+}
+
 func detectRepository(ctx context.Context) (string, string, string, error) {
 	result, err := runGitCommand(ctx, detectRepositoryStartDir(), nil, "rev-parse", "--show-toplevel")
 	if err != nil {
@@ -230,14 +243,13 @@ func detectRepository(ctx context.Context) (string, string, string, error) {
 
 	branchRef := branchDisplay
 	if branchRef == "" {
-		head, headErr := runGitCommand(ctx, root, nil, "rev-parse", "--short", "HEAD")
+		head, headErr := runGitCommand(ctx, root, nil, "rev-parse", "HEAD")
 		headSHA := strings.TrimSpace(head.Stdout)
 		if headErr != nil || headSHA == "" {
 			branchRef = "detached"
 			branchDisplay = "detached"
 		} else {
-			branchRef = "detached-" + headSHA
-			branchDisplay = "detached@" + headSHA
+			branchDisplay, branchRef = detachedBranchIdentity(headSHA)
 		}
 	}
 

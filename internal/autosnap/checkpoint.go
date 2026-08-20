@@ -245,11 +245,7 @@ func currentGitPosition(ctx context.Context, repoRoot string) (gitPosition, erro
 
 	branchRef := strings.TrimSpace(branchResult.Stdout)
 	if branchRef == "" {
-		shortHead := head
-		if len(shortHead) > 7 {
-			shortHead = shortHead[:7]
-		}
-		branchRef = "detached-" + shortHead
+		_, branchRef = detachedBranchIdentity(head)
 	}
 
 	return gitPosition{
