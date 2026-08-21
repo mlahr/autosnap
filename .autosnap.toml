@@ -1,3 +1,4 @@
 msg_source_cmd = 'gommit -A -n --diff-base "$AUTOSNAP_DIFF_BASE"'
 msg_body_source_cmd = 'agentcom task show "$AGENTCOM_HOOK_TASK_NAME" --global'
+post_checkpoint_command = 'autosnap promote last --force'
 #post_checkpoint_command = 'spectral analyze spectral "$AUTOSNAP_CHECKPOINT_COMMIT" --name autosnap'
