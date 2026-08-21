@@ -1,0 +1,5 @@
+version = 1
+
+[[hooks]]
+event = "task_completed"
+command = "autosnap checkpoint --check true"
