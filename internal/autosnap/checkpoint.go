@@ -556,10 +556,14 @@ func isDirectCommitMode(mode string) bool {
 }
 
 func createCheckpoint(ctx context.Context, repoRoot, branchRef, checkCommand string, idle time.Duration, tree string, commitMessage string) (string, string, error) {
-	return createCheckpointChecked(ctx, repoRoot, branchRef, "", checkCommand, idle, tree, commitMessage)
+	return createCheckpointCheckedWithBody(ctx, repoRoot, branchRef, "", checkCommand, idle, tree, commitMessage, "")
 }
 
 func createCheckpointChecked(ctx context.Context, repoRoot, expectedBranchRef, expectedHead, checkCommand string, idle time.Duration, tree string, commitMessage string) (string, string, error) {
+	return createCheckpointCheckedWithBody(ctx, repoRoot, expectedBranchRef, expectedHead, checkCommand, idle, tree, commitMessage, "")
+}
+
+func createCheckpointCheckedWithBody(ctx context.Context, repoRoot, expectedBranchRef, expectedHead, checkCommand string, idle time.Duration, tree string, commitMessage, commitBody string) (string, string, error) {
 	position, err := currentGitPosition(ctx, repoRoot)
 	if err != nil {
 		return "", "", err
@@ -580,7 +584,7 @@ func createCheckpointChecked(ctx context.Context, repoRoot, expectedBranchRef, e
 	}
 
 	ts := currentTimestamp()
-	message := autosnapCommitMessage(commitMessage, ts, position, checkCommand, idle)
+	message := autosnapCommitMessage(commitMessage, commitBody, ts, position, checkCommand, idle)
 
 	commit, err := createCommitFromTree(ctx, repoRoot, tree, position.Head, message)
 	if err != nil {
@@ -596,6 +600,10 @@ func createCheckpointChecked(ctx context.Context, repoRoot, expectedBranchRef, e
 }
 
 func createDirectCommitChecked(ctx context.Context, repoRoot, expectedBranchRef, expectedHead, checkCommand string, idle time.Duration, tree string, commitMessage string) (string, bool, string, error) {
+	return createDirectCommitCheckedWithBody(ctx, repoRoot, expectedBranchRef, expectedHead, checkCommand, idle, tree, commitMessage, "")
+}
+
+func createDirectCommitCheckedWithBody(ctx context.Context, repoRoot, expectedBranchRef, expectedHead, checkCommand string, idle time.Duration, tree string, commitMessage, commitBody string) (string, bool, string, error) {
 	branchResult, err := runGitCommand(ctx, repoRoot, nil, "symbolic-ref", "--quiet", "--short", "HEAD")
 	if err != nil || strings.TrimSpace(branchResult.Stdout) == "" {
 		return "", false, "", fmt.Errorf("direct commit mode requires a checked-out branch")
@@ -621,7 +629,7 @@ func createDirectCommitChecked(ctx context.Context, repoRoot, expectedBranchRef,
 	}
 
 	ts := currentTimestamp()
-	message := autosnapCommitMessage(commitMessage, ts, position, checkCommand, idle)
+	message := autosnapCommitMessage(commitMessage, commitBody, ts, position, checkCommand, idle)
 	commit, err := createCommitFromTree(ctx, repoRoot, tree, position.Head, message)
 	if err != nil {
 		return "", false, "", err
@@ -705,7 +713,7 @@ func currentHeadOrEmpty(ctx context.Context, repoRoot string) string {
 	return strings.TrimSpace(result.Stdout)
 }
 
-func autosnapCommitMessage(commitMessage, timestamp string, position gitPosition, checkCommand string, idle time.Duration) string {
+func autosnapCommitMessage(commitMessage, commitBody, timestamp string, position gitPosition, checkCommand string, idle time.Duration) string {
 	base := "unknown"
 	if len(position.Head) >= 7 {
 		base = position.Head[:7]
@@ -721,7 +729,11 @@ func autosnapCommitMessage(commitMessage, timestamp string, position gitPosition
 			base,
 		)
 	}
-	return message
+	body := strings.TrimSpace(commitBody)
+	if body == "" {
+		return message
+	}
+	return message + "\n\n" + body
 }
 
 func createCommitFromTree(ctx context.Context, repoRoot, tree, parent, message string) (string, error) {

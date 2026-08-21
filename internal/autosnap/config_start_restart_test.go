@@ -65,6 +65,7 @@ idle_seconds = 15
 snapshot_mode = "staged"
 commit_mode = "sync"
 msg_source_cmd = "printf msg"
+msg_body_source_cmd = "printf body"
 note_command = "printf note"
 note_ref = "refs/notes/diffcog"
 post_checkpoint_command = "printf post"
@@ -86,7 +87,7 @@ poll_interval = "2s"
 	if !found {
 		t.Fatalf("expected config to be found")
 	}
-	if cfg.Check != "go test ./..." || cfg.IdleSeconds != 15 || cfg.SnapshotMode != snapshotModeStaged || cfg.CommitMode != commitModeSync || cfg.MsgSourceCmd != "printf msg" || cfg.NoteCommand != "printf note" || cfg.NoteRef != "refs/notes/diffcog" || cfg.PostCheckpointCommand != "printf post" || cfg.LogMaxBytes != 2048 || cfg.ReadyTimeout != 12*time.Second || cfg.Watch.Mode != watchModeAuto || cfg.Watch.PollInterval != 2*time.Second {
+	if cfg.Check != "go test ./..." || cfg.IdleSeconds != 15 || cfg.SnapshotMode != snapshotModeStaged || cfg.CommitMode != commitModeSync || cfg.MsgSourceCmd != "printf msg" || cfg.MsgBodySourceCmd != "printf body" || cfg.NoteCommand != "printf note" || cfg.NoteRef != "refs/notes/diffcog" || cfg.PostCheckpointCommand != "printf post" || cfg.LogMaxBytes != 2048 || cfg.ReadyTimeout != 12*time.Second || cfg.Watch.Mode != watchModeAuto || cfg.Watch.PollInterval != 2*time.Second {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
 }
@@ -109,6 +110,7 @@ func TestResolveStartConfigPrefersFlagsOverConfig(t *testing.T) {
 idle_seconds = 15
 snapshot_mode = "staged"
 commit_mode = "direct"
+msg_body_source_cmd = "printf config-body"
 log_max_bytes = 4096
 
 [watch]
@@ -144,6 +146,9 @@ poll_interval = "2s"
 	if err := cmd.Flags().Set("post-checkpoint-command", "printf post"); err != nil {
 		t.Fatalf("set post-checkpoint-command flag failed: %v", err)
 	}
+	if err := cmd.Flags().Set("msg-body-source-cmd", "printf flag-body"); err != nil {
+		t.Fatalf("set msg-body-source-cmd flag failed: %v", err)
+	}
 
 	cfg, found, err := resolveStartConfig(repo, cmd, "make test", "", 30, snapshotModeBoth, commitModeCheckpoint, watchModeAuto, defaultPollInterval, 8192)
 	if err != nil {
@@ -152,7 +157,7 @@ poll_interval = "2s"
 	if !found {
 		t.Fatalf("expected config to be found")
 	}
-	if cfg.Check != "make test" || cfg.IdleSeconds != 30 || cfg.CommitMode != commitModeCheckpoint || cfg.Watch.Mode != watchModeAuto || cfg.LogMaxBytes != 8192 || cfg.NoteCommand != "printf note" || cfg.NoteRef != "refs/notes/diffcog" || cfg.PostCheckpointCommand != "printf post" {
+	if cfg.Check != "make test" || cfg.IdleSeconds != 30 || cfg.CommitMode != commitModeCheckpoint || cfg.MsgBodySourceCmd != "printf flag-body" || cfg.Watch.Mode != watchModeAuto || cfg.LogMaxBytes != 8192 || cfg.NoteCommand != "printf note" || cfg.NoteRef != "refs/notes/diffcog" || cfg.PostCheckpointCommand != "printf post" {
 		t.Fatalf("expected flags to override config, got %+v", cfg)
 	}
 	if cfg.SnapshotMode != snapshotModeStaged || cfg.Watch.PollInterval != 2*time.Second {
@@ -256,6 +261,7 @@ idle_seconds = 15
 snapshot_mode = "both"
 commit_mode = "direct"
 msg_source_cmd = "printf config"
+msg_body_source_cmd = "printf config-body"
 note_command = "printf config-note"
 note_ref = "refs/notes/config"
 log_max_bytes = 8192
@@ -271,6 +277,7 @@ poll_interval = "4s"
 	runState := autosnapRunState{
 		CheckCommand:     "make verify",
 		MsgSourceCmd:     "",
+		MsgBodySourceCmd: "",
 		NoteCommand:      "",
 		NoteRef:          "",
 		IdleSeconds:      45,
@@ -285,7 +292,7 @@ poll_interval = "4s"
 	if err != nil {
 		t.Fatalf("resolve restart config failed: %v", err)
 	}
-	if cfg.Check != "make verify" || cfg.MsgSourceCmd != "" || cfg.NoteCommand != "" || cfg.NoteRef != "" || cfg.IdleSeconds != 45 {
+	if cfg.Check != "make verify" || cfg.MsgSourceCmd != "" || cfg.MsgBodySourceCmd != "printf config-body" || cfg.NoteCommand != "" || cfg.NoteRef != "" || cfg.IdleSeconds != 45 {
 		t.Fatalf("expected original start flags to remain overrides, got %+v", cfg)
 	}
 	if cfg.SnapshotMode != snapshotModeBoth || cfg.CommitMode != commitModeDirect || cfg.Watch.Mode != watchModeAuto || cfg.Watch.PollInterval != 4*time.Second || cfg.LogMaxBytes != 8192 {
@@ -326,6 +333,7 @@ idle_seconds = 15
 snapshot_mode = "working"
 commit_mode = "checkpoint"
 msg_source_cmd = "printf config-message"
+msg_body_source_cmd = "printf config-body"
 note_command = "printf config-note"
 note_ref = "refs/notes/config"
 log_max_bytes = 8192
@@ -339,6 +347,7 @@ poll_interval = "4s"
 	runState := autosnapRunState{
 		CheckCommand:     "make verify",
 		MsgSourceCmd:     "printf run-message",
+		MsgBodySourceCmd: "printf run-body",
 		NoteCommand:      "printf run-note",
 		NoteRef:          "refs/notes/run",
 		IdleSeconds:      45,
@@ -353,7 +362,7 @@ poll_interval = "4s"
 	if err != nil {
 		t.Fatalf("resolve restart config failed: %v", err)
 	}
-	if cfg.Check != runState.CheckCommand || cfg.MsgSourceCmd != runState.MsgSourceCmd || cfg.NoteCommand != runState.NoteCommand || cfg.NoteRef != runState.NoteRef || cfg.IdleSeconds != runState.IdleSeconds || cfg.SnapshotMode != runState.SnapshotMode || cfg.CommitMode != runState.CommitMode || cfg.Watch.Mode != runState.WatchMode || cfg.Watch.PollInterval != runState.PollInterval || cfg.LogMaxBytes != runState.LogMaxBytes {
+	if cfg.Check != runState.CheckCommand || cfg.MsgSourceCmd != runState.MsgSourceCmd || cfg.MsgBodySourceCmd != runState.MsgBodySourceCmd || cfg.NoteCommand != runState.NoteCommand || cfg.NoteRef != runState.NoteRef || cfg.IdleSeconds != runState.IdleSeconds || cfg.SnapshotMode != runState.SnapshotMode || cfg.CommitMode != runState.CommitMode || cfg.Watch.Mode != runState.WatchMode || cfg.Watch.PollInterval != runState.PollInterval || cfg.LogMaxBytes != runState.LogMaxBytes {
 		t.Fatalf("expected every original start flag value to remain effective, got %+v", cfg)
 	}
 }
@@ -603,6 +612,7 @@ func TestConfigInitAndShowCommands(t *testing.T) {
 		"exists: true",
 		"check: make test",
 		"commit_mode: checkpoint",
+		"msg_body_source_cmd: ",
 		"note_command: ",
 		"note_ref: ",
 		"post_checkpoint_command: ",
@@ -634,7 +644,7 @@ func TestStartCommandAcceptsConfigCheck(t *testing.T) {
 }
 
 func TestStartDetachedArgsForwardWatchOptions(t *testing.T) {
-	args := startDetachedArgs("/bin/autosnap", "make build", "printf msg", "printf note", "refs/notes/diffcog", "printf post", 30, snapshotModeBoth, commitModeCheckpoint, watchModeAuto, 2*time.Second, 4096, "token", []string{"check", "idle"})
+	args := startDetachedArgsWithBody("/bin/autosnap", "make build", "printf msg", "printf body", "printf note", "refs/notes/diffcog", "printf post", 30, snapshotModeBoth, commitModeCheckpoint, watchModeAuto, 2*time.Second, 4096, "token", []string{"check", "idle"})
 	joined := strings.Join(args, "\n")
 	for _, want := range []string{
 		"--resolved-config",
@@ -644,6 +654,7 @@ func TestStartDetachedArgsForwardWatchOptions(t *testing.T) {
 		"--commit-mode\ncheckpoint",
 		"--log-max-bytes\n4096",
 		"--msg-source-cmd\nprintf msg",
+		"--msg-body-source-cmd\nprintf body",
 		"--note-command\nprintf note",
 		"--note-ref\nrefs/notes/diffcog",
 		"--post-checkpoint-command\nprintf post",

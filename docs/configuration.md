@@ -22,6 +22,7 @@ idle_seconds = 60
 snapshot_mode = "both"
 commit_mode = "checkpoint"
 msg_source_cmd = ""
+msg_body_source_cmd = ""
 note_command = ""
 note_ref = ""
 post_checkpoint_command = ""
@@ -37,6 +38,16 @@ poll_interval = "5s"
 
 `check` is the command that must pass before autosnap saves a checkpoint. Replace
 `make test` with your project's validation command.
+
+`msg_source_cmd` returns the complete commit message. Its output can contain a
+subject and a body.
+
+`msg_body_source_cmd` returns extra commit body text. Autosnap appends this text
+after one blank line. If the command fails or returns no text, autosnap keeps the
+base message.
+
+Both message commands receive `AUTOSNAP_DIFF_BASE`,
+`AUTOSNAP_PREVIOUS_CHECKPOINT_REF`, `AUTOSNAP_BRANCH_REF`, and `AUTOSNAP_HEAD`.
 
 `idle_seconds` controls how long autosnap waits after the last file change before
 running the check.

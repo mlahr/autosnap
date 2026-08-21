@@ -25,6 +25,7 @@ type autosnapRunState struct {
 	BranchDisplay         string        `json:"branchDisplay"`
 	CheckCommand          string        `json:"checkCommand"`
 	MsgSourceCmd          string        `json:"msgSourceCmd"`
+	MsgBodySourceCmd      string        `json:"msgBodySourceCmd,omitempty"`
 	MsgSourceCmdSet       bool          `json:"msgSourceCmdSet,omitempty"`
 	NoteCommand           string        `json:"noteCommand,omitempty"`
 	NoteRef               string        `json:"noteRef,omitempty"`

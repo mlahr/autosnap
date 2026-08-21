@@ -24,6 +24,7 @@ type autosnapConfig struct {
 	SnapshotMode          string              `toml:"snapshot_mode"`
 	CommitMode            string              `toml:"commit_mode"`
 	MsgSourceCmd          string              `toml:"msg_source_cmd"`
+	MsgBodySourceCmd      string              `toml:"msg_body_source_cmd"`
 	NoteCommand           string              `toml:"note_command"`
 	NoteRef               string              `toml:"note_ref"`
 	PostCheckpointCommand string              `toml:"post_checkpoint_command"`
@@ -43,6 +44,7 @@ type autosnapWatchConfig struct {
 var startConfigFlagNames = []string{
 	"check",
 	"msg-source-cmd",
+	"msg-body-source-cmd",
 	"note-command",
 	"note-ref",
 	"post-checkpoint-command",
@@ -92,6 +94,11 @@ func postCheckpointCommandFlag(cmd *cobra.Command) string {
 	return value
 }
 
+func msgBodySourceCmdFlag(cmd *cobra.Command) string {
+	value, _ := cmd.Flags().GetString("msg-body-source-cmd")
+	return value
+}
+
 func loadAutosnapConfig(repoRoot string) (autosnapConfig, bool, error) {
 	cfg := autosnapConfig{}
 	path := autosnapConfigPath(repoRoot)
@@ -112,14 +119,23 @@ func loadAutosnapConfig(repoRoot string) (autosnapConfig, bool, error) {
 }
 
 func resolveStartConfig(repoRoot string, cmd *cobra.Command, checkCommand, msgSourceCmd string, idleSeconds int, snapshotMode, commitMode, watchMode string, pollInterval time.Duration, logMaxBytes int64) (autosnapConfig, bool, error) {
-	return resolveStartConfigWithFile(repoRoot, cmd, checkCommand, msgSourceCmd, idleSeconds, snapshotMode, commitMode, watchMode, pollInterval, logMaxBytes, true)
+	return resolveStartConfigWithBody(repoRoot, cmd, checkCommand, msgSourceCmd, msgBodySourceCmdFlag(cmd), idleSeconds, snapshotMode, commitMode, watchMode, pollInterval, logMaxBytes)
+}
+
+func resolveStartConfigWithBody(repoRoot string, cmd *cobra.Command, checkCommand, msgSourceCmd, msgBodySourceCmd string, idleSeconds int, snapshotMode, commitMode, watchMode string, pollInterval time.Duration, logMaxBytes int64) (autosnapConfig, bool, error) {
+	return resolveStartConfigWithFileAndBody(repoRoot, cmd, checkCommand, msgSourceCmd, msgBodySourceCmd, idleSeconds, snapshotMode, commitMode, watchMode, pollInterval, logMaxBytes, true)
 }
 
 func resolveStartConfigWithFile(repoRoot string, cmd *cobra.Command, checkCommand, msgSourceCmd string, idleSeconds int, snapshotMode, commitMode, watchMode string, pollInterval time.Duration, logMaxBytes int64, loadFile bool) (autosnapConfig, bool, error) {
+	return resolveStartConfigWithFileAndBody(repoRoot, cmd, checkCommand, msgSourceCmd, msgBodySourceCmdFlag(cmd), idleSeconds, snapshotMode, commitMode, watchMode, pollInterval, logMaxBytes, loadFile)
+}
+
+func resolveStartConfigWithFileAndBody(repoRoot string, cmd *cobra.Command, checkCommand, msgSourceCmd, msgBodySourceCmd string, idleSeconds int, snapshotMode, commitMode, watchMode string, pollInterval time.Duration, logMaxBytes int64, loadFile bool) (autosnapConfig, bool, error) {
 	overrides := autosnapConfigOverrides{
 		values: autosnapConfig{
 			Check:                 checkCommand,
 			MsgSourceCmd:          msgSourceCmd,
+			MsgBodySourceCmd:      msgBodySourceCmd,
 			NoteCommand:           noteCommandFlag(cmd),
 			NoteRef:               noteRefFlag(cmd),
 			PostCheckpointCommand: postCheckpointCommandFlag(cmd),
@@ -157,6 +173,9 @@ func resolveAutosnapConfig(repoRoot string, overrides autosnapConfigOverrides, l
 	if overrides.set["msg-source-cmd"] {
 		cfg.MsgSourceCmd = overrides.values.MsgSourceCmd
 	}
+	if overrides.set["msg-body-source-cmd"] {
+		cfg.MsgBodySourceCmd = overrides.values.MsgBodySourceCmd
+	}
 	if overrides.set["note-command"] {
 		cfg.NoteCommand = overrides.values.NoteCommand
 	}
@@ -187,6 +206,7 @@ func resolveAutosnapConfig(repoRoot string, overrides autosnapConfigOverrides, l
 
 	cfg.Check = strings.TrimSpace(cfg.Check)
 	cfg.MsgSourceCmd = strings.TrimSpace(cfg.MsgSourceCmd)
+	cfg.MsgBodySourceCmd = strings.TrimSpace(cfg.MsgBodySourceCmd)
 	cfg.NoteCommand = strings.TrimSpace(cfg.NoteCommand)
 	cfg.NoteRef = strings.TrimSpace(cfg.NoteRef)
 	cfg.PostCheckpointCommand = strings.TrimSpace(cfg.PostCheckpointCommand)
@@ -287,6 +307,9 @@ func mergeAutosnapConfig(dst *autosnapConfig, src autosnapConfig) {
 	if src.MsgSourceCmd != "" {
 		dst.MsgSourceCmd = src.MsgSourceCmd
 	}
+	if src.MsgBodySourceCmd != "" {
+		dst.MsgBodySourceCmd = src.MsgBodySourceCmd
+	}
 	if src.NoteCommand != "" {
 		dst.NoteCommand = src.NoteCommand
 	}
@@ -360,6 +383,7 @@ idle_seconds = 60
 snapshot_mode = "both"
 commit_mode = "checkpoint"
 msg_source_cmd = ""
+msg_body_source_cmd = ""
 note_command = ""
 note_ref = ""
 post_checkpoint_command = ""

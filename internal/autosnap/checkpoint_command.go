@@ -11,11 +11,12 @@ import (
 
 func newCheckpointCommand() *cobra.Command {
 	var (
-		checkCommand string
-		msgSourceCmd string
-		snapshotMode string
-		commitMode   string
-		timeout      time.Duration
+		checkCommand     string
+		msgSourceCmd     string
+		msgBodySourceCmd string
+		snapshotMode     string
+		commitMode       string
+		timeout          time.Duration
 	)
 
 	cmd := &cobra.Command{
@@ -37,15 +38,16 @@ func newCheckpointCommand() *cobra.Command {
 				return err
 			}
 
-			cfg, _, err := resolveStartConfig(repoRoot, cmd, checkCommand, msgSourceCmd, defaultAutosnapConfig().IdleSeconds, snapshotMode, commitMode, watchModeRecursive, defaultPollInterval, defaultLogMaxBytes)
+			cfg, _, err := resolveStartConfigWithBody(repoRoot, cmd, checkCommand, msgSourceCmd, msgBodySourceCmd, defaultAutosnapConfig().IdleSeconds, snapshotMode, commitMode, watchModeRecursive, defaultPollInterval, defaultLogMaxBytes)
 			if err != nil {
 				return err
 			}
-			// An explicit positional message has priority over both the configured
-			// and command-line message source. In particular, do not execute a
-			// configured shell command when the user supplied COMMIT_MSG.
+			// An explicit positional message has priority over both message source
+			// commands. In particular, do not execute a configured shell command
+			// when the user supplied COMMIT_MSG.
 			if commitMsg != "" {
 				cfg.MsgSourceCmd = ""
+				cfg.MsgBodySourceCmd = ""
 			}
 
 			statePath, err := stateFilePath(repoRoot)
@@ -53,7 +55,7 @@ func newCheckpointCommand() *cobra.Command {
 				return err
 			}
 
-			runner, err := newSnapshotRunnerWithWatch(ctx, repoRoot, branchRef, cfg.Check, cfg.MsgSourceCmd, cfg.SnapshotMode, cfg.CommitMode, cfg.Watch.Mode, cfg.Watch.PollInterval, time.Duration(cfg.IdleSeconds)*time.Second, statePath)
+			runner, err := newSnapshotRunnerWithWatchAndBody(ctx, repoRoot, branchRef, cfg.Check, cfg.MsgSourceCmd, cfg.MsgBodySourceCmd, cfg.SnapshotMode, cfg.CommitMode, cfg.Watch.Mode, cfg.Watch.PollInterval, time.Duration(cfg.IdleSeconds)*time.Second, statePath)
 			if err != nil {
 				return err
 			}
@@ -76,6 +78,7 @@ func newCheckpointCommand() *cobra.Command {
 
 	cmd.Flags().StringVar(&checkCommand, "check", "", "Shell command to run before checkpointing")
 	cmd.Flags().StringVar(&msgSourceCmd, "msg-source-cmd", "", "Shell command that returns the checkpoint commit message (multiline supported)")
+	cmd.Flags().StringVar(&msgBodySourceCmd, "msg-body-source-cmd", "", "Shell command that returns the checkpoint commit message body")
 	cmd.Flags().String("note-command", "", "Shell command that returns the checkpoint git note content")
 	cmd.Flags().String("note-ref", "", "Git notes ref for checkpoint notes")
 	cmd.Flags().String("post-checkpoint-command", "", "Shell command to run after creating a checkpoint")

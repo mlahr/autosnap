@@ -14,6 +14,7 @@ autosnap checkpoint [COMMIT_MSG] [flags]
       --check string                     Shell command to run before checkpointing
       --commit-mode string               Commit target: checkpoint, direct, sync (default "checkpoint")
   -h, --help                             help for checkpoint
+      --msg-body-source-cmd string       Shell command that returns the checkpoint commit message body
       --msg-source-cmd string            Shell command that returns the checkpoint commit message (multiline supported)
       --note-command string              Shell command that returns the checkpoint git note content
       --note-ref string                  Git notes ref for checkpoint notes

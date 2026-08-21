@@ -17,6 +17,7 @@ autosnap start [flags]
   -h, --help                             help for start
       --idle int                         Seconds without changes before running the check (default 60)
       --log-max-bytes int                Maximum autosnap daemon log size in bytes (default 10485760)
+      --msg-body-source-cmd string       Shell command that returns the checkpoint commit message body
       --msg-source-cmd string            Shell command that returns the checkpoint commit message (multiline supported)
       --note-command string              Shell command that returns the checkpoint git note content
       --note-ref string                  Git notes ref for checkpoint notes

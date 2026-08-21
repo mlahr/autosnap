@@ -24,10 +24,15 @@ idle_seconds = 60
 snapshot_mode = "both"
 commit_mode = "checkpoint"
 msg_source_cmd = ""
+msg_body_source_cmd = ""
 note_command = ""
 note_ref = ""
 post_checkpoint_command = ""
 ```
+
+`msg_source_cmd` can return a complete commit message. `msg_body_source_cmd`
+can return extra body text. Autosnap appends that text after one blank line.
+Both commands receive the checkpoint context variables.
 
 Start the daemon:
 

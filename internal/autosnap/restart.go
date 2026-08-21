@@ -70,7 +70,7 @@ new flags. Detailed restart progress is appended to the autosnap daemon log.`,
 			if configFound {
 				configSource = autosnapConfigPath(repoRoot)
 			}
-			if err := writeRestartLog(logFile, "configuration validated; source=%s; check=configured; msg_source_cmd=%s; notes=%s; post_checkpoint_command=%s; idle_seconds=%d; snapshot_mode=%s; commit_mode=%s; watch_mode=%s; poll_interval=%s; log_max_bytes=%d; ready_timeout=%s", configSource, enabledState(cfg.MsgSourceCmd != ""), enabledState(cfg.NoteCommand != ""), enabledState(cfg.PostCheckpointCommand != ""), cfg.IdleSeconds, cfg.SnapshotMode, cfg.CommitMode, cfg.Watch.Mode, cfg.Watch.PollInterval, cfg.LogMaxBytes, cfg.ReadyTimeout); err != nil {
+			if err := writeRestartLog(logFile, "configuration validated; source=%s; check=configured; msg_source_cmd=%s; msg_body_source_cmd=%s; notes=%s; post_checkpoint_command=%s; idle_seconds=%d; snapshot_mode=%s; commit_mode=%s; watch_mode=%s; poll_interval=%s; log_max_bytes=%d; ready_timeout=%s", configSource, enabledState(cfg.MsgSourceCmd != ""), enabledState(cfg.MsgBodySourceCmd != ""), enabledState(cfg.NoteCommand != ""), enabledState(cfg.PostCheckpointCommand != ""), cfg.IdleSeconds, cfg.SnapshotMode, cfg.CommitMode, cfg.Watch.Mode, cfg.Watch.PollInterval, cfg.LogMaxBytes, cfg.ReadyTimeout); err != nil {
 				return err
 			}
 
@@ -90,7 +90,7 @@ new flags. Detailed restart progress is appended to the autosnap daemon log.`,
 			writeRestartLogAfterStop(cmd.ErrOrStderr(), logFile, logPath, "daemon stopped; pid=%d", runState.PID)
 			writeRestartLogAfterStop(cmd.ErrOrStderr(), logFile, logPath, "starting replacement daemon")
 
-			replacementProcess, err := startAutosnapDetached(repoRoot, cfg.Check, cfg.MsgSourceCmd, cfg.NoteCommand, cfg.NoteRef, cfg.PostCheckpointCommand, cfg.IdleSeconds, cfg.SnapshotMode, cfg.CommitMode, cfg.Watch.Mode, cfg.Watch.PollInterval, cfg.LogMaxBytes, runToken, runState.StartConfigFlags)
+			replacementProcess, err := startAutosnapDetached(repoRoot, cfg.Check, cfg.MsgSourceCmd, cfg.MsgBodySourceCmd, cfg.NoteCommand, cfg.NoteRef, cfg.PostCheckpointCommand, cfg.IdleSeconds, cfg.SnapshotMode, cfg.CommitMode, cfg.Watch.Mode, cfg.Watch.PollInterval, cfg.LogMaxBytes, runToken, runState.StartConfigFlags)
 			if err != nil {
 				writeRestartLogAfterStop(cmd.ErrOrStderr(), logFile, logPath, "replacement daemon start failed; error=%v", err)
 				return err
@@ -124,6 +124,7 @@ func resolveRestartConfig(repoRoot string, runState autosnapRunState) (autosnapC
 		values: autosnapConfig{
 			Check:                 runState.CheckCommand,
 			MsgSourceCmd:          runState.MsgSourceCmd,
+			MsgBodySourceCmd:      runState.MsgBodySourceCmd,
 			NoteCommand:           runState.NoteCommand,
 			NoteRef:               runState.NoteRef,
 			PostCheckpointCommand: runState.PostCheckpointCommand,

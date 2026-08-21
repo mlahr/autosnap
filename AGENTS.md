@@ -38,3 +38,13 @@ Pull requests should include a short description, test results, and any user-vis
 ## Security & Configuration Tips
 
 Treat `--check` and `--msg-source-cmd` as shell commands supplied by the user. Avoid logging secrets from command output or environment variables. Keep generated binaries, logs, and local autosnap state out of commits.
+
+## Agent coordination with `agentcom`
+
+Run `agentcom instructions` for the current repository coordination contract.
+
+Every agent must register its current task in `agentcom` before starting work,
+using an existing task when one is available or creating one otherwise. 
+
+Agents must register themselves with a specific stable descriptive name.
+Generic names such as `codex` are not sufficient.

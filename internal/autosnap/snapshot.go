@@ -44,6 +44,7 @@ type snapshotRunner struct {
 	branchRef             string
 	checkCmd              string
 	msgSourceCmd          string
+	msgBodySourceCmd      string
 	commitMsg             string
 	noteCommand           string
 	noteRef               string
@@ -84,6 +85,10 @@ func newSnapshotRunner(ctx context.Context, repoRoot, branchRef, checkCommand, m
 }
 
 func newSnapshotRunnerWithWatch(ctx context.Context, repoRoot, branchRef, checkCommand, msgSourceCommand, snapshotMode, commitMode, watchMode string, pollInterval, idle time.Duration, statePath string) (*snapshotRunner, error) {
+	return newSnapshotRunnerWithWatchAndBody(ctx, repoRoot, branchRef, checkCommand, msgSourceCommand, "", snapshotMode, commitMode, watchMode, pollInterval, idle, statePath)
+}
+
+func newSnapshotRunnerWithWatchAndBody(ctx context.Context, repoRoot, branchRef, checkCommand, msgSourceCommand, msgBodySourceCommand, snapshotMode, commitMode, watchMode string, pollInterval, idle time.Duration, statePath string) (*snapshotRunner, error) {
 	state, err := loadAutosnapState(statePath)
 	if err != nil {
 		return nil, err
@@ -111,18 +116,19 @@ func newSnapshotRunnerWithWatch(ctx context.Context, repoRoot, branchRef, checkC
 	}
 
 	return &snapshotRunner{
-		ctx:          ctx,
-		repoRoot:     repoRoot,
-		branchRef:    branchRef,
-		checkCmd:     checkCommand,
-		msgSourceCmd: msgSourceCommand,
-		snapshotMode: snapshotMode,
-		commitMode:   normalizedCommitMode,
-		watchMode:    normalizedWatchMode,
-		pollInterval: pollInterval,
-		idle:         idle,
-		statePath:    statePath,
-		state:        state,
+		ctx:              ctx,
+		repoRoot:         repoRoot,
+		branchRef:        branchRef,
+		checkCmd:         checkCommand,
+		msgSourceCmd:     msgSourceCommand,
+		msgBodySourceCmd: msgBodySourceCommand,
+		snapshotMode:     snapshotMode,
+		commitMode:       normalizedCommitMode,
+		watchMode:        normalizedWatchMode,
+		pollInterval:     pollInterval,
+		idle:             idle,
+		statePath:        statePath,
+		state:            state,
 		ignoreCache: map[string]bool{
 			"": false,
 		},
@@ -419,14 +425,28 @@ func (r *snapshotRunner) runCheckUnlocked() (checkpointRunResult, error) {
 	commandEnv := checkpointCommandEnv(diffBase, previousCheckpointRef, branchRef, position.Head)
 
 	commitMessage := strings.TrimSpace(r.commitMsg)
-	if commitMessage == "" && strings.TrimSpace(r.msgSourceCmd) != "" {
-		message, sourceExitCode, err := runShellOutputEnv(r.ctx, r.repoRoot, r.msgSourceCmd, commandEnv)
-		if err != nil || sourceExitCode != 0 {
-			logln("msg-source-cmd failed; using generated checkpoint message")
-		} else {
-			commitMessage = strings.TrimSpace(message)
-			if commitMessage == "" {
-				logln("msg-source-cmd produced no output; using generated checkpoint message")
+	commitBody := ""
+	if commitMessage == "" {
+		if strings.TrimSpace(r.msgSourceCmd) != "" {
+			message, sourceExitCode, err := runShellOutputEnv(r.ctx, r.repoRoot, r.msgSourceCmd, commandEnv)
+			if err != nil || sourceExitCode != 0 {
+				logln("msg-source-cmd failed; using generated checkpoint message")
+			} else {
+				commitMessage = strings.TrimSpace(message)
+				if commitMessage == "" {
+					logln("msg-source-cmd produced no output; using generated checkpoint message")
+				}
+			}
+		}
+		if strings.TrimSpace(r.msgBodySourceCmd) != "" {
+			body, bodyExitCode, err := runShellOutputEnvLabel(r.ctx, r.repoRoot, "msg-body-source-cmd", r.msgBodySourceCmd, commandEnv)
+			if err != nil || bodyExitCode != 0 {
+				logln("msg-body-source-cmd failed; using message without body")
+			} else {
+				commitBody = strings.TrimSpace(body)
+				if commitBody == "" {
+					logln("msg-body-source-cmd produced no output; using message without body")
+				}
 			}
 		}
 	}
@@ -443,7 +463,7 @@ func (r *snapshotRunner) runCheckUnlocked() (checkpointRunResult, error) {
 			return checkpointRunResult{}, nil
 		}
 
-		commit, created, ts, err := createDirectCommitChecked(r.ctx, r.repoRoot, branchRef, position.Head, r.checkCmd, r.idle, tree, commitMessage)
+		commit, created, ts, err := createDirectCommitCheckedWithBody(r.ctx, r.repoRoot, branchRef, position.Head, r.checkCmd, r.idle, tree, commitMessage, commitBody)
 		if err != nil {
 			logf("unable to create direct commit: %v\n", err)
 			return checkpointRunResult{}, err
@@ -497,7 +517,7 @@ func (r *snapshotRunner) runCheckUnlocked() (checkpointRunResult, error) {
 		}
 		r.runPostCheckpointCommand(recordedCommit, recordedCommit, commandEnv)
 	default:
-		ref, commit, err := createCheckpointChecked(r.ctx, r.repoRoot, branchRef, position.Head, r.checkCmd, r.idle, tree, commitMessage)
+		ref, commit, err := createCheckpointCheckedWithBody(r.ctx, r.repoRoot, branchRef, position.Head, r.checkCmd, r.idle, tree, commitMessage, commitBody)
 		if err != nil {
 			logf("unable to create checkpoint: %v\n", err)
 			return checkpointRunResult{}, err

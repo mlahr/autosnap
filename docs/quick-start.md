@@ -25,6 +25,7 @@ idle_seconds = 60
 snapshot_mode = "both"
 commit_mode = "checkpoint"
 msg_source_cmd = ""
+msg_body_source_cmd = ""
 note_command = ""
 note_ref = ""
 post_checkpoint_command = ""
@@ -44,6 +45,8 @@ Usually you adapt:
 - `check`: your validation command.
 - `idle_seconds`: how long autosnap waits after the last file change before it
   runs the check.
+- `msg_source_cmd`: a command that returns the complete commit message.
+- `msg_body_source_cmd`: a command that returns extra commit body text.
 - `watch.mode`: use `poll` or `auto` for repositories where recursive watching
   is too expensive.
 

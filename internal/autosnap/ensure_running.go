@@ -78,7 +78,7 @@ func ensureAutosnapRunning(ctx context.Context, repoRoot string, out io.Writer) 
 	if err != nil {
 		return err
 	}
-	process, err := startAutosnapDetached(repoRoot, cfg.Check, cfg.MsgSourceCmd, cfg.NoteCommand, cfg.NoteRef, cfg.PostCheckpointCommand, cfg.IdleSeconds, cfg.SnapshotMode, cfg.CommitMode, cfg.Watch.Mode, cfg.Watch.PollInterval, cfg.LogMaxBytes, runToken, nil)
+	process, err := startAutosnapDetached(repoRoot, cfg.Check, cfg.MsgSourceCmd, cfg.MsgBodySourceCmd, cfg.NoteCommand, cfg.NoteRef, cfg.PostCheckpointCommand, cfg.IdleSeconds, cfg.SnapshotMode, cfg.CommitMode, cfg.Watch.Mode, cfg.Watch.PollInterval, cfg.LogMaxBytes, runToken, nil)
 	if err != nil {
 		return err
 	}

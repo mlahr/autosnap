@@ -2,6 +2,7 @@ check = "make test"
 idle_seconds = 60
 snapshot_mode = "both"
 msg_source_cmd = 'gommit -A -n --diff-base "$AUTOSNAP_DIFF_BASE"'
+msg_body_source_cmd = "date"
 
 [watch]
 mode = "recursive"

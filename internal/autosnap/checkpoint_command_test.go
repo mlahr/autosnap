@@ -61,6 +61,150 @@ head:%s
 	})
 }
 
+func TestRunCheckAppendsMessageBodySourceToGeneratedMessage(t *testing.T) {
+	t.Parallel()
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		ctx := context.Background()
+		repoRoot, _, branchRef, err := detectRepository(ctx)
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		head := runGitOutput(t, repoRoot, "rev-parse", "HEAD")
+		statePath, err := stateFilePath(repoRoot)
+		if err != nil {
+			t.Fatalf("stateFilePath failed: %v", err)
+		}
+		bodySourceCmd := "printf 'body-base:%s\\nbody-prev:%s\\nbody-branch:%s\\nbody-head:%s\\n' \"$AUTOSNAP_DIFF_BASE\" \"$AUTOSNAP_PREVIOUS_CHECKPOINT_REF\" \"$AUTOSNAP_BRANCH_REF\" \"$AUTOSNAP_HEAD\""
+		runner, err := newSnapshotRunnerWithWatchAndBody(ctx, repoRoot, branchRef, "true", "", bodySourceCmd, snapshotModeBoth, commitModeCheckpoint, watchModePoll, time.Second, time.Second, statePath)
+		if err != nil {
+			t.Fatalf("newSnapshotRunnerWithWatchAndBody failed: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(repoRoot, "body.txt"), []byte("body"), 0o644); err != nil {
+			t.Fatalf("write file failed: %v", err)
+		}
+
+		runner.runCheck()
+		message, err := getCommitMessage(ctx, repoRoot, runner.state.LastCheckpointRef)
+		if err != nil {
+			t.Fatalf("getCommitMessage failed: %v", err)
+		}
+		trimmed := strings.TrimSpace(message)
+		if !strings.HasPrefix(trimmed, "autosnap: passing checkpoint") {
+			t.Fatalf("expected generated message subject, got %q", trimmed)
+		}
+		wantBody := "body-base:" + head + "\nbody-prev:\nbody-branch:" + branchRef + "\nbody-head:" + head
+		if !strings.HasSuffix(trimmed, "\n\n"+wantBody) {
+			t.Fatalf("expected body after generated subject, got %q", trimmed)
+		}
+	})
+}
+
+func TestRunCheckAppendsMessageBodySourceToFullMessage(t *testing.T) {
+	t.Parallel()
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		ctx := context.Background()
+		repoRoot, _, branchRef, err := detectRepository(ctx)
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		statePath, err := stateFilePath(repoRoot)
+		if err != nil {
+			t.Fatalf("stateFilePath failed: %v", err)
+		}
+		runner, err := newSnapshotRunnerWithWatchAndBody(ctx, repoRoot, branchRef, "true", "printf 'subject\\n\\nsource body'", "printf 'appended body'", snapshotModeBoth, commitModeCheckpoint, watchModePoll, time.Second, time.Second, statePath)
+		if err != nil {
+			t.Fatalf("newSnapshotRunnerWithWatchAndBody failed: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(repoRoot, "body.txt"), []byte("body"), 0o644); err != nil {
+			t.Fatalf("write file failed: %v", err)
+		}
+
+		runner.runCheck()
+		message, err := getCommitMessage(ctx, repoRoot, runner.state.LastCheckpointRef)
+		if err != nil {
+			t.Fatalf("getCommitMessage failed: %v", err)
+		}
+		if got, want := strings.TrimSpace(message), "subject\n\nsource body\n\nappended body"; got != want {
+			t.Fatalf("expected combined commit message %q, got %q", want, got)
+		}
+	})
+}
+
+func TestRunCheckKeepsCheckpointWhenMessageBodySourceFails(t *testing.T) {
+	t.Parallel()
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		ctx := context.Background()
+		repoRoot, _, branchRef, err := detectRepository(ctx)
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		statePath, err := stateFilePath(repoRoot)
+		if err != nil {
+			t.Fatalf("stateFilePath failed: %v", err)
+		}
+		runner, err := newSnapshotRunnerWithWatchAndBody(ctx, repoRoot, branchRef, "true", "", "printf ran > body-source-ran && exit 7", snapshotModeBoth, commitModeCheckpoint, watchModePoll, time.Second, time.Second, statePath)
+		if err != nil {
+			t.Fatalf("newSnapshotRunnerWithWatchAndBody failed: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(repoRoot, "body.txt"), []byte("body"), 0o644); err != nil {
+			t.Fatalf("write file failed: %v", err)
+		}
+
+		runner.runCheck()
+		if runner.state.LastCheckpointRef == "" {
+			t.Fatalf("expected checkpoint after body source failure")
+		}
+		if _, err := os.Stat(filepath.Join(repoRoot, "body-source-ran")); err != nil {
+			t.Fatalf("expected body source to run: %v", err)
+		}
+		message, err := getCommitMessage(ctx, repoRoot, runner.state.LastCheckpointRef)
+		if err != nil {
+			t.Fatalf("getCommitMessage failed: %v", err)
+		}
+		if !strings.HasPrefix(strings.TrimSpace(message), "autosnap: passing checkpoint") {
+			t.Fatalf("expected generated message after body source failure, got %q", message)
+		}
+	})
+}
+
+func TestRunCheckDirectCommitUsesMessageBodySource(t *testing.T) {
+	t.Parallel()
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		ctx := context.Background()
+		repoRoot, _, branchRef, err := detectRepository(ctx)
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		statePath, err := stateFilePath(repoRoot)
+		if err != nil {
+			t.Fatalf("stateFilePath failed: %v", err)
+		}
+		runner, err := newSnapshotRunnerWithWatchAndBody(ctx, repoRoot, branchRef, "true", "printf 'direct subject'", "printf 'direct body'", snapshotModeBoth, commitModeDirect, watchModePoll, time.Second, time.Second, statePath)
+		if err != nil {
+			t.Fatalf("newSnapshotRunnerWithWatchAndBody failed: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(repoRoot, "body.txt"), []byte("body"), 0o644); err != nil {
+			t.Fatalf("write file failed: %v", err)
+		}
+
+		runner.runCheck()
+		if runner.state.LastCheckpointRef == "" {
+			t.Fatalf("expected direct commit in state")
+		}
+		if got, want := strings.TrimSpace(runGitOutput(t, repoRoot, "log", "-1", "--pretty=%B")), "direct subject\n\ndirect body"; got != want {
+			t.Fatalf("expected direct commit message %q, got %q", want, got)
+		}
+	})
+}
+
 func TestRunCheckAttachesGitNoteWithMessageSourceEnv(t *testing.T) {
 	t.Parallel()
 	requireIntegration(t)
@@ -418,6 +562,45 @@ func TestCheckpointCommandUsesCommitMessageArgument(t *testing.T) {
 	})
 }
 
+func TestCheckpointCommandSkipsMessageBodySourceForCommitMessageArgument(t *testing.T) {
+	t.Parallel()
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, branchRef, err := detectRepository(context.Background())
+		if err != nil {
+			t.Fatalf("detectRepository failed: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, ".autosnap.toml"), []byte("check = \"true\"\nmsg_body_source_cmd = \"printf ran > body-source-ran && printf body\"\n"), 0o644); err != nil {
+			t.Fatalf("write config failed: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("manual message checkpoint"), 0o644); err != nil {
+			t.Fatalf("write file failed: %v", err)
+		}
+
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newCheckpointCommand())
+		root.SetArgs([]string{"checkpoint", "manual checkpoint message"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("checkpoint command failed: %v", err)
+		}
+
+		if _, err := os.Stat(filepath.Join(repo, "body-source-ran")); !os.IsNotExist(err) {
+			t.Fatalf("expected message body source not to run, stat err=%v", err)
+		}
+		checkpoints, err := listCheckpointRefsForBranch(context.Background(), repo, branchRef)
+		if err != nil {
+			t.Fatalf("list checkpoints failed: %v", err)
+		}
+		if len(checkpoints) != 1 {
+			t.Fatalf("expected one checkpoint, got %d", len(checkpoints))
+		}
+		if got := strings.TrimSpace(runGitOutput(t, repo, "log", "-1", "--pretty=%B", checkpoints[0].Commit)); got != "manual checkpoint message" {
+			t.Fatalf("expected complete commit message, got %q", got)
+		}
+	})
+}
+
 func TestCheckpointCommandRejectsCommitMessageArgumentWithMsgSourceCmd(t *testing.T) {
 	t.Parallel()
 	err := validateCheckpointCommitMessageSources("manual checkpoint message", "printf sourced")
@@ -724,4 +907,21 @@ func TestCreateCheckpointFallsBackToGeneratedMessageForEmptyMessage(t *testing.T
 			t.Fatalf("expected generated checkpoint message prefix, got %q", msg)
 		}
 	})
+}
+
+func TestAutosnapCommitMessageAppendsBody(t *testing.T) {
+	position := gitPosition{BranchRef: "main", Head: "abcdef1234567890"}
+	got := autosnapCommitMessage("subject\n\nsource body", "\n body output \n", "20260101T120000Z", position, "true", 5*time.Second)
+	if want := "subject\n\nsource body\n\nbody output"; got != want {
+		t.Fatalf("expected appended commit body %q, got %q", want, got)
+	}
+}
+
+func TestAutosnapCommitMessageAppendsBodyToGeneratedMessage(t *testing.T) {
+	position := gitPosition{BranchRef: "main", Head: "abcdef1234567890"}
+	got := autosnapCommitMessage("", "body output", "20260101T120000Z", position, "true", 5*time.Second)
+	want := "autosnap: passing checkpoint 20260101T120000Z branch: main check: true idle_seconds: 5 base: abcdef1\n\nbody output"
+	if got != want {
+		t.Fatalf("expected generated message with body %q, got %q", want, got)
+	}
 }
