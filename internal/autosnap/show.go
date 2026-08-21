@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -147,113 +146,6 @@ autosnap show --name-only refs/autosnapshots/main/20260605T120000Z`),
 	cmd.Flags().BoolVar(&nameOnly, "name-only", false, "Show only changed file names")
 	cmd.Flags().StringVar(&colorMode, "color", "auto", "Color output: auto, always, never")
 	return cmd
-}
-
-func resolveShowCheckpointRefMetadata(ctx context.Context, repoRoot, branchRef, arg string) (checkpointRefInfo, error) {
-	ref, matched, err := resolveShowHistorySelectorRef(ctx, repoRoot, branchRef, arg)
-	if err != nil {
-		if matched {
-			return checkpointRefInfo{}, err
-		}
-		return resolveCheckpointRefMetadata(ctx, repoRoot, branchRef, arg)
-	}
-
-	if matched {
-		entries, err := listCheckpointRefsForBranch(ctx, repoRoot, branchRef)
-		if err != nil {
-			return checkpointRefInfo{}, err
-		}
-
-		for _, entry := range entries {
-			if entry.Ref == ref {
-				entry.Timestamp = checkpointRefTimestamp(ref)
-				return entry, nil
-			}
-		}
-
-		return resolveCheckpointRefMetadata(ctx, repoRoot, branchRef, ref)
-	}
-
-	return resolveCheckpointRefMetadata(ctx, repoRoot, branchRef, arg)
-}
-
-type showHistorySelectorError struct {
-	err error
-}
-
-func (e showHistorySelectorError) Error() string {
-	return e.err.Error()
-}
-
-func resolveShowHistorySelectorRef(ctx context.Context, repoRoot, branchRef, arg string) (string, bool, error) {
-	selector := strings.TrimSpace(arg)
-	if selector == "" {
-		return "", true, showHistorySelectorError{err: fmt.Errorf("checkpoint identifier is required")}
-	}
-
-	if selector == "first" {
-		resolved, err := resolveShowHistoryRefAtOffset(ctx, repoRoot, branchRef, 0, true)
-		return resolved, true, err
-	}
-	if selector == "last" {
-		resolved, err := resolveShowHistoryRefAtOffset(ctx, repoRoot, branchRef, 0, false)
-		return resolved, true, err
-	}
-
-	if strings.HasPrefix(selector, "first+") {
-		offsetText := strings.TrimPrefix(selector, "first+")
-		offset, err := strconv.Atoi(offsetText)
-		if err != nil {
-			return "", true, showHistorySelectorError{err: fmt.Errorf("invalid show selector %q", arg)}
-		}
-		if offset < 1 {
-			return "", true, showHistorySelectorError{err: fmt.Errorf("show selector %q requires a positive offset", arg)}
-		}
-		resolved, err := resolveShowHistoryRefAtOffset(ctx, repoRoot, branchRef, offset, true)
-		return resolved, true, err
-	}
-
-	if strings.HasPrefix(selector, "last-") {
-		offsetText := strings.TrimPrefix(selector, "last-")
-		offset, err := strconv.Atoi(offsetText)
-		if err != nil {
-			return "", true, showHistorySelectorError{err: fmt.Errorf("invalid show selector %q", arg)}
-		}
-		if offset < 1 {
-			return "", true, showHistorySelectorError{err: fmt.Errorf("show selector %q requires a positive offset", arg)}
-		}
-		resolved, err := resolveShowHistoryRefAtOffset(ctx, repoRoot, branchRef, offset, false)
-		return resolved, true, err
-	}
-
-	return "", false, nil
-}
-
-func resolveShowHistoryRefAtOffset(ctx context.Context, repoRoot, branchRef string, offset int, fromFirst bool) (string, error) {
-	checkpoints, err := listCheckpointRefsForBranch(ctx, repoRoot, branchRef)
-	if err != nil {
-		return "", err
-	}
-	if len(checkpoints) == 0 {
-		return "", showHistorySelectorError{err: fmt.Errorf("no checkpoints for current branch")}
-	}
-
-	if fromFirst {
-		if offset < 0 || offset >= len(checkpoints) {
-			return "", showHistorySelectorError{err: fmt.Errorf("show selector out of range")}
-		}
-		return checkpoints[offset].Ref, nil
-	}
-
-	if offset > len(checkpoints) {
-		return "", showHistorySelectorError{err: fmt.Errorf("show selector out of range")}
-	}
-
-	idx := len(checkpoints) - 1 - offset
-	if idx < 0 {
-		return "", showHistorySelectorError{err: fmt.Errorf("show selector out of range")}
-	}
-	return checkpoints[idx].Ref, nil
 }
 
 func normalizeShowColorArg(mode string, outWriter io.Writer) (string, error) {

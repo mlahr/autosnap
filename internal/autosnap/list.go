@@ -191,14 +191,14 @@ func listCheckpointRefsForRange(ctx context.Context, repoRoot, branchRef, arg st
 		return nil, err
 	}
 
-	start, err := resolveShowCheckpointRefMetadata(ctx, repoRoot, branchRef, startArg)
+	start, err := resolveCheckpointRefMetadata(ctx, repoRoot, branchRef, startArg)
 	if err != nil {
 		return nil, err
 	}
 
 	end := start
 	if ranged {
-		end, err = resolveShowCheckpointRefMetadata(ctx, repoRoot, branchRef, endArg)
+		end, err = resolveCheckpointRefMetadata(ctx, repoRoot, branchRef, endArg)
 		if err != nil {
 			return nil, err
 		}

@@ -632,6 +632,36 @@ func TestPromoteCommandRejectsTimestamp(t *testing.T) {
 	})
 }
 
+func TestPromoteCommandResolvesLastSelector(t *testing.T) {
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		_, _, latestRef := createCheckpointRangeScenario(t, repo)
+
+		runGit(t, repo, "reset", "--hard", "HEAD")
+		runGit(t, repo, "clean", "-fd")
+
+		buf := &bytes.Buffer{}
+		root := &cobra.Command{Use: "autosnap", SilenceErrors: true, SilenceUsage: true}
+		root.AddCommand(newPromoteCommand())
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"promote", "last"})
+
+		if err := root.Execute(); err != nil {
+			t.Fatalf("promote last failed: %v", err)
+		}
+		if !strings.Contains(buf.String(), "checkpoint promoted: "+path.Base(latestRef)) {
+			t.Fatalf("expected promote output for latest checkpoint %s, got %q", latestRef, buf.String())
+		}
+
+		wantTree := runGitOutput(t, repo, "rev-parse", latestRef+"^{tree}")
+		if gotTree := runGitOutput(t, repo, "rev-parse", "HEAD^{tree}"); gotTree != wantTree {
+			t.Fatalf("expected promoted HEAD tree %s, got %s", wantTree, gotTree)
+		}
+	})
+}
+
 func TestPromoteCommandCreatesBranchCommitFromCheckpoint(t *testing.T) {
 	t.Parallel()
 	requireIntegration(t)

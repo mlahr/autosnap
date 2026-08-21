@@ -1018,14 +1018,14 @@ func resolveCheckpointPatchRange(ctx context.Context, repoRoot, branchRef, arg s
 		return checkpointPatchRange{}, err
 	}
 
-	start, err := resolveShowCheckpointRefMetadata(ctx, repoRoot, branchRef, startArg)
+	start, err := resolveCheckpointRefMetadata(ctx, repoRoot, branchRef, startArg)
 	if err != nil {
 		return checkpointPatchRange{}, err
 	}
 
 	end := start
 	if ranged {
-		end, err = resolveShowCheckpointRefMetadata(ctx, repoRoot, branchRef, endArg)
+		end, err = resolveCheckpointRefMetadata(ctx, repoRoot, branchRef, endArg)
 		if err != nil {
 			return checkpointPatchRange{}, err
 		}
@@ -1545,6 +1545,10 @@ func resolveCheckpointRefForArg(ctx context.Context, repoRoot, branchRef, arg st
 		return "", fmt.Errorf("checkpoint identifier is required")
 	}
 
+	if ref, matched, err := resolveCheckpointHistorySelectorRef(ctx, repoRoot, branchRef, trimmed); matched {
+		return ref, err
+	}
+
 	if strings.HasPrefix(trimmed, "refs/") {
 		if !strings.HasPrefix(trimmed, "refs/autosnapshots/") {
 			return "", fmt.Errorf("not an autosnap checkpoint ref: %q", trimmed)
@@ -1586,6 +1590,77 @@ func resolveCheckpointRefForArg(ctx context.Context, repoRoot, branchRef, arg st
 	}
 
 	return "", fmt.Errorf("checkpoint not found: %q", trimmed)
+}
+
+func resolveCheckpointHistorySelectorRef(ctx context.Context, repoRoot, branchRef, arg string) (string, bool, error) {
+	selector := strings.TrimSpace(arg)
+	if selector == "" {
+		return "", true, fmt.Errorf("checkpoint identifier is required")
+	}
+
+	if selector == "first" {
+		resolved, err := resolveCheckpointHistoryRefAtOffset(ctx, repoRoot, branchRef, 0, true)
+		return resolved, true, err
+	}
+	if selector == "last" {
+		resolved, err := resolveCheckpointHistoryRefAtOffset(ctx, repoRoot, branchRef, 0, false)
+		return resolved, true, err
+	}
+
+	if strings.HasPrefix(selector, "first+") {
+		offsetText := strings.TrimPrefix(selector, "first+")
+		offset, err := strconv.Atoi(offsetText)
+		if err != nil {
+			return "", true, fmt.Errorf("invalid checkpoint selector %q", arg)
+		}
+		if offset < 1 {
+			return "", true, fmt.Errorf("checkpoint selector %q requires a positive offset", arg)
+		}
+		resolved, err := resolveCheckpointHistoryRefAtOffset(ctx, repoRoot, branchRef, offset, true)
+		return resolved, true, err
+	}
+
+	if strings.HasPrefix(selector, "last-") {
+		offsetText := strings.TrimPrefix(selector, "last-")
+		offset, err := strconv.Atoi(offsetText)
+		if err != nil {
+			return "", true, fmt.Errorf("invalid checkpoint selector %q", arg)
+		}
+		if offset < 1 {
+			return "", true, fmt.Errorf("checkpoint selector %q requires a positive offset", arg)
+		}
+		resolved, err := resolveCheckpointHistoryRefAtOffset(ctx, repoRoot, branchRef, offset, false)
+		return resolved, true, err
+	}
+
+	return "", false, nil
+}
+
+func resolveCheckpointHistoryRefAtOffset(ctx context.Context, repoRoot, branchRef string, offset int, fromFirst bool) (string, error) {
+	checkpoints, err := listCheckpointRefsForBranch(ctx, repoRoot, branchRef)
+	if err != nil {
+		return "", err
+	}
+	if len(checkpoints) == 0 {
+		return "", fmt.Errorf("no checkpoints for current branch")
+	}
+
+	if fromFirst {
+		if offset < 0 || offset >= len(checkpoints) {
+			return "", fmt.Errorf("checkpoint selector out of range")
+		}
+		return checkpoints[offset].Ref, nil
+	}
+
+	if offset > len(checkpoints) {
+		return "", fmt.Errorf("checkpoint selector out of range")
+	}
+
+	idx := len(checkpoints) - 1 - offset
+	if idx < 0 {
+		return "", fmt.Errorf("checkpoint selector out of range")
+	}
+	return checkpoints[idx].Ref, nil
 }
 
 func resolveAutosnapRefToCommit(ctx context.Context, repoRoot, ref string) (string, error) {
