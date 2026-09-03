@@ -358,6 +358,10 @@ func (r *snapshotRunner) runCheckUnlocked() (checkpointRunResult, error) {
 	}
 	branchRef := position.BranchRef
 	previousState := r.state
+	if err := validateActiveMergeReady(r.ctx, r.repoRoot, position); err != nil {
+		logf("unable to create checkpoint during merge: %v\n", err)
+		return checkpointRunResult{}, err
+	}
 
 	gitDirectory, err := gitDir(r.ctx, r.repoRoot)
 	if err != nil {
@@ -372,7 +376,7 @@ func (r *snapshotRunner) runCheckUnlocked() (checkpointRunResult, error) {
 
 	previousCheckpointRef, previousCheckpointTree := resolvePreviousCheckpoint(r.ctx, r.repoRoot, branchRef, previousState)
 
-	if r.commitMode == commitModeCheckpoint && previousCheckpointTree != "" && previousCheckpointTree == tree {
+	if r.commitMode == commitModeCheckpoint && len(position.MergeHeads) == 0 && previousCheckpointTree != "" && previousCheckpointTree == tree {
 		logln("no meaningful diff; checkpoint skipped")
 		return checkpointRunResult{}, nil
 	}
@@ -382,7 +386,7 @@ func (r *snapshotRunner) runCheckUnlocked() (checkpointRunResult, error) {
 			logf("unable to resolve HEAD tree: %v\n", err)
 			return checkpointRunResult{}, err
 		}
-		if headTree == tree {
+		if headTree == tree && len(position.MergeHeads) == 0 {
 			logln("no meaningful diff; checkpoint skipped")
 			return checkpointRunResult{}, nil
 		}
@@ -393,7 +397,7 @@ func (r *snapshotRunner) runCheckUnlocked() (checkpointRunResult, error) {
 			logf("unable to resolve HEAD tree: %v\n", err)
 			return checkpointRunResult{}, err
 		}
-		if headTree == tree {
+		if headTree == tree && len(position.MergeHeads) == 0 {
 			logln("no meaningful diff; direct commit skipped")
 			return checkpointRunResult{}, nil
 		}
@@ -417,6 +421,19 @@ func (r *snapshotRunner) runCheckUnlocked() (checkpointRunResult, error) {
 	}
 
 	_ = saveAutosnapState(r.statePath, r.state)
+	postCheckPosition, err := currentGitPosition(r.ctx, r.repoRoot)
+	if err != nil {
+		logf("unable to re-check git position after check: %v\n", err)
+		return checkpointRunResult{}, err
+	}
+	if err := validateExpectedGitPosition(postCheckPosition, position, "check"); err != nil {
+		logf("git position changed during check: %v\n", err)
+		return checkpointRunResult{}, err
+	}
+	if err := validateActiveMergeReady(r.ctx, r.repoRoot, postCheckPosition); err != nil {
+		logf("unable to create checkpoint during merge: %v\n", err)
+		return checkpointRunResult{}, err
+	}
 
 	diffBase := previousCheckpointRef
 	if diffBase == "" {
@@ -449,6 +466,13 @@ func (r *snapshotRunner) runCheckUnlocked() (checkpointRunResult, error) {
 				}
 			}
 		}
+		if commitMessage == "" && len(position.MergeHeads) != 0 {
+			commitMessage, err = activeMergeMessage(r.ctx, r.repoRoot)
+			if err != nil {
+				logf("unable to read merge commit message: %v\n", err)
+				return checkpointRunResult{}, err
+			}
+		}
 	}
 
 	switch r.commitMode {
@@ -463,7 +487,7 @@ func (r *snapshotRunner) runCheckUnlocked() (checkpointRunResult, error) {
 			return checkpointRunResult{}, nil
 		}
 
-		commit, created, ts, err := createDirectCommitCheckedWithBody(r.ctx, r.repoRoot, branchRef, position.Head, r.checkCmd, r.idle, tree, commitMessage, commitBody)
+		commit, created, ts, err := createDirectCommitAtPositionWithBody(r.ctx, r.repoRoot, position, r.checkCmd, r.idle, tree, commitMessage, commitBody)
 		if err != nil {
 			logf("unable to create direct commit: %v\n", err)
 			return checkpointRunResult{}, err
@@ -486,7 +510,7 @@ func (r *snapshotRunner) runCheckUnlocked() (checkpointRunResult, error) {
 			} else if status != "" {
 				logf("sync skipped after local commit %s: worktree changed during commit:\n%s\n", commitShort, status)
 			} else {
-				syncedHead, err := syncDirectCommit(r.ctx, r.repoRoot)
+				syncedHead, err := syncDirectCommit(r.ctx, r.repoRoot, len(position.MergeHeads) != 0)
 				if syncedHead != "" {
 					recordedCommit = syncedHead
 				}
@@ -517,7 +541,7 @@ func (r *snapshotRunner) runCheckUnlocked() (checkpointRunResult, error) {
 		}
 		r.runPostCheckpointCommand(recordedCommit, recordedCommit, commandEnv)
 	default:
-		ref, commit, err := createCheckpointCheckedWithBody(r.ctx, r.repoRoot, branchRef, position.Head, r.checkCmd, r.idle, tree, commitMessage, commitBody)
+		ref, commit, err := createCheckpointAtPositionWithBody(r.ctx, r.repoRoot, position, r.checkCmd, r.idle, tree, commitMessage, commitBody)
 		if err != nil {
 			logf("unable to create checkpoint: %v\n", err)
 			return checkpointRunResult{}, err

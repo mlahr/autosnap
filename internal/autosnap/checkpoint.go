@@ -9,6 +9,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -144,8 +145,10 @@ func (e patchConflictError) Error() string {
 }
 
 type gitPosition struct {
-	BranchRef string
-	Head      string
+	BranchRef       string
+	Head            string
+	MergeHeads      []string
+	MergeStateKnown bool
 }
 
 func snapshotRefPrefix(branch string) string {
@@ -247,11 +250,104 @@ func currentGitPosition(ctx context.Context, repoRoot string) (gitPosition, erro
 	if branchRef == "" {
 		_, branchRef = detachedBranchIdentity(head)
 	}
+	mergeHeads, err := activeMergeHeads(ctx, repoRoot)
+	if err != nil {
+		return gitPosition{}, err
+	}
 
 	return gitPosition{
-		BranchRef: branchRef,
-		Head:      head,
+		BranchRef:       branchRef,
+		Head:            head,
+		MergeHeads:      mergeHeads,
+		MergeStateKnown: true,
 	}, nil
+}
+
+func activeMergeHeads(ctx context.Context, repoRoot string) ([]string, error) {
+	gitDirectory, err := gitDir(ctx, repoRoot)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := os.ReadFile(filepath.Join(gitDirectory, "MERGE_HEAD"))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read MERGE_HEAD: %w", err)
+	}
+
+	var heads []string
+	for _, line := range strings.Split(string(raw), "\n") {
+		head := strings.TrimSpace(line)
+		if head != "" {
+			heads = append(heads, head)
+		}
+	}
+	if len(heads) == 0 {
+		return nil, fmt.Errorf("active merge has no MERGE_HEAD commits")
+	}
+	return heads, nil
+}
+
+func activeMergeMessage(ctx context.Context, repoRoot string) (string, error) {
+	gitDirectory, err := gitDir(ctx, repoRoot)
+	if err != nil {
+		return "", err
+	}
+	raw, err := os.ReadFile(filepath.Join(gitDirectory, "MERGE_MSG"))
+	if err != nil {
+		return "", fmt.Errorf("read MERGE_MSG: %w", err)
+	}
+	result, err := runGitCommandWithInput(ctx, repoRoot, nil, string(raw), "stripspace", "--strip-comments")
+	if err != nil {
+		return "", gitCommandError(err, result)
+	}
+	message := strings.TrimSpace(result.Stdout)
+	if message == "" {
+		return "", fmt.Errorf("active merge has no usable MERGE_MSG text")
+	}
+	return message, nil
+}
+
+func activeMergeUnresolvedPaths(ctx context.Context, repoRoot string) ([]string, error) {
+	result, err := runGitCommand(ctx, repoRoot, nil, "diff", "--name-only", "--diff-filter=U", "-z")
+	if err != nil {
+		return nil, gitCommandError(err, result)
+	}
+	var paths []string
+	for _, name := range strings.Split(result.Stdout, "\x00") {
+		if name != "" {
+			paths = append(paths, name)
+		}
+	}
+	return paths, nil
+}
+
+func validateActiveMergeReady(ctx context.Context, repoRoot string, position gitPosition) error {
+	if len(position.MergeHeads) == 0 {
+		return nil
+	}
+	paths, err := activeMergeUnresolvedPaths(ctx, repoRoot)
+	if err != nil {
+		return err
+	}
+	if len(paths) != 0 {
+		return fmt.Errorf("active merge has unresolved paths: %s", strings.Join(paths, ", "))
+	}
+	return nil
+}
+
+func validateExpectedGitPosition(position, expected gitPosition, action string) error {
+	if expected.BranchRef != "" && position.BranchRef != expected.BranchRef {
+		return fmt.Errorf("git branch changed during %s: was %s, now %s", action, expected.BranchRef, position.BranchRef)
+	}
+	if expected.Head != "" && position.Head != expected.Head {
+		return fmt.Errorf("git HEAD changed during %s: was %s, now %s", action, expected.Head, position.Head)
+	}
+	if expected.MergeStateKnown && !slices.Equal(position.MergeHeads, expected.MergeHeads) {
+		return fmt.Errorf("git merge state changed during %s", action)
+	}
+	return nil
 }
 
 func computeWorktreeTree(ctx context.Context, repoRoot, gitDirectory, mode string) (string, error) {
@@ -564,29 +660,34 @@ func createCheckpointChecked(ctx context.Context, repoRoot, expectedBranchRef, e
 }
 
 func createCheckpointCheckedWithBody(ctx context.Context, repoRoot, expectedBranchRef, expectedHead, checkCommand string, idle time.Duration, tree string, commitMessage, commitBody string) (string, string, error) {
+	expected := gitPosition{BranchRef: expectedBranchRef, Head: expectedHead}
+	return createCheckpointAtPositionWithBody(ctx, repoRoot, expected, checkCommand, idle, tree, commitMessage, commitBody)
+}
+
+func createCheckpointAtPositionWithBody(ctx context.Context, repoRoot string, expected gitPosition, checkCommand string, idle time.Duration, tree string, commitMessage, commitBody string) (string, string, error) {
 	position, err := currentGitPosition(ctx, repoRoot)
 	if err != nil {
 		return "", "", err
 	}
-	if expectedBranchRef != "" && position.BranchRef != expectedBranchRef {
-		return "", "", fmt.Errorf("git branch changed during checkpoint: was %s, now %s", expectedBranchRef, position.BranchRef)
+	if err := validateExpectedGitPosition(position, expected, "checkpoint"); err != nil {
+		return "", "", err
 	}
-	if expectedHead != "" && position.Head != expectedHead {
-		return "", "", fmt.Errorf("git HEAD changed during checkpoint: was %s, now %s", expectedHead, position.Head)
+	if err := validateActiveMergeReady(ctx, repoRoot, position); err != nil {
+		return "", "", err
 	}
 
 	headTree, err := getCheckpointTree(ctx, repoRoot, "HEAD")
 	if err != nil {
 		return "", "", err
 	}
-	if headTree == tree {
+	if headTree == tree && len(position.MergeHeads) == 0 {
 		return "", "", nil
 	}
 
 	ts := currentTimestamp()
 	message := autosnapCommitMessage(commitMessage, commitBody, ts, position, checkCommand, idle)
 
-	commit, err := createCommitFromTree(ctx, repoRoot, tree, position.Head, message)
+	commit, err := createCommitFromTree(ctx, repoRoot, tree, append([]string{position.Head}, position.MergeHeads...), message)
 	if err != nil {
 		return "", "", err
 	}
@@ -604,6 +705,11 @@ func createDirectCommitChecked(ctx context.Context, repoRoot, expectedBranchRef,
 }
 
 func createDirectCommitCheckedWithBody(ctx context.Context, repoRoot, expectedBranchRef, expectedHead, checkCommand string, idle time.Duration, tree string, commitMessage, commitBody string) (string, bool, string, error) {
+	expected := gitPosition{BranchRef: expectedBranchRef, Head: expectedHead}
+	return createDirectCommitAtPositionWithBody(ctx, repoRoot, expected, checkCommand, idle, tree, commitMessage, commitBody)
+}
+
+func createDirectCommitAtPositionWithBody(ctx context.Context, repoRoot string, expected gitPosition, checkCommand string, idle time.Duration, tree string, commitMessage, commitBody string) (string, bool, string, error) {
 	branchResult, err := runGitCommand(ctx, repoRoot, nil, "symbolic-ref", "--quiet", "--short", "HEAD")
 	if err != nil || strings.TrimSpace(branchResult.Stdout) == "" {
 		return "", false, "", fmt.Errorf("direct commit mode requires a checked-out branch")
@@ -613,24 +719,24 @@ func createDirectCommitCheckedWithBody(ctx context.Context, repoRoot, expectedBr
 	if err != nil {
 		return "", false, "", err
 	}
-	if expectedBranchRef != "" && position.BranchRef != expectedBranchRef {
-		return "", false, "", fmt.Errorf("git branch changed during direct commit: was %s, now %s", expectedBranchRef, position.BranchRef)
+	if err := validateExpectedGitPosition(position, expected, "direct commit"); err != nil {
+		return "", false, "", err
 	}
-	if expectedHead != "" && position.Head != expectedHead {
-		return "", false, "", fmt.Errorf("git HEAD changed during direct commit: was %s, now %s", expectedHead, position.Head)
+	if err := validateActiveMergeReady(ctx, repoRoot, position); err != nil {
+		return "", false, "", err
 	}
 
 	headTree, err := getCheckpointTree(ctx, repoRoot, "HEAD")
 	if err != nil {
 		return "", false, "", err
 	}
-	if headTree == tree {
+	if headTree == tree && len(position.MergeHeads) == 0 {
 		return position.Head, false, "", nil
 	}
 
 	ts := currentTimestamp()
 	message := autosnapCommitMessage(commitMessage, commitBody, ts, position, checkCommand, idle)
-	commit, err := createCommitFromTree(ctx, repoRoot, tree, position.Head, message)
+	commit, err := createCommitFromTree(ctx, repoRoot, tree, append([]string{position.Head}, position.MergeHeads...), message)
 	if err != nil {
 		return "", false, "", err
 	}
@@ -645,8 +751,12 @@ func createDirectCommitCheckedWithBody(ctx context.Context, repoRoot, expectedBr
 	return commit, true, ts, nil
 }
 
-func syncDirectCommit(ctx context.Context, repoRoot string) (string, error) {
-	pullResult, err := runGitCommand(ctx, repoRoot, nil, "pull", "--rebase")
+func syncDirectCommit(ctx context.Context, repoRoot string, preserveMerges bool) (string, error) {
+	pullArgs := []string{"pull", "--rebase"}
+	if preserveMerges {
+		pullArgs = []string{"pull", "--rebase=merges"}
+	}
+	pullResult, err := runGitCommand(ctx, repoRoot, nil, pullArgs...)
 	if err != nil {
 		abortErr := abortRebaseIfActive(ctx, repoRoot)
 		syncErr := fmt.Errorf("git pull --rebase failed: %w", gitCommandError(err, pullResult))
@@ -736,8 +846,13 @@ func autosnapCommitMessage(commitMessage, commitBody, timestamp string, position
 	return message + "\n\n" + body
 }
 
-func createCommitFromTree(ctx context.Context, repoRoot, tree, parent, message string) (string, error) {
-	commitResult, err := runGitCommandWithInput(ctx, repoRoot, nil, message, "commit-tree", tree, "-p", parent, "-F", "-")
+func createCommitFromTree(ctx context.Context, repoRoot, tree string, parents []string, message string) (string, error) {
+	args := []string{"commit-tree", tree}
+	for _, parent := range parents {
+		args = append(args, "-p", parent)
+	}
+	args = append(args, "-F", "-")
+	commitResult, err := runGitCommandWithInput(ctx, repoRoot, nil, message, args...)
 	if err != nil {
 		return "", err
 	}
@@ -871,17 +986,27 @@ func checkpointWorktreeMatchMarker(match checkpointWorktreeMatch) string {
 }
 
 func getCommitParent(ctx context.Context, repoRoot, commit string) (string, error) {
-	result, err := runGitCommand(ctx, repoRoot, nil, "rev-list", "--parents", "-n", "1", commit)
+	parents, err := getCommitParents(ctx, repoRoot, commit)
 	if err != nil {
 		return "", err
+	}
+	if len(parents) == 0 {
+		return "", fmt.Errorf("checkpoint commit %q has no parent", commit)
+	}
+	return parents[0], nil
+}
+
+func getCommitParents(ctx context.Context, repoRoot, commit string) ([]string, error) {
+	result, err := runGitCommand(ctx, repoRoot, nil, "rev-list", "--parents", "-n", "1", commit)
+	if err != nil {
+		return nil, err
 	}
 
 	fields := strings.Fields(result.Stdout)
 	if len(fields) < 2 {
-		return "", fmt.Errorf("checkpoint commit %q has no parent", commit)
+		return nil, nil
 	}
-
-	return fields[1], nil
+	return fields[1:], nil
 }
 
 func ensureCleanWorktree(ctx context.Context, repoRoot, command string, force bool) error {
@@ -1390,6 +1515,15 @@ func promoteCheckpoint(ctx context.Context, repoRoot string, meta checkpointRefI
 		return "", false, err
 	}
 	head := strings.TrimSpace(headResult.Stdout)
+	checkpointParents, err := getCommitParents(ctx, repoRoot, meta.Commit)
+	if err != nil {
+		return "", false, err
+	}
+	promoteParents := []string{head}
+	if len(checkpointParents) > 1 {
+		promoteParents = append(promoteParents, checkpointParents[1:]...)
+	}
+	promoteParents = uniqueCommitParents(promoteParents)
 
 	checkpointTree, err := getCheckpointTree(ctx, repoRoot, meta.Commit)
 	if err != nil {
@@ -1399,7 +1533,7 @@ func promoteCheckpoint(ctx context.Context, repoRoot string, meta checkpointRefI
 	if err != nil {
 		return "", false, err
 	}
-	if checkpointTree == headTree {
+	if checkpointTree == headTree && len(promoteParents) == 1 {
 		return head, false, nil
 	}
 
@@ -1408,11 +1542,10 @@ func promoteCheckpoint(ctx context.Context, repoRoot string, meta checkpointRefI
 		return "", false, err
 	}
 
-	commitResult, err := runGitCommandWithInput(ctx, repoRoot, nil, strings.TrimSpace(message), "commit-tree", checkpointTree, "-p", head, "-F", "-")
+	commit, err := createCommitFromTree(ctx, repoRoot, checkpointTree, promoteParents, strings.TrimSpace(message))
 	if err != nil {
 		return "", false, err
 	}
-	commit := strings.TrimSpace(commitResult.Stdout)
 	if commit == "" {
 		return "", false, fmt.Errorf("promote did not create a commit")
 	}
@@ -1422,6 +1555,19 @@ func promoteCheckpoint(ctx context.Context, repoRoot string, meta checkpointRefI
 	}
 
 	return commit, true, nil
+}
+
+func uniqueCommitParents(parents []string) []string {
+	seen := make(map[string]bool, len(parents))
+	unique := make([]string, 0, len(parents))
+	for _, parent := range parents {
+		if parent == "" || seen[parent] {
+			continue
+		}
+		seen[parent] = true
+		unique = append(unique, parent)
+	}
+	return unique
 }
 
 func getLatestCheckpointForBranch(ctx context.Context, repoRoot, branchRef string) (string, string, string, error) {

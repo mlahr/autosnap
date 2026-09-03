@@ -46,6 +46,10 @@ subject and a body.
 after one blank line. If the command fails or returns no text, autosnap keeps the
 base message.
 
+During an active merge, Git's `MERGE_MSG` supplies the default commit message.
+An explicit checkpoint message or successful `msg_source_cmd` result has
+priority.
+
 Both message commands receive `AUTOSNAP_DIFF_BASE`,
 `AUTOSNAP_PREVIOUS_CHECKPOINT_REF`, `AUTOSNAP_BRANCH_REF`, and `AUTOSNAP_HEAD`.
 
