@@ -42,9 +42,11 @@ func run() error {
 	}
 	defer os.RemoveAll(tmp)
 
+	manualDate := time.Date(2026, time.September, 1, 0, 0, 0, 0, time.UTC)
 	header := &doc.GenManHeader{
 		Title:   "AUTOSNAP",
 		Section: "1",
+		Date:    &manualDate,
 		Source:  "autosnap",
 		Manual:  "autosnap manual",
 	}
