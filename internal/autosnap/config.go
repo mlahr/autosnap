@@ -23,6 +23,7 @@ type autosnapConfig struct {
 	IdleSeconds           int                 `toml:"idle_seconds"`
 	SnapshotMode          string              `toml:"snapshot_mode"`
 	CommitMode            string              `toml:"commit_mode"`
+	CommitMergeCommits    bool                `toml:"commit_merge_commits"`
 	MsgSourceCmd          string              `toml:"msg_source_cmd"`
 	MsgBodySourceCmd      string              `toml:"msg_body_source_cmd"`
 	NoteCommand           string              `toml:"note_command"`
@@ -51,6 +52,7 @@ var startConfigFlagNames = []string{
 	"idle",
 	"snapshot-mode",
 	"commit-mode",
+	"commit-merge-commits",
 	"watch-mode",
 	"poll-interval",
 	"log-max-bytes",
@@ -63,11 +65,12 @@ type autosnapConfigOverrides struct {
 
 func defaultAutosnapConfig() autosnapConfig {
 	return autosnapConfig{
-		IdleSeconds:  60,
-		SnapshotMode: snapshotModeBoth,
-		CommitMode:   commitModeCheckpoint,
-		LogMaxBytes:  defaultLogMaxBytes,
-		ReadyTimeout: defaultDaemonReadyTimeout,
+		IdleSeconds:        60,
+		SnapshotMode:       snapshotModeBoth,
+		CommitMode:         commitModeCheckpoint,
+		CommitMergeCommits: false,
+		LogMaxBytes:        defaultLogMaxBytes,
+		ReadyTimeout:       defaultDaemonReadyTimeout,
 		Watch: autosnapWatchConfig{
 			Mode:         watchModeRecursive,
 			PollInterval: defaultPollInterval,
@@ -96,6 +99,11 @@ func postCheckpointCommandFlag(cmd *cobra.Command) string {
 
 func msgBodySourceCmdFlag(cmd *cobra.Command) string {
 	value, _ := cmd.Flags().GetString("msg-body-source-cmd")
+	return value
+}
+
+func commitMergeCommitsFlag(cmd *cobra.Command) bool {
+	value, _ := cmd.Flags().GetBool("commit-merge-commits")
 	return value
 }
 
@@ -142,6 +150,7 @@ func resolveStartConfigWithFileAndBody(repoRoot string, cmd *cobra.Command, chec
 			IdleSeconds:           idleSeconds,
 			SnapshotMode:          snapshotMode,
 			CommitMode:            commitMode,
+			CommitMergeCommits:    commitMergeCommitsFlag(cmd),
 			LogMaxBytes:           logMaxBytes,
 			Watch: autosnapWatchConfig{
 				Mode:         watchMode,
@@ -193,6 +202,9 @@ func resolveAutosnapConfig(repoRoot string, overrides autosnapConfigOverrides, l
 	}
 	if overrides.set["commit-mode"] {
 		cfg.CommitMode = overrides.values.CommitMode
+	}
+	if overrides.set["commit-merge-commits"] {
+		cfg.CommitMergeCommits = overrides.values.CommitMergeCommits
 	}
 	if overrides.set["watch-mode"] {
 		cfg.Watch.Mode = overrides.values.Watch.Mode
@@ -304,6 +316,9 @@ func mergeAutosnapConfig(dst *autosnapConfig, src autosnapConfig) {
 	if src.CommitMode != "" {
 		dst.CommitMode = src.CommitMode
 	}
+	if src.CommitMergeCommits {
+		dst.CommitMergeCommits = true
+	}
 	if src.MsgSourceCmd != "" {
 		dst.MsgSourceCmd = src.MsgSourceCmd
 	}
@@ -382,6 +397,7 @@ func defaultAutosnapConfigTemplate() []byte {
 idle_seconds = 60
 snapshot_mode = "both"
 commit_mode = "checkpoint"
+commit_merge_commits = false
 msg_source_cmd = ""
 msg_body_source_cmd = ""
 note_command = ""

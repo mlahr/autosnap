@@ -21,6 +21,7 @@ check = "make test"
 idle_seconds = 60
 snapshot_mode = "both"
 commit_mode = "checkpoint"
+commit_merge_commits = false
 msg_source_cmd = ""
 msg_body_source_cmd = ""
 note_command = ""
@@ -76,6 +77,10 @@ changes.
 
 `commit_mode = "checkpoint"` stores passing checkpoints under local autosnap refs
 instead of committing to the active branch.
+
+`commit_merge_commits` is `false` by default. During an active Git merge,
+autosnap skips the check and does not create a checkpoint or branch commit. Set
+it to `true` to enable merge checkpoint and direct/sync commit behavior.
 
 `note_command` and `note_ref` are empty by default. Set both to attach command
 output as a Git note on each checkpoint commit, for example under

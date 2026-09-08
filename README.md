@@ -23,6 +23,7 @@ check = "make test"
 idle_seconds = 60
 snapshot_mode = "both"
 commit_mode = "checkpoint"
+commit_merge_commits = false
 msg_source_cmd = ""
 msg_body_source_cmd = ""
 note_command = ""
@@ -33,6 +34,16 @@ post_checkpoint_command = ""
 `msg_source_cmd` can return a complete commit message. `msg_body_source_cmd`
 can return extra body text. Autosnap appends that text after one blank line.
 Both commands receive the checkpoint context variables.
+
+Use `commit_merge_commits = true` or `--commit-merge-commits` to let autosnap
+run checks and create checkpoints or direct/sync commits during an active Git
+merge. It is disabled by default.
+
+Show the installed version with:
+
+```bash
+autosnap --version
+```
 
 Start the daemon:
 

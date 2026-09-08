@@ -24,6 +24,7 @@ func newStartCommand() *cobra.Command {
 		idleSeconds           int
 		snapshotMode          string
 		commitMode            string
+		commitMergeCommits    bool
 		watchMode             string
 		pollInterval          time.Duration
 		logMaxBytes           int64
@@ -65,6 +66,7 @@ func newStartCommand() *cobra.Command {
 			idleSeconds = cfg.IdleSeconds
 			snapshotMode = cfg.SnapshotMode
 			commitMode = cfg.CommitMode
+			commitMergeCommits = cfg.CommitMergeCommits
 			watchMode = cfg.Watch.Mode
 			pollInterval = cfg.Watch.PollInterval
 			logMaxBytes = cfg.LogMaxBytes
@@ -91,7 +93,7 @@ func newStartCommand() *cobra.Command {
 						return err
 					}
 				}
-				process, err := startAutosnapDetached(repoRoot, checkCommand, msgSourceCmd, msgBodySourceCmd, noteCommand, noteRef, postCheckpointCommand, idleSeconds, snapshotMode, commitMode, watchMode, pollInterval, logMaxBytes, runToken, startConfigFlags)
+				process, err := startAutosnapDetachedWithMerge(repoRoot, checkCommand, msgSourceCmd, msgBodySourceCmd, noteCommand, noteRef, postCheckpointCommand, idleSeconds, snapshotMode, commitMode, commitMergeCommits, watchMode, pollInterval, logMaxBytes, runToken, startConfigFlags)
 				if err != nil {
 					return err
 				}
@@ -120,7 +122,7 @@ func newStartCommand() *cobra.Command {
 				return err
 			}
 
-			runner, err := newSnapshotRunnerWithWatchAndBody(ctx, repoRoot, branchRef, checkCommand, msgSourceCmd, msgBodySourceCmd, snapshotMode, commitMode, watchMode, pollInterval, time.Duration(idleSeconds)*time.Second, statePath)
+			runner, err := newSnapshotRunnerWithWatchAndBodyAndMerge(ctx, repoRoot, branchRef, checkCommand, msgSourceCmd, msgBodySourceCmd, snapshotMode, commitMode, commitMergeCommits, watchMode, pollInterval, time.Duration(idleSeconds)*time.Second, statePath)
 			if err != nil {
 				return err
 			}
@@ -151,6 +153,7 @@ func newStartCommand() *cobra.Command {
 					IdleSeconds:           idleSeconds,
 					SnapshotMode:          snapshotMode,
 					CommitMode:            commitMode,
+					CommitMergeCommits:    commitMergeCommits,
 					WatchMode:             watchMode,
 					PollInterval:          pollInterval,
 					LogMaxBytes:           logMaxBytes,
@@ -164,6 +167,7 @@ func newStartCommand() *cobra.Command {
 			logf("autosnap watching %s\n", repoRoot)
 			logf("branch: %s check: %s idle: %ds\n", branchDisplay, checkCommand, idleSeconds)
 			logf("snapshot-mode: %s commit-mode: %s\n", snapshotMode, commitMode)
+			logf("commit-merge-commits: %t\n", commitMergeCommits)
 			logf("watch-mode: %s poll-interval: %s\n", watchMode, pollInterval)
 
 			ready := func() error {
@@ -193,6 +197,7 @@ func newStartCommand() *cobra.Command {
 	cmd.Flags().IntVar(&idleSeconds, "idle", 60, "Seconds without changes before running the check")
 	cmd.Flags().StringVar(&snapshotMode, "snapshot-mode", snapshotModeBoth, "Snapshot source: both, staged, working")
 	cmd.Flags().StringVar(&commitMode, "commit-mode", commitModeCheckpoint, "Commit target: checkpoint, direct, sync")
+	cmd.Flags().BoolVar(&commitMergeCommits, "commit-merge-commits", false, "Create checkpoints or commits during an active Git merge")
 	cmd.Flags().StringVar(&watchMode, "watch-mode", watchModeRecursive, "Watch strategy: recursive, poll, auto")
 	cmd.Flags().DurationVar(&pollInterval, "poll-interval", defaultPollInterval, "Polling interval for poll or auto watch mode")
 	cmd.Flags().Int64Var(&logMaxBytes, "log-max-bytes", defaultLogMaxBytes, "Maximum autosnap daemon log size in bytes")
@@ -210,6 +215,10 @@ func newStartCommand() *cobra.Command {
 }
 
 func startAutosnapDetached(repoRoot, checkCommand, msgSourceCmd, msgBodySourceCmd, noteCommand, noteRef, postCheckpointCommand string, idleSeconds int, snapshotMode, commitMode, watchMode string, pollInterval time.Duration, logMaxBytes int64, runToken string, startConfigFlags []string) (*os.Process, error) {
+	return startAutosnapDetachedWithMerge(repoRoot, checkCommand, msgSourceCmd, msgBodySourceCmd, noteCommand, noteRef, postCheckpointCommand, idleSeconds, snapshotMode, commitMode, false, watchMode, pollInterval, logMaxBytes, runToken, startConfigFlags)
+}
+
+func startAutosnapDetachedWithMerge(repoRoot, checkCommand, msgSourceCmd, msgBodySourceCmd, noteCommand, noteRef, postCheckpointCommand string, idleSeconds int, snapshotMode, commitMode string, commitMergeCommits bool, watchMode string, pollInterval time.Duration, logMaxBytes int64, runToken string, startConfigFlags []string) (*os.Process, error) {
 	logPath, err := backgroundLogPath(repoRoot)
 	if err != nil {
 		return nil, err
@@ -231,7 +240,7 @@ func startAutosnapDetached(repoRoot, checkCommand, msgSourceCmd, msgBodySourceCm
 		return nil, err
 	}
 
-	args := startDetachedArgsWithBody(exe, checkCommand, msgSourceCmd, msgBodySourceCmd, noteCommand, noteRef, postCheckpointCommand, idleSeconds, snapshotMode, commitMode, watchMode, pollInterval, logMaxBytes, runToken, startConfigFlags)
+	args := startDetachedArgsWithBodyAndMerge(exe, checkCommand, msgSourceCmd, msgBodySourceCmd, noteCommand, noteRef, postCheckpointCommand, idleSeconds, snapshotMode, commitMode, commitMergeCommits, watchMode, pollInterval, logMaxBytes, runToken, startConfigFlags)
 
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Stdin = nil
@@ -251,10 +260,14 @@ func startAutosnapDetached(repoRoot, checkCommand, msgSourceCmd, msgBodySourceCm
 }
 
 func startDetachedArgs(exe, checkCommand, msgSourceCmd, noteCommand, noteRef, postCheckpointCommand string, idleSeconds int, snapshotMode, commitMode, watchMode string, pollInterval time.Duration, logMaxBytes int64, runToken string, startConfigFlags []string) []string {
-	return startDetachedArgsWithBody(exe, checkCommand, msgSourceCmd, "", noteCommand, noteRef, postCheckpointCommand, idleSeconds, snapshotMode, commitMode, watchMode, pollInterval, logMaxBytes, runToken, startConfigFlags)
+	return startDetachedArgsWithBodyAndMerge(exe, checkCommand, msgSourceCmd, "", noteCommand, noteRef, postCheckpointCommand, idleSeconds, snapshotMode, commitMode, false, watchMode, pollInterval, logMaxBytes, runToken, startConfigFlags)
 }
 
 func startDetachedArgsWithBody(exe, checkCommand, msgSourceCmd, msgBodySourceCmd, noteCommand, noteRef, postCheckpointCommand string, idleSeconds int, snapshotMode, commitMode, watchMode string, pollInterval time.Duration, logMaxBytes int64, runToken string, startConfigFlags []string) []string {
+	return startDetachedArgsWithBodyAndMerge(exe, checkCommand, msgSourceCmd, msgBodySourceCmd, noteCommand, noteRef, postCheckpointCommand, idleSeconds, snapshotMode, commitMode, false, watchMode, pollInterval, logMaxBytes, runToken, startConfigFlags)
+}
+
+func startDetachedArgsWithBodyAndMerge(exe, checkCommand, msgSourceCmd, msgBodySourceCmd, noteCommand, noteRef, postCheckpointCommand string, idleSeconds int, snapshotMode, commitMode string, commitMergeCommits bool, watchMode string, pollInterval time.Duration, logMaxBytes int64, runToken string, startConfigFlags []string) []string {
 	args := []string{
 		exe,
 		"start",
@@ -279,6 +292,8 @@ func startDetachedArgsWithBody(exe, checkCommand, msgSourceCmd, msgBodySourceCmd
 		snapshotMode,
 		"--commit-mode",
 		commitMode,
+		"--commit-merge-commits",
+		strconv.FormatBool(commitMergeCommits),
 		"--watch-mode",
 		watchMode,
 		"--poll-interval",

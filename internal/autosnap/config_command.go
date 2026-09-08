@@ -89,6 +89,7 @@ func writeResolvedAutosnapConfig(repoRoot string, out io.Writer) error {
 	fmt.Fprintf(out, "idle_seconds: %d\n", cfg.IdleSeconds)
 	fmt.Fprintf(out, "snapshot_mode: %s\n", cfg.SnapshotMode)
 	fmt.Fprintf(out, "commit_mode: %s\n", cfg.CommitMode)
+	fmt.Fprintf(out, "commit_merge_commits: %t\n", cfg.CommitMergeCommits)
 	fmt.Fprintf(out, "msg_source_cmd: %s\n", cfg.MsgSourceCmd)
 	fmt.Fprintf(out, "msg_body_source_cmd: %s\n", cfg.MsgBodySourceCmd)
 	fmt.Fprintf(out, "note_command: %s\n", cfg.NoteCommand)

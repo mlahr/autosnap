@@ -11,12 +11,13 @@ import (
 
 func newCheckpointCommand() *cobra.Command {
 	var (
-		checkCommand     string
-		msgSourceCmd     string
-		msgBodySourceCmd string
-		snapshotMode     string
-		commitMode       string
-		timeout          time.Duration
+		checkCommand       string
+		msgSourceCmd       string
+		msgBodySourceCmd   string
+		snapshotMode       string
+		commitMode         string
+		commitMergeCommits bool
+		timeout            time.Duration
 	)
 
 	cmd := &cobra.Command{
@@ -55,7 +56,7 @@ func newCheckpointCommand() *cobra.Command {
 				return err
 			}
 
-			runner, err := newSnapshotRunnerWithWatchAndBody(ctx, repoRoot, branchRef, cfg.Check, cfg.MsgSourceCmd, cfg.MsgBodySourceCmd, cfg.SnapshotMode, cfg.CommitMode, cfg.Watch.Mode, cfg.Watch.PollInterval, time.Duration(cfg.IdleSeconds)*time.Second, statePath)
+			runner, err := newSnapshotRunnerWithWatchAndBodyAndMerge(ctx, repoRoot, branchRef, cfg.Check, cfg.MsgSourceCmd, cfg.MsgBodySourceCmd, cfg.SnapshotMode, cfg.CommitMode, cfg.CommitMergeCommits, cfg.Watch.Mode, cfg.Watch.PollInterval, time.Duration(cfg.IdleSeconds)*time.Second, statePath)
 			if err != nil {
 				return err
 			}
@@ -84,6 +85,7 @@ func newCheckpointCommand() *cobra.Command {
 	cmd.Flags().String("post-checkpoint-command", "", "Shell command to run after creating a checkpoint")
 	cmd.Flags().StringVar(&snapshotMode, "snapshot-mode", snapshotModeBoth, "Snapshot source: both, staged, working")
 	cmd.Flags().StringVar(&commitMode, "commit-mode", commitModeCheckpoint, "Commit target: checkpoint, direct, sync")
+	cmd.Flags().BoolVar(&commitMergeCommits, "commit-merge-commits", false, "Create checkpoints or commits during an active Git merge")
 	cmd.Flags().DurationVar(&timeout, "timeout", 0, "Maximum time to wait for another checkpoint operation to finish (0 waits indefinitely)")
 
 	return cmd

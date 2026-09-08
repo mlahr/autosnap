@@ -32,6 +32,7 @@ type autosnapRunState struct {
 	PostCheckpointCommand string        `json:"postCheckpointCommand,omitempty"`
 	SnapshotMode          string        `json:"snapshotMode"`
 	CommitMode            string        `json:"commitMode"`
+	CommitMergeCommits    bool          `json:"commitMergeCommits"`
 	WatchMode             string        `json:"watchMode"`
 	PollInterval          time.Duration `json:"pollInterval"`
 	LogMaxBytes           int64         `json:"logMaxBytes"`

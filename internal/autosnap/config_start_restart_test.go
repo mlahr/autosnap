@@ -64,6 +64,7 @@ func TestLoadAutosnapConfig(t *testing.T) {
 idle_seconds = 15
 snapshot_mode = "staged"
 commit_mode = "sync"
+commit_merge_commits = true
 msg_source_cmd = "printf msg"
 msg_body_source_cmd = "printf body"
 note_command = "printf note"
@@ -87,7 +88,7 @@ poll_interval = "2s"
 	if !found {
 		t.Fatalf("expected config to be found")
 	}
-	if cfg.Check != "go test ./..." || cfg.IdleSeconds != 15 || cfg.SnapshotMode != snapshotModeStaged || cfg.CommitMode != commitModeSync || cfg.MsgSourceCmd != "printf msg" || cfg.MsgBodySourceCmd != "printf body" || cfg.NoteCommand != "printf note" || cfg.NoteRef != "refs/notes/diffcog" || cfg.PostCheckpointCommand != "printf post" || cfg.LogMaxBytes != 2048 || cfg.ReadyTimeout != 12*time.Second || cfg.Watch.Mode != watchModeAuto || cfg.Watch.PollInterval != 2*time.Second {
+	if cfg.Check != "go test ./..." || cfg.IdleSeconds != 15 || cfg.SnapshotMode != snapshotModeStaged || cfg.CommitMode != commitModeSync || !cfg.CommitMergeCommits || cfg.MsgSourceCmd != "printf msg" || cfg.MsgBodySourceCmd != "printf body" || cfg.NoteCommand != "printf note" || cfg.NoteRef != "refs/notes/diffcog" || cfg.PostCheckpointCommand != "printf post" || cfg.LogMaxBytes != 2048 || cfg.ReadyTimeout != 12*time.Second || cfg.Watch.Mode != watchModeAuto || cfg.Watch.PollInterval != 2*time.Second {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
 }
@@ -110,6 +111,7 @@ func TestResolveStartConfigPrefersFlagsOverConfig(t *testing.T) {
 idle_seconds = 15
 snapshot_mode = "staged"
 commit_mode = "direct"
+commit_merge_commits = true
 msg_body_source_cmd = "printf config-body"
 log_max_bytes = 4096
 
@@ -134,6 +136,9 @@ poll_interval = "2s"
 	if err := cmd.Flags().Set("commit-mode", "checkpoint"); err != nil {
 		t.Fatalf("set commit-mode flag failed: %v", err)
 	}
+	if err := cmd.Flags().Set("commit-merge-commits", "false"); err != nil {
+		t.Fatalf("set commit-merge-commits flag failed: %v", err)
+	}
 	if err := cmd.Flags().Set("log-max-bytes", "8192"); err != nil {
 		t.Fatalf("set log-max-bytes flag failed: %v", err)
 	}
@@ -157,7 +162,7 @@ poll_interval = "2s"
 	if !found {
 		t.Fatalf("expected config to be found")
 	}
-	if cfg.Check != "make test" || cfg.IdleSeconds != 30 || cfg.CommitMode != commitModeCheckpoint || cfg.MsgBodySourceCmd != "printf flag-body" || cfg.Watch.Mode != watchModeAuto || cfg.LogMaxBytes != 8192 || cfg.NoteCommand != "printf note" || cfg.NoteRef != "refs/notes/diffcog" || cfg.PostCheckpointCommand != "printf post" {
+	if cfg.Check != "make test" || cfg.IdleSeconds != 30 || cfg.CommitMode != commitModeCheckpoint || cfg.CommitMergeCommits || cfg.MsgBodySourceCmd != "printf flag-body" || cfg.Watch.Mode != watchModeAuto || cfg.LogMaxBytes != 8192 || cfg.NoteCommand != "printf note" || cfg.NoteRef != "refs/notes/diffcog" || cfg.PostCheckpointCommand != "printf post" {
 		t.Fatalf("expected flags to override config, got %+v", cfg)
 	}
 	if cfg.SnapshotMode != snapshotModeStaged || cfg.Watch.PollInterval != 2*time.Second {
@@ -332,6 +337,7 @@ func TestResolveRestartConfigPreservesEveryOriginalStartFlag(t *testing.T) {
 idle_seconds = 15
 snapshot_mode = "working"
 commit_mode = "checkpoint"
+commit_merge_commits = true
 msg_source_cmd = "printf config-message"
 msg_body_source_cmd = "printf config-body"
 note_command = "printf config-note"
@@ -345,24 +351,25 @@ poll_interval = "4s"
 		t.Fatalf("write config failed: %v", err)
 	}
 	runState := autosnapRunState{
-		CheckCommand:     "make verify",
-		MsgSourceCmd:     "printf run-message",
-		MsgBodySourceCmd: "printf run-body",
-		NoteCommand:      "printf run-note",
-		NoteRef:          "refs/notes/run",
-		IdleSeconds:      45,
-		SnapshotMode:     snapshotModeBoth,
-		CommitMode:       commitModeDirect,
-		WatchMode:        watchModePoll,
-		PollInterval:     2 * time.Second,
-		LogMaxBytes:      4096,
-		StartConfigFlags: append([]string{}, startConfigFlagNames...),
+		CheckCommand:       "make verify",
+		MsgSourceCmd:       "printf run-message",
+		MsgBodySourceCmd:   "printf run-body",
+		NoteCommand:        "printf run-note",
+		NoteRef:            "refs/notes/run",
+		IdleSeconds:        45,
+		SnapshotMode:       snapshotModeBoth,
+		CommitMode:         commitModeDirect,
+		CommitMergeCommits: false,
+		WatchMode:          watchModePoll,
+		PollInterval:       2 * time.Second,
+		LogMaxBytes:        4096,
+		StartConfigFlags:   append([]string{}, startConfigFlagNames...),
 	}
 	cfg, _, err := resolveRestartConfig(repo, runState)
 	if err != nil {
 		t.Fatalf("resolve restart config failed: %v", err)
 	}
-	if cfg.Check != runState.CheckCommand || cfg.MsgSourceCmd != runState.MsgSourceCmd || cfg.MsgBodySourceCmd != runState.MsgBodySourceCmd || cfg.NoteCommand != runState.NoteCommand || cfg.NoteRef != runState.NoteRef || cfg.IdleSeconds != runState.IdleSeconds || cfg.SnapshotMode != runState.SnapshotMode || cfg.CommitMode != runState.CommitMode || cfg.Watch.Mode != runState.WatchMode || cfg.Watch.PollInterval != runState.PollInterval || cfg.LogMaxBytes != runState.LogMaxBytes {
+	if cfg.Check != runState.CheckCommand || cfg.MsgSourceCmd != runState.MsgSourceCmd || cfg.MsgBodySourceCmd != runState.MsgBodySourceCmd || cfg.NoteCommand != runState.NoteCommand || cfg.NoteRef != runState.NoteRef || cfg.IdleSeconds != runState.IdleSeconds || cfg.SnapshotMode != runState.SnapshotMode || cfg.CommitMode != runState.CommitMode || cfg.CommitMergeCommits != runState.CommitMergeCommits || cfg.Watch.Mode != runState.WatchMode || cfg.Watch.PollInterval != runState.PollInterval || cfg.LogMaxBytes != runState.LogMaxBytes {
 		t.Fatalf("expected every original start flag value to remain effective, got %+v", cfg)
 	}
 }
@@ -612,6 +619,7 @@ func TestConfigInitAndShowCommands(t *testing.T) {
 		"exists: true",
 		"check: make test",
 		"commit_mode: checkpoint",
+		"commit_merge_commits: false",
 		"msg_body_source_cmd: ",
 		"note_command: ",
 		"note_ref: ",
@@ -662,6 +670,14 @@ func TestStartDetachedArgsForwardWatchOptions(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("expected detached args to contain %q, got %v", want, args)
 		}
+	}
+}
+
+func TestStartDetachedArgsForwardMergeCommitOption(t *testing.T) {
+	args := startDetachedArgsWithBodyAndMerge("/bin/autosnap", "make build", "", "", "", "", "", 30, snapshotModeBoth, commitModeCheckpoint, true, watchModeRecursive, defaultPollInterval, defaultLogMaxBytes, "token", nil)
+	joined := strings.Join(args, "\n")
+	if !strings.Contains(joined, "--commit-merge-commits\ntrue") {
+		t.Fatalf("expected detached args to forward merge commit option, got %v", args)
 	}
 }
 

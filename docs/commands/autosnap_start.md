@@ -12,6 +12,7 @@ autosnap start [flags]
 
 ```
       --check string                     Shell command to run after idle
+      --commit-merge-commits             Create checkpoints or commits during an active Git merge
       --commit-mode string               Commit target: checkpoint, direct, sync (default "checkpoint")
       --foreground                       Run autosnap in the current terminal
   -h, --help                             help for start

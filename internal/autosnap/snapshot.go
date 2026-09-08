@@ -52,6 +52,7 @@ type snapshotRunner struct {
 	failOnNoteError       bool
 	snapshotMode          string
 	commitMode            string
+	commitMergeCommits    bool
 	watchMode             string
 	pollInterval          time.Duration
 	idle                  time.Duration
@@ -89,6 +90,10 @@ func newSnapshotRunnerWithWatch(ctx context.Context, repoRoot, branchRef, checkC
 }
 
 func newSnapshotRunnerWithWatchAndBody(ctx context.Context, repoRoot, branchRef, checkCommand, msgSourceCommand, msgBodySourceCommand, snapshotMode, commitMode, watchMode string, pollInterval, idle time.Duration, statePath string) (*snapshotRunner, error) {
+	return newSnapshotRunnerWithWatchAndBodyAndMerge(ctx, repoRoot, branchRef, checkCommand, msgSourceCommand, msgBodySourceCommand, snapshotMode, commitMode, false, watchMode, pollInterval, idle, statePath)
+}
+
+func newSnapshotRunnerWithWatchAndBodyAndMerge(ctx context.Context, repoRoot, branchRef, checkCommand, msgSourceCommand, msgBodySourceCommand, snapshotMode, commitMode string, commitMergeCommits bool, watchMode string, pollInterval, idle time.Duration, statePath string) (*snapshotRunner, error) {
 	state, err := loadAutosnapState(statePath)
 	if err != nil {
 		return nil, err
@@ -116,19 +121,20 @@ func newSnapshotRunnerWithWatchAndBody(ctx context.Context, repoRoot, branchRef,
 	}
 
 	return &snapshotRunner{
-		ctx:              ctx,
-		repoRoot:         repoRoot,
-		branchRef:        branchRef,
-		checkCmd:         checkCommand,
-		msgSourceCmd:     msgSourceCommand,
-		msgBodySourceCmd: msgBodySourceCommand,
-		snapshotMode:     snapshotMode,
-		commitMode:       normalizedCommitMode,
-		watchMode:        normalizedWatchMode,
-		pollInterval:     pollInterval,
-		idle:             idle,
-		statePath:        statePath,
-		state:            state,
+		ctx:                ctx,
+		repoRoot:           repoRoot,
+		branchRef:          branchRef,
+		checkCmd:           checkCommand,
+		msgSourceCmd:       msgSourceCommand,
+		msgBodySourceCmd:   msgBodySourceCommand,
+		snapshotMode:       snapshotMode,
+		commitMode:         normalizedCommitMode,
+		commitMergeCommits: commitMergeCommits,
+		watchMode:          normalizedWatchMode,
+		pollInterval:       pollInterval,
+		idle:               idle,
+		statePath:          statePath,
+		state:              state,
 		ignoreCache: map[string]bool{
 			"": false,
 		},
@@ -358,6 +364,10 @@ func (r *snapshotRunner) runCheckUnlocked() (checkpointRunResult, error) {
 	}
 	branchRef := position.BranchRef
 	previousState := r.state
+	if len(position.MergeHeads) != 0 && !r.commitMergeCommits {
+		logln("active merge detected; merge commits disabled; checkpoint skipped")
+		return checkpointRunResult{}, nil
+	}
 	if err := validateActiveMergeReady(r.ctx, r.repoRoot, position); err != nil {
 		logf("unable to create checkpoint during merge: %v\n", err)
 		return checkpointRunResult{}, err

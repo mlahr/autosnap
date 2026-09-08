@@ -55,12 +55,14 @@ Use those modes only when direct branch commits are the behavior you want.
 ## Active Merges
 
 autosnap detects an active Git merge through `MERGE_HEAD`. It does not create a
-checkpoint while the index has unresolved paths.
+checkpoint or branch commit during an active merge by default, and it does not
+run the configured check. Set `commit_merge_commits = true` to enable merge
+checkpointing or direct/sync merge commits.
 
-After you resolve every path, autosnap preserves `HEAD` and every merge head as
-commit parents. Checkpoint mode leaves the merge active on your branch. Direct
-mode completes the merge, and sync mode preserves merge commits during its
-rebase step.
+When enabled and every path is resolved, autosnap preserves `HEAD` and every
+merge head as commit parents. Checkpoint mode leaves the merge active on your
+branch. Direct mode completes the merge, and sync mode preserves merge commits
+during its rebase step.
 
 The default merge commit message comes from Git's `MERGE_MSG`. An explicit
 checkpoint message or successful message source command has priority.

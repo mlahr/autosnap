@@ -24,6 +24,7 @@ check = "make test"
 idle_seconds = 60
 snapshot_mode = "both"
 commit_mode = "checkpoint"
+commit_merge_commits = false
 msg_source_cmd = ""
 msg_body_source_cmd = ""
 note_command = ""
@@ -54,6 +55,7 @@ Keep these defaults unless you have a specific reason to change them:
 
 - `snapshot_mode = "both"`
 - `commit_mode = "checkpoint"`
+- `commit_merge_commits = false`
 
 ## 3. Start The Daemon Automatically
 

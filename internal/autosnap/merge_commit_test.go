@@ -40,7 +40,40 @@ func newMergeTestRunner(t *testing.T, repo, commitMode, checkCommand, msgSourceC
 	if err != nil {
 		t.Fatalf("newSnapshotRunnerWithWatch failed: %v", err)
 	}
+	runner.commitMergeCommits = true
 	return runner
+}
+
+func TestRunCheckSkipsActiveMergeWhenMergeCommitsDisabled(t *testing.T) {
+	t.Parallel()
+	requireIntegration(t)
+	repo := createTestRepo(t)
+	withWorkingDir(t, repo, func() {
+		base, mergeHead := startResolvedTestMerge(t, repo)
+		checkPath := filepath.Join(repo, "check-ran")
+		beforeStatus := runGitOutput(t, repo, "status", "--porcelain")
+		runner := newMergeTestRunner(t, repo, commitModeCheckpoint, "printf ran > check-ran", "")
+		runner.commitMergeCommits = false
+
+		if _, err := runner.runCheckUnlocked(); err != nil {
+			t.Fatalf("runCheckUnlocked failed: %v", err)
+		}
+		if _, err := os.Stat(checkPath); !os.IsNotExist(err) {
+			t.Fatalf("expected check command not to run, stat error: %v", err)
+		}
+		if runner.state.LastCheckpointRef != "" {
+			t.Fatalf("expected no checkpoint, got %s", runner.state.LastCheckpointRef)
+		}
+		if got := runGitOutput(t, repo, "rev-parse", "HEAD"); got != base {
+			t.Fatalf("expected HEAD %s, got %s", base, got)
+		}
+		if got := runGitOutput(t, repo, "rev-parse", "MERGE_HEAD"); got != mergeHead {
+			t.Fatalf("expected MERGE_HEAD %s, got %s", mergeHead, got)
+		}
+		if status := runGitOutput(t, repo, "status", "--porcelain"); status != beforeStatus {
+			t.Fatalf("expected resolved merge worktree status %q, got %q", beforeStatus, status)
+		}
+	})
 }
 
 func TestRunCheckCheckpointPreservesActiveMerge(t *testing.T) {
