@@ -3,6 +3,8 @@ DESTDIR ?=
 MANDIR ?= $(PREFIX)/share/man
 DOCDIR ?= $(PREFIX)/share/doc/autosnap
 INSTALL ?= install
+GIT_COMMIT_ID := $(shell git rev-parse HEAD)
+GO_BUILD_FLAGS := -ldflags "-X main.version=$(GIT_COMMIT_ID)"
 
 .PHONY: help all fmt build install install-docs docs test test-unit test-integration test-docs test-all clean
 
@@ -30,11 +32,11 @@ fmt:
 	gofmt -w cmd internal tools
 
 build:
-	go build -o autosnap ./cmd/autosnap
+	go build $(GO_BUILD_FLAGS) -o autosnap ./cmd/autosnap
 
 install:
 	$(MAKE) build
-	go install ./cmd/autosnap
+	go install $(GO_BUILD_FLAGS) ./cmd/autosnap
 
 docs:
 	go run ./tools/gen-docs
